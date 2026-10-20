@@ -1,0 +1,134 @@
+"""SQLite storage with ordered migrations (PRAGMA user_version)."""
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+MIGRATIONS: list[str] = [
+    # 1 — core schema
+    """
+    CREATE TABLE conversations(
+        id TEXT PRIMARY KEY, title TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+    CREATE TABLE messages(
+        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
+        role TEXT NOT NULL CHECK(role IN ('user','assistant','system')),
+        text TEXT NOT NULL, task_id TEXT, meta TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL);
+    CREATE INDEX messages_conv ON messages(conversation_id, created_at);
+    CREATE TABLE tasks(
+        id TEXT PRIMARY KEY, conversation_id TEXT, request TEXT NOT NULL, objective TEXT,
+        state TEXT NOT NULL, route TEXT, level INTEGER, provider TEXT, risk TEXT,
+        priority INTEGER NOT NULL DEFAULT 5, created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        finished_at REAL, error TEXT, result TEXT, checkpoint TEXT, retry_count INTEGER NOT NULL DEFAULT 0);
+    CREATE INDEX tasks_state ON tasks(state);
+    CREATE TABLE task_steps(
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), seq INTEGER NOT NULL,
+        tool_id TEXT NOT NULL, args TEXT NOT NULL, state TEXT NOT NULL, risk TEXT, why TEXT,
+        started_at REAL, finished_at REAL, duration_ms REAL, result TEXT, verification TEXT, error TEXT);
+    CREATE INDEX steps_task ON task_steps(task_id, seq);
+    CREATE TABLE approvals(
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, step_id TEXT, tool_id TEXT NOT NULL,
+        args TEXT NOT NULL, digest TEXT NOT NULL, risk TEXT NOT NULL, summary TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','approved','denied','expired')),
+        created_at REAL NOT NULL, decided_at REAL, expires_at REAL NOT NULL, decided_args TEXT);
+    CREATE INDEX approvals_status ON approvals(status);
+    CREATE TABLE events(
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, kind TEXT NOT NULL,
+        task_id TEXT, payload TEXT NOT NULL);
+    CREATE TABLE reminders(
+        id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at REAL NOT NULL, created_at REAL NOT NULL,
+        fired_at REAL, status TEXT NOT NULL CHECK(status IN ('scheduled','fired','missed','cancelled')),
+        task_id TEXT);
+    CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    """,
+    # 2 — human-readable step titles
+    """
+    ALTER TABLE task_steps ADD COLUMN title TEXT;
+    """,
+]
+
+
+def new_id(prefix: str = "") -> str:
+    return prefix + uuid.uuid4().hex[:16]
+
+
+def now() -> float:
+    return time.time()
+
+
+def dumps(v: Any) -> str:
+    return json.dumps(v, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def loads(s: str | None, default: Any = None) -> Any:
+    if s is None:
+        return default
+    try:
+        return json.loads(s)
+    except (TypeError, ValueError):
+        return default
+
+
+class Database:
+    def __init__(self, path: Path | str):
+        self.path = str(path)
+        self.conn = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.migrate()
+
+    def migrate(self) -> int:
+        ver = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        for i, sql in enumerate(MIGRATIONS[ver:], start=ver + 1):
+            self.conn.execute("BEGIN")
+            try:
+                for stmt in filter(None, (s.strip() for s in sql.split(";"))):
+                    self.conn.execute(stmt)
+                self.conn.execute(f"PRAGMA user_version={i}")
+                self.conn.execute("COMMIT")
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
+        return self.conn.execute("PRAGMA user_version").fetchone()[0]
+
+    def execute(self, sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:
+        return self.conn.execute(sql, params)
+
+    def one(self, sql: str, params: tuple | dict = ()) -> sqlite3.Row | None:
+        return self.conn.execute(sql, params).fetchone()
+
+    def all(self, sql: str, params: tuple | dict = ()) -> list[sqlite3.Row]:
+        return self.conn.execute(sql, params).fetchall()
+
+    def tx(self):
+        return _Tx(self.conn)
+
+    # kv settings ---------------------------------------------------------
+    def get_kv(self, key: str, default: Any = None) -> Any:
+        r = self.one("SELECT value FROM kv WHERE key=?", (key,))
+        return loads(r["value"], default) if r else default
+
+    def set_kv(self, key: str, value: Any) -> None:
+        self.execute("INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (key, dumps(value)))
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+class _Tx:
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def __enter__(self):
+        self.conn.execute("BEGIN IMMEDIATE")
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb):
+        self.conn.execute("ROLLBACK" if exc_type else "COMMIT")
+        return False
