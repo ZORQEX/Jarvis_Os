@@ -370,9 +370,10 @@ function renderComposer() {
   const mic = $("#micBtn");
   mic.classList.toggle("recording", S.voice === "listening");
   mic.classList.toggle("busy", S.voice === "transcribing");
-  const aiReady = S.provider?.configured && S.core.privacy !== "STRICT_OFFLINE";
+  const aiReady = S.provider?.configured && S.core.privacy === "AUTHORIZED_CLOUD";
   mic.disabled = voice.muted || !voice.supported || !aiReady;
-  mic.title = voice.muted ? "Микрофон выключен" : !aiReady ? "Голосовой ввод требует подключённого Gemini" : "Голос (Ctrl+Space)";
+  mic.title = voice.muted ? "Микрофон выключен" : !S.provider?.configured ? "Голосовой ввод требует подключённого Gemini"
+    : !aiReady ? "Голос распознаётся в облаке — включите режим «Облако разрешено»" : "Голос (Ctrl+Space)";
   $("#sendBtn").disabled = !input.value.trim();
   const hint = S.voice === "listening" ? `Говорите… нажмите <span class="kbd">Ctrl Space</span> или кнопку, чтобы закончить, <span class="kbd">Esc</span> — отмена`
     : S.voice === "transcribing" ? "Распознаю речь (Gemini)…"

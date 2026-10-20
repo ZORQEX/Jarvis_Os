@@ -1,5 +1,6 @@
 import asyncio
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,9 @@ def cfg(home):
     c.write_dir = str(home / "out")
     c.screenshot_dir = str(home / "shots")
     c.approval_ttl_s = 5
+    with socket.socket() as sock:          # never collide with a running JARVIS
+        sock.bind(("127.0.0.1", 0))
+        c.port = sock.getsockname()[1]
     return c
 
 

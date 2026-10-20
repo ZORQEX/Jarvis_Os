@@ -24,6 +24,9 @@ from pathlib import Path
 from .config import Config, Paths
 
 WINDOW_CLASS = "jarvis-workos"
+# Chromium ignores --class on Wayland and derives the app id from the host name;
+# "localhost" keeps it distinct from other local web apps served on 127.0.0.1.
+APP_ID = "chrome-localhost__-Default"
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -101,7 +104,8 @@ def _hypr_clients() -> list[dict]:
 
 def open_window(cfg: Config, paths: Paths, toggle: bool = False) -> None:
     ensure_core(cfg, paths)
-    mine = [c for c in _hypr_clients() if c.get("class") == WINDOW_CLASS]
+    mine = [c for c in _hypr_clients() if c.get("class") in (WINDOW_CLASS, APP_ID)
+            and c.get("title", "").endswith("JARVIS")]
     if mine:
         w = mine[0]
         subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{w['address']}"], capture_output=True)
@@ -109,18 +113,36 @@ def open_window(cfg: Config, paths: Paths, toggle: bool = False) -> None:
     b = _browser()
     if not b:
         raise SystemExit("Не найден Chromium — установите его или откройте http://127.0.0.1:%d" % cfg.port)
-    url = f"http://127.0.0.1:{cfg.port}/?t={_token(paths)}"
+    url = f"http://localhost:{cfg.port}/?t={_token(paths)}"
     profile = paths.data / "browser-profile"
     argv = [b, f"--app={url}", f"--class={WINDOW_CLASS}", f"--user-data-dir={profile}", "--no-first-run",
             "--no-default-browser-check", "--disable-features=Translate,MediaRouter", "--disable-sync",
             "--password-store=basic", "--ozone-platform=wayland"]
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
         # One-shot exec rules: floating, sized and centred — no change to the user's Hyprland config.
-        rules = "[float; size 1240 800; center]"
+        w, h = _window_size()
+        rules = f"[float; size {w} {h}; center]"
         cmd = " ".join(_q(a) for a in argv)
         subprocess.run(["hyprctl", "dispatch", "exec", f"{rules} {cmd}"], capture_output=True)
     else:
         subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def _window_size() -> tuple[int, int]:
+    """1240×820 on roomy screens; otherwise ~92% of the focused monitor's usable logical area."""
+    try:
+        mons = json.loads(subprocess.run(["hyprctl", "-j", "monitors"], capture_output=True, text=True,
+                                         timeout=3).stdout)
+        m = next((x for x in mons if x.get("focused")), mons[0])
+        scale = m.get("scale") or 1
+        lw, lh = m["width"] / scale, m["height"] / scale
+        if m.get("transform", 0) in (1, 3, 5, 7):
+            lw, lh = lh, lw
+        rl, rt, rr, rb = (m.get("reserved") or [0, 0, 0, 0])[:4]
+        lw, lh = lw - rl - rr, lh - rt - rb
+        return int(min(1240, lw * 0.92)), int(min(820, lh * 0.92))
+    except (OSError, ValueError, KeyError, StopIteration, subprocess.TimeoutExpired):
+        return 1100, 680
 
 
 def _q(s: str) -> str:
@@ -137,6 +159,8 @@ LABELS = {"IDLE": "готов", "STANDBY": "экстренная останов�
 
 def waybar(cfg: Config, paths: Paths) -> None:
     """Long-running: print one JSON line per state change (Waybar custom module, return-type json)."""
+    last = [None]
+
     def emit(state: dict | None):
         s = state["state"] if state else "OFFLINE"
         tip = f"JARVIS — {LABELS.get(s, s.lower())}"
@@ -150,8 +174,10 @@ def waybar(cfg: Config, paths: Paths) -> None:
         text = ICONS.get(s, "󰚩")
         if state and state.get("pending_approvals"):
             text += f" {state['pending_approvals']}"
-        print(json.dumps({"text": text, "alt": s.lower(), "class": s.lower(), "tooltip": tip}, ensure_ascii=False),
-              flush=True)
+        line = json.dumps({"text": text, "alt": s.lower(), "class": s.lower(), "tooltip": tip}, ensure_ascii=False)
+        if line != last[0]:
+            print(line, flush=True)
+            last[0] = line
 
     backoff = 1.0
     while True:

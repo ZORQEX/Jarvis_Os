@@ -283,8 +283,8 @@ class Server:
                 res = {"provider": await self.core.gemini.check()}
                 d._touch()
             elif typ == "voice.transcribe":
-                if d.privacy_profile() == "STRICT_OFFLINE":
-                    raise ValueError("Голос через облако выключен режимом «Строго офлайн»")
+                if d.privacy_profile() != "AUTHORIZED_CLOUD":
+                    raise ValueError("Распознавание голоса идёт через Gemini — в текущем режиме приватности оно выключено")
                 audio = base64.b64decode(data.get("audio_b64", ""), validate=True)
                 if not 1000 < len(audio) < 10 * 1024 * 1024:
                     raise ValueError("Запись слишком короткая или слишком длинная")

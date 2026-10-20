@@ -1,0 +1,6 @@
+/* Append to ~/.config/waybar/style.css */
+#custom-jarvis { padding: 0 8px; }
+#custom-jarvis.waiting_approval { color: #f2b56b; }
+#custom-jarvis.thinking, #custom-jarvis.processing, #custom-jarvis.executing { color: #8fb8ff; }
+#custom-jarvis.error, #custom-jarvis.standby { color: #ff8a80; }
+#custom-jarvis.offline { opacity: 0.5; }

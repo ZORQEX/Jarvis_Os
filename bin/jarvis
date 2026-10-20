@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# JARVIS WorkOS launcher. Uses the project's virtualenv; falls back to uv.
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  exec "$ROOT/.venv/bin/python" -m jarvis "$@"
+fi
+cd "$ROOT" && exec uv run --quiet python -m jarvis "$@"

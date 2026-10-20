@@ -78,6 +78,12 @@ button { cursor: pointer; background: none; border: 0; padding: 0; }
 :focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-sm); }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 [hidden] { display: none !important; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text) 16%, transparent); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--text) 28%, transparent); }
+::-webkit-scrollbar-button { display: none; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code, pre { font-family: var(--mono); font-size: .88em; }
@@ -401,7 +407,9 @@ button.row:hover { background: var(--surface-2); }
 .companion .halo { fill: none; stroke: var(--c-halo); stroke-width: 1.4; opacity: .0; transform-origin: center; transition: opacity var(--t-slow), stroke var(--t-slow); }
 .companion .ring { fill: none; stroke: var(--c-halo); stroke-width: 2; stroke-dasharray: 6 10; opacity: 0; transform-origin: center; transition: opacity var(--t); }
 .companion .glow { fill: var(--accent-glow); opacity: .0; transform-origin: center; transition: opacity var(--t-slow), fill var(--t-slow); filter: blur(10px); }
-.companion .body { transform-origin: center; animation: breathe 6s ease-in-out infinite; }
+/* No infinite animation while idle: a continuously animated SVG costs real GPU/CPU time.
+   Motion runs only in transient active states (thinking, executing, listening, speaking). */
+.companion .body { transform-origin: center; }
 .companion .shell { fill: url(#cbody); stroke: color-mix(in srgb, var(--c-halo) 22%, transparent); stroke-width: 1; transition: stroke var(--t-slow); }
 .companion .face { fill: var(--c-face); }
 .companion .sheen { fill: #fff; opacity: .07; }
@@ -457,6 +465,13 @@ button.row:hover { background: var(--surface-2); }
 .anim-off *, .anim-off *::before, .anim-off *::after { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; scroll-behavior: auto !important; }
+}
+@media (max-height: 760px) {
+  .hero { padding-top: 3vh; gap: var(--s3); }
+  .hero .companion { width: 96px; height: 96px; }
+  .hero h1 { font-size: 22px; margin-top: 0; }
+  .thread { padding-top: var(--s5); }
+  .suggestion { padding: 6px 12px; font-size: 13px; }
 }
 @media (max-width: 1080px) {
   .app { grid-template-columns: var(--rail-w) minmax(0, 1fr); }

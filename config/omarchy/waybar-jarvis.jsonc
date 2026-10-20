@@ -1,0 +1,10 @@
+// Waybar module for JARVIS. Add "custom/jarvis" to a modules list in
+// ~/.config/waybar/config.jsonc and paste this block next to the other modules.
+"custom/jarvis": {
+  "exec": "jarvis waybar",
+  "return-type": "json",
+  "format": "{}",
+  "tooltip": true,
+  "on-click": "jarvis",
+  "on-click-right": "jarvis stop"
+}
