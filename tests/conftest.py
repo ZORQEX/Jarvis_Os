@@ -34,8 +34,13 @@ def cfg(home):
 @pytest.fixture
 def core(home, cfg, monkeypatch):
     # Keep tests independent of a real keyring entry.
-    from jarvis import secrets
+    from jarvis import scheduler, secrets
     monkeypatch.setattr(secrets, "get", lambda account: None)
+
+    async def no_desktop(*a, **k):        # tests must never show real notifications
+        from jarvis.tools.base import CmdResult
+        return CmdResult(list(a[0]) if a else [], 0, "", "", 0.0)
+    monkeypatch.setattr(scheduler, "run_cmd", no_desktop)
     c = build(Paths.detect(), cfg)
     yield c
     c.db.close()
