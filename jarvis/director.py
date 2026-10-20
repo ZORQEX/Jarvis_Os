@@ -11,7 +11,7 @@ from . import router as rt
 from .db import Database, dumps, loads, new_id, now
 from .events import AuditLog, EventBus
 from .gateway import Gateway, Outcome
-from .policy import Approvals, PolicyEngine
+from .policy import ApprovalError, Approvals, PolicyEngine
 from .providers.gemini import GeminiProvider, ProviderError
 from .scheduler import Scheduler, fmt_time
 from .tasks import S, TERMINAL, IllegalTransition, TaskStore
@@ -511,11 +511,17 @@ class Director:
     # ------------------------------------------------------------------ approvals
     def decide(self, aid: str, approve: bool, edited: dict | None = None, remember: bool = False) -> dict:
         a = self.approvals.get(aid)
-        if approve and remember and a:
+        if a and approve and edited is not None:
+            # Only fields the card offered for editing may change; targets (paths, recipients…) may not.
+            allowed = set((a["summary"] or {}).get("editable") or [])
+            changed = {k for k in set(edited) | set(a["args"]) if edited.get(k) != a["args"].get(k)}
+            if changed - allowed:
+                raise ApprovalError("Эти параметры нельзя менять при подтверждении: " + ", ".join(sorted(changed - allowed)))
+        a = self.approvals.decide(aid, approve, edited)
+        if approve and remember:
             tool = self.gw.registry.get(a["tool_id"])
             if tool:
                 self.policy.grant_session(tool.spec)
-        a = self.approvals.decide(aid, approve, edited)
         if a["task_id"] not in self.rt:
             # The task that asked lost its runtime (JARVIS restarted): resume it here.
             asyncio.create_task(self._resume_from_approval(a))

@@ -1,6 +1,6 @@
 # Test matrix — milestone 1 + Flora (2026-10-20)
 
-Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 67 passed.
+Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 84 passed.
 
 | Requirement | Status | Evidence |
 |---|---|---|

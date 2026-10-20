@@ -79,9 +79,10 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return None
 
     # --- control -----------------------------------------------------------
-    if re.fullmatch(r"(стоп|stop|остановись|остановить все|экстренная остановка|emergency stop|стоп все)", t):
+    if re.fullmatch(r"(стоп|stop|остановись|остановить все|останови все|останови всё|прекрати все|экстренная остановка|"
+                    r"emergency stop|стоп все|стоп стоп)", t):
         return Route("control", args={"op": "estop"}, why="Экстренная остановка")
-    if re.fullmatch(r"(замолчи|хватит говорить|помолчи|тише говори|stop talking|shut up|не говори)", t):
+    if re.fullmatch(r"(замолчи|хватит|хватит говорить|помолчи|тише говори|stop talking|shut up|не говори|достаточно)", t):
         return Route("control", args={"op": "stop_speech"}, why="Остановить речь")
     if re.fullmatch(r"(отмени|отмена|отменить|отмени задачу|отмени это|cancel|cancel task)", t):
         return Route("control", args={"op": "cancel_last"}, why="Отмена задачи")
@@ -105,6 +106,8 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
 
     # --- system ----------------------------------------------------------------
     if re.search(r"(состояние|статус|как (там )?(дела у )?) ?(системы|компьютера|ноутбука)|сколько (свободного )?"
+                 r"|загрузк[аи] процессора|что с (памятью|диском|батареей|процессором)"
+                 r"|сколько (свободного )?"
                  r"(места|памяти)|заряд|батаре|температур[аы] (процессора|cpu)|нагрузк[аи] (процессора|cpu)|"
                  r"system (status|info)|battery|disk space|how much (memory|space)", t):
         return Route("tool", "system_info", {}, why="Чтение /proc и /sys")
@@ -112,6 +115,9 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     # --- windows / workspaces --------------------------------------------------
     if re.search(r"(какие|список|покажи) (окна|окон|открытые окна)|какие окна открыты|list windows", t):
         return Route("tool", "window_list", {}, why="Hyprland IPC")
+    m = re.fullmatch(r"(?:на|рабочий стол) ([\w-]+)(?: (?:рабочий стол|стол))", t)
+    if m and (n := _ordinal(m.group(1)) or parse_number(m.group(1))) and 1 <= n <= 10:
+        return Route("tool", "workspace_switch", {"number": n}, why="Hyprland IPC")
     m = re.fullmatch(r"(?:переключись|перейди|переключи|switch|go)(?: на| to)?(?: (?:рабочий стол|workspace|стол))?"
                      r" ([\w-]+)(?: (?:рабочий стол|стол|workspace))?", t) \
         or re.fullmatch(r"(?:рабочий стол|workspace) ([\w-]+)", t)
@@ -124,6 +130,14 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     m = re.search(r"(?:громкость|звук|volume)(?: на| to)? (\d{1,3}|[а-я ]+?)(?: процент\w*|%)?$", t)
     if m and (n := parse_number(m.group(1))) is not None and 0 <= n <= 100:
         return Route("tool", "volume_set", {"level": n}, why="PipeWire (wpctl)")
+    if re.search(r"(звук|громкость) на (максимум|полную)", t):
+        return Route("tool", "volume_set", {"level": 100}, why="PipeWire (wpctl)")
+    if re.search(r"(звук|громкость) на минимум", t):
+        return Route("tool", "volume_set", {"level": 10}, why="PipeWire (wpctl)")
+    if re.search(r"убав\w* (звук|громкость)", t):
+        return Route("tool", "volume_set", {"delta": -10}, why="PipeWire (wpctl)")
+    if re.search(r"прибав\w* (звук|громкость)", t):
+        return Route("tool", "volume_set", {"delta": 10}, why="PipeWire (wpctl)")
     if re.search(r"(сделай |чуть |немного )*(тише|потише|quieter|volume down)", t):
         return Route("tool", "volume_set", {"delta": -10}, why="PipeWire (wpctl)")
     if re.search(r"(сделай |чуть |немного )*(громче|погромче|louder|volume up)", t):
@@ -134,12 +148,13 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("tool", "volume_set", {"mute": False}, why="PipeWire (wpctl)")
 
     # --- screenshot --------------------------------------------------------------
-    if re.search(r"(сделай |сними )?(скриншот|снимок экрана|скрин экрана)|take (a )?screenshot|^screenshot$", t):
+    if re.search(r"(сделай |сними )?(скриншот|снимок экрана|скрин экрана)|заскринь|take (a )?screenshot|^screenshot$", t):
         return Route("tool", "screenshot", {}, why="grim (Wayland)")
 
     # --- notes ---------------------------------------------------------------------
     m = re.match(r"\s*(?:запиши|создай|сделай|добавь|сохрани)\s+(?:мне\s+)?заметку\s*[:,—-]?\s*(.+)$", raw, re.I | re.S) \
-        or re.match(r"\s*(?:заметка|note|take a note)\s*[:,—-]\s*(.+)$", raw, re.I | re.S)
+        or re.match(r"\s*(?:заметка|запиши|запомни|note|take a note)\s*[:,—-]\s*(.+)$", raw, re.I | re.S) \
+        or re.match(r"\s*запомни,?\s+что\s+(.+)$", raw, re.I | re.S)
     if m and m.group(1).strip():
         return Route("tool", "create_note", {"text": m.group(1).strip()}, why="Запись файла в Документы/Jarvis")
 
@@ -160,6 +175,16 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         minutes = {"час": 60, "полчаса": 30, "минуту": 1}[m.group(1).casefold()]
         what = re.sub(r"^(?:о том,? что|что|про|чтобы)\s+", "", m.group(2).strip(), flags=re.I) or "Напоминание"
         return Route("tool", "reminder_create", {"text": what, "minutes": minutes}, why="Локальный планировщик")
+    m = re.match(r"\s*напомни(?:\s+мне)?\s+в\s+(\d{1,2})[:.](\d{2})\s*(.*)$", raw, re.I | re.S)
+    if m and int(m.group(1)) < 24 and int(m.group(2)) < 60:
+        import datetime as _dt
+        now_ = _dt.datetime.now()
+        due = now_.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        if due <= now_:
+            due += _dt.timedelta(days=1)
+        what = re.sub(r"^(?:о том,? что|что|про|чтобы)\s+", "", m.group(3).strip(), flags=re.I) or "Напоминание"
+        return Route("tool", "reminder_create", {"text": what, "minutes": round((due - now_).total_seconds() / 60, 2)},
+                     why="Локальный планировщик")
     m = re.match(r"\s*remind me in (\d+) (minute|minutes|hour|hours) (?:to )?(.*)$", raw, re.I)
     if m:
         n = int(m.group(1)) * (60 if m.group(2).startswith("hour") else 1)
@@ -169,6 +194,9 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     # --- file search ----------------------------------------------------------------
     m = re.fullmatch(r"(?:найди|поищи|ищи|где (?:лежит|находится)|find|search(?: for)?)\s+(?:мне\s+)?"
                      r"(?:файл\w*|документ\w*|папк\w*|file|files|folder)\s+(.+)", t)
+    if m:
+        return Route("tool", "search_files", {"query": _clean_query(m.group(1))}, why="Поиск по разрешённым папкам")
+    m = re.fullmatch(r"(?:где (?:лежит|лежат|находится)|where is)\s+(.+)", t)
     if m:
         return Route("tool", "search_files", {"query": _clean_query(m.group(1))}, why="Поиск по разрешённым папкам")
     m = re.fullmatch(r"(?:найди|поищи)\s+(.+?)\s+в\s+(документах|загрузках|проектах|изображениях)", t)
@@ -186,6 +214,7 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     m = re.fullmatch(r"(?:открой|запусти|включи|покажи|open|launch|start|run)\s+(.+)", t)
     if m:
         target = re.sub(r"^(?:приложение|программу|app)\s+", "", m.group(1)).strip()
+        target = re.sub(r"\s+(?:пожалуйста|please)$", "", target)
         # ordinal reference to the last file list: «открой второй»
         om = re.fullmatch(r"(?:(?:мне )?(?:файл |результат |номер ))?(\S+)(?: (?:файл|результат|документ))?", target)
         last = ctx.get("last_files") or []

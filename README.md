@@ -66,7 +66,7 @@ SQLite: ~/.local/share/jarvis/jarvis.db · журнал аудита: ~/.local/s
 ## Разработка
 
 ```bash
-uv run pytest -q                                      # 67 тестов
+uv run pytest -q                                      # 84 теста
 uv run python scripts/bench.py 40                     # задержки локальных команд
 scripts/dev-server.sh start /tmp/jh                   # изолированное ядро (порт из /tmp/jh/config/config.toml)
 cd tests/ui && npm install && node drive.mjs <port> <token> <out> smoke|flora   # снимки UI

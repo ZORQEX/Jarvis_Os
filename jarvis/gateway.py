@@ -96,7 +96,8 @@ class Gateway:
 
         # 2. policy
         decision = self.policy.evaluate(spec, args)
-        if preapproved and self.approvals.is_valid_for(preapproved, tool_id, args, task_id):
+        # A prior approval can only answer the "ask" — it never overrides a policy denial (e.g. emergency stop).
+        if decision.action == "ask" and preapproved and self.approvals.is_valid_for(preapproved, tool_id, args, task_id):
             decision.action, decision.reason = "allow", "Подтверждено вами"
         if decision.action == "deny":
             self.tasks.update_step(sid, state="denied", error=decision.reason, finished_at=now())

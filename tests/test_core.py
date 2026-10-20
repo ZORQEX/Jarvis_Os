@@ -360,3 +360,57 @@ async def test_persisted_approval_survives_restart(core, home, cfg, monkeypatch)
     notes = list((home / "out" / "Заметки").glob("*.md"))
     assert len(notes) == 1 and "после перезапуска" in notes[0].read_text()
     core2.db.close()
+
+
+async def test_prior_approval_never_overrides_estop(core, home):
+    tid = core.tasks.create("note", None)
+    core.tasks.transition(tid, S.RUNNING)
+    spec = core.registry.get("create_note").spec
+    a = core.approvals.create(tid, None, spec, {"text": "x"}, {"editable": ["text", "title"]})
+    core.approvals.decide(a["id"], True)
+    core.policy.estop = True
+    out = await core.gateway.execute(tid, "create_note", {"text": "x"}, "resume", preapproved=a["id"])
+    assert out.status == "denied" and not (home / "out").exists()
+
+
+async def test_approval_edit_limited_to_editable_fields(core):
+    from jarvis.policy import ApprovalError
+    d = core.director
+    tid = await d.submit("найди файл ничего")       # any task id to attach to
+    await wait_done(core, tid)
+    t2 = core.tasks.create("open", None)
+    spec = core.registry.get("open_path").spec
+    a = core.approvals.create(t2, None, spec, {"path": "/home/x/a.pdf"}, {"editable": []})
+    with pytest.raises(ApprovalError):
+        d.decide(a["id"], True, {"path": "/etc/shadow"})
+    assert core.approvals.get(a["id"])["status"] == "pending"
+
+
+async def test_remember_not_granted_when_approval_invalid(core):
+    from jarvis.policy import ApprovalError
+    tid = core.tasks.create("n", None)
+    spec = core.registry.get("create_note").spec
+    a = core.approvals.create(tid, None, spec, {"text": "x"}, {"editable": ["text"]})
+    core.approvals.decide(a["id"], False)
+    with pytest.raises(ApprovalError):
+        core.director.decide(a["id"], True, remember=True)
+    assert "create_note" not in core.policy.session_grants
+
+
+@pytest.mark.parametrize("text,kind,what", [
+    ("останови всё", "control", "estop"), ("хватит", "control", "stop_speech"),
+    ("убавь звук", "tool", "volume_set"), ("звук на максимум", "tool", "volume_set"),
+    ("запусти терминал пожалуйста", "tool", "app_open"), ("какая загрузка процессора", "tool", "system_info"),
+    ("что с памятью", "tool", "system_info"), ("на пятый стол", "tool", "workspace_switch"),
+    ("заскринь экран", "tool", "screenshot"), ("напомни в 18:00 позвонить", "tool", "reminder_create"),
+    ("запомни что встреча в пятницу", "tool", "create_note"), ("запиши: купить плитку", "tool", "create_note"),
+    ("где лежит смета флора", "tool", "search_files"),
+])
+def test_router_natural_variants(text, kind, what):
+    r = router.route(text)
+    assert r and r.kind == kind and (r.tool == what or r.args.get("op") == what)
+
+
+def test_reminder_at_time_is_in_future():
+    r = router.route("напомни в 00:01 проверить")
+    assert 0 < r.args["minutes"] <= 24 * 60 and r.args["text"] == "проверить"

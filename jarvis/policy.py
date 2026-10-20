@@ -90,7 +90,8 @@ class Approvals:
 
     def expire_old(self) -> None:
         for r in self.db.all("SELECT id,task_id FROM approvals WHERE status='pending' AND expires_at<?", (now(),)):
-            self._finish(r["id"], "expired", None)
+            if self.get(r["id"])["status"] == "pending":   # may have been closed by a nested call
+                self._finish(r["id"], "expired", None)
 
     async def wait(self, aid: str) -> dict:
         a = self.get(aid)
