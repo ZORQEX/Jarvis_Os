@@ -128,7 +128,8 @@ class Director:
         if route and route.kind == "control":
             self.add_message(cid, "user", text, meta={"source": source})
             reply = await self.control(route.args["op"])
-            self.add_message(self.conversation_id(), "assistant", reply, meta={"route": "control", "level": 0})
+            if route.args["op"] != "new_conversation":   # the empty new screen is the acknowledgment
+                self.add_message(self.conversation_id(), "assistant", reply, meta={"route": "control", "level": 0})
             return ""
         level = route.level if route else 2
         tid = self.tasks.create(text, cid, route=(route.kind if route else "ai"), level=level)
