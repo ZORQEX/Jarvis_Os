@@ -52,6 +52,15 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     registry = Registry(tools)
     gateway = Gateway(registry, policy, approvals, tasks, bus, audit, config)
     gemini = GeminiProvider(config)
+    from .agency.agency import Agency
+    from .agency.tools import AgentGenerate, ClaudeChange, ClaudeInspect, OpenUrl
+    from .providers.claude_code import ClaudeCodeProvider
+    from .providers.openai_provider import OpenAIProvider
+    from .providers.registry import ProviderManager
+    manager = ProviderManager(db, config, [gemini, OpenAIProvider(config), ClaudeCodeProvider(config, db)])
+    for t in (AgentGenerate(manager), ClaudeInspect(manager, config), ClaudeChange(manager, config), OpenUrl()):
+        registry.tools[t.spec.id] = t
+    agency = Agency(manager, registry, config, db, bus, audit)
     flora = None
     try:
         from .flora.workflow import FloraWorkflow
@@ -62,7 +71,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     except ImportError:
         pass
     director = Director(db=db, bus=bus, audit=audit, tasks=tasks, policy=policy, approvals=approvals,
-                        gateway=gateway, gemini=gemini, scheduler=scheduler, config=config, flora=flora)
+                        gateway=gateway, gemini=gemini, scheduler=scheduler, config=config, flora=flora,
+                        providers=manager, agency=agency)
     recovered = tasks.recover_after_restart()
     approvals.expire_old()
     audit.write("core.start", recovered_tasks=len(recovered))

@@ -1,6 +1,7 @@
 import { Link } from "./net.js";
 import * as companion from "./companion.js";
-import { esc, md, ICON, STATE_RU, stepRow, resultCard, approvalCard, toolTitle, fmtMs, fmtWhen, fmtTime, shortPath } from "./render.js";
+import { esc, md, ICON, STATE_RU, stepRow, resultCard, approvalCard, toolTitle, fmtMs, fmtWhen, fmtTime, shortPath, decisionCard } from "./render.js";
+import { agencyPanel, wireAgency } from "./agency-ui.js";
 import { Voice } from "./voice.js";
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -9,7 +10,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const S = {
   connected: false, convId: null, messages: [], tasks: {}, approvals: {}, core: { state: "OFFLINE" },
   provider: null, reminders: [], recent: [], streaming: {}, progress: {}, tools: [], grants: [],
-  view: "chat", voice: null, firstSnapshot: true,
+  view: "chat", voice: null, firstSnapshot: true, providers: [], dev: localStorage.getItem("jarvis.dev") === "1",
 };
 
 // ------------------------------------------------------------------ boot
@@ -39,6 +40,7 @@ function applySnapshot(d) {
   S.approvals = Object.fromEntries(d.approvals.map((a) => [a.id, a]));
   S.core = d.core;
   S.provider = d.provider;
+  S.providers = d.providers || [];
   S.reminders = d.reminders;
   S.recent = d.recent_tasks;
   S.tools = d.tools;
@@ -111,7 +113,13 @@ function onEvent(ev) {
     case "speech.stop": voice.stopSpeaking(); break;
     case "conversation.new": link.request("snapshot").then(applySnapshot).catch(() => {}); break;
     case "ui.navigate": pendingFlora = { tab: ev.tab }; nav(ev.view); break;
-    case "provider": S.provider = ev.provider; renderStatus(); if (S.view === "settings") renderSettings(); break;
+    case "providers": S.providers = ev.providers; S.provider = ev.provider; renderStatus(); renderComposer();
+      if (S.view === "settings" && !document.activeElement?.closest?.(".pcard")) renderSettings(); break;
+    case "task.decision": {
+      const t = S.tasks[tid];
+      if (t) { t.decision = ev.decision; renderThread(); }
+      break;
+    }
   }
 }
 
@@ -154,12 +162,13 @@ function renderChips() {
   const chips = [];
   if (S.core.estop) chips.push(`<button class="chip err" data-act="estop_clear">${ICON.stop} Остановлено · снять</button>`);
   if (S.voice === "listening") chips.push(`<span class="chip live">${ICON.mic} Микрофон записывает</span>`);
-  const p = S.provider;
-  if (p) {
-    const cls = !p.configured ? "" : p.status === "ready" ? "ok" : p.status === "error" ? "err" : "";
-    const label = !p.configured ? "Gemini не подключён" : p.status === "ready" ? "Gemini готов"
-      : p.status === "error" ? "Gemini: ошибка" : "Gemini: проверка…";
-    chips.push(`<button class="chip ${cls}" data-nav="settings">${ICON.cloud} ${label}</button>`);
+  if (S.providers.length) {
+    const up = S.providers.filter((p) => p.health === "CONNECTED");
+    const soft = S.providers.filter((p) => p.health === "DEGRADED");
+    const names = [...up, ...soft].map((p) => p.name);
+    const cls = up.length ? "ok" : soft.length ? "warn" : "";
+    const label = names.length ? `ИИ: ${names.join(" · ")}` : "ИИ не подключён";
+    chips.push(`<button class="chip ${cls}" data-nav="settings" title="AI-агентство">${ICON.spark} ${esc(label)}</button>`);
   }
   const prof = { AUTHORIZED_CLOUD: "Облако разрешено", PRIVATE_LOCAL: "Приватно: спрашивать", STRICT_OFFLINE: "Строго офлайн" }[S.core.privacy];
   if (prof) chips.push(`<button class="chip" data-nav="settings">${ICON.lock} ${prof}</button>`);
@@ -203,7 +212,7 @@ function renderThread() {
     keys.add(t.key);
     const task = t.task_id ? S.tasks[t.task_id] : null;
     const approvals = t.task_id ? Object.values(S.approvals).filter((a) => a.task_id === t.task_id) : [];
-    const sig = JSON.stringify([t.user?.id, t.replies.map((r) => r.id), task?.state, task?.steps,
+    const sig = JSON.stringify([t.user?.id, t.replies.map((r) => r.id), task?.state, task?.steps, task?.decision, S.dev,
       approvals.map((a) => [a.id, a.status]), task?.steps?.map((s) => S.progress[s.id])]);
     let c = turnCache.get(t.key);
     if (!c) {
@@ -245,6 +254,7 @@ function turnHtml(t, task, approvals) {
   const body = [];
   if (task) {
     const visible = task.steps.filter((s) => s.tool_id !== "cloud_send" && !["awaiting_approval", "resumed"].includes(s.state));
+    if (task.decision) body.push(decisionCard(task.decision, S.dev));
     for (const a of approvals) if (a.status !== "pending") body.push(approvalCard(a));
     if (visible.length) {
       body.push(`<div class="steps">${visible.map((s) => stepRow(s, S.progress[s.id])).join("")}</div>`);
@@ -282,6 +292,10 @@ function metaLine(t, task) {
     bits.push(`<span class="cloud">${ICON.cloud.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${esc(m.model || "Gemini")}</span>`);
     if (m.first_token_ms) bits.push(`первый ответ ${fmtMs(m.first_token_ms)}`);
     if (m.usage?.total_token_count) bits.push(`${m.usage.total_token_count} токенов`);
+  } else if (m.route === "agency") {
+    const names = { gemini: "Gemini", openai: "GPT", claude_code: "Claude Code" };
+    if (m.providers?.length) bits.push(`<span class="cloud">${ICON.spark.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${esc(m.providers.map((p) => names[p] || p).join(" → "))}</span>`);
+    else bits.push("без ИИ");
   } else if (m.route === "local" || m.route === "flora") {
     bits.push(m.route === "flora" ? "демо-данные · локально" : "локально, без ИИ");
   }
@@ -408,7 +422,7 @@ async function submit(text, source) {
 
 // ------------------------------------------------------------------ global clicks & keys
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("button, [data-open]");
+  const t = e.target.closest("button, [data-open], [data-url]");
   if (!t) return;
   if (t.dataset.nav) {
     if (t.dataset.floraTab || t.dataset.floraItem) pendingFlora = { tab: t.dataset.floraTab, item: t.dataset.floraItem };
@@ -419,6 +433,7 @@ document.addEventListener("click", async (e) => {
   if (t.id === "estopBtn") return estop();
   if (t.id === "sideToggle") return toggleSide();
   if (t.dataset.open) return link.request("tool.run", { tool: "open_path", args: { path: t.dataset.open } }).catch((er) => toast(er.message, "err"));
+  if (t.dataset.url) return link.request("tool.run", { tool: "open_url", args: { url: t.dataset.url } }).catch((er) => toast(er.message, "err"));
   if (t.dataset.approve) {
     const card = t.closest("[data-approval]");
     const a = S.approvals[t.dataset.approve];
@@ -488,6 +503,7 @@ async function renderTasksView() {
         <span class="when">${fmtWhen(t.created_at)}</span></button>
       ${open === t.id ? `<div style="padding:4px 14px 14px" class="task-detail">
         <div class="meta">маршрут: ${esc(t.route || "—")}${t.provider ? " · " + esc(t.provider) : ""}${t.finished_at ? " · " + fmtMs((t.finished_at - t.created_at) * 1000) : ""}${t.error ? " · " + esc(t.error) : ""}</div>
+        ${t.decision ? decisionCard(t.decision, true) : ""}
         <div class="steps">${(t.steps || []).map((s) => stepRow(s)).join("") || '<div class="empty-note">Без шагов с инструментами</div>'}</div></div>` : ""}`).join("")
       : '<div class="empty-note" style="padding:16px">Задач ещё не было</div>'}</div></div>`;
   $$("[data-task-open]", el).forEach((b) => b.addEventListener("click", () => {
@@ -518,24 +534,7 @@ function renderSettings() {
   const statusRu = !p.configured ? "не подключён" : { ready: "готов", error: "ошибка", unknown: "проверка…", unconfigured: "не подключён" }[p.status] || p.status;
   el.innerHTML = `<div class="page">
     <h1>Настройки</h1>
-    <div class="panel">
-      <h2>Gemini — облачный интеллект</h2>
-      <div class="muted" style="font-size:13.5px">Нужен для свободных вопросов, голосового ввода и озвучивания. Простые команды работают без него.
-        Ключ хранится в системном хранилище (GNOME Keyring) и не попадает в журналы. Получить ключ: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</div>
-      <dl class="kv"><dt>Состояние</dt><dd>${esc(statusRu)}${p.key_source ? ` · ключ из ${p.key_source === "env" ? "переменной окружения" : "хранилища ключей"}` : ""}</dd>
-        ${p.last_error ? `<dt>Последняя ошибка</dt><dd style="color:var(--err)">${esc(p.last_error)}</dd>` : ""}
-        ${p.checked_at ? `<dt>Проверено</dt><dd>${fmtWhen(p.checked_at)}</dd>` : ""}</dl>
-      <form class="field" id="keyForm" autocomplete="off">
-        <input class="input" id="keyInput" type="password" placeholder="${p.configured ? "Заменить ключ…" : "Вставьте ключ Gemini API"}" aria-label="Ключ Gemini API" spellcheck="false">
-        <button class="btn primary" type="submit">Сохранить</button>
-        ${p.configured ? `<button class="btn" type="button" id="keyCheck">Проверить</button><button class="btn danger" type="button" id="keyClear">Удалить ключ</button>` : ""}
-      </form>
-      ${p.models?.length ? `<table class="tbl"><thead><tr><th>Модель</th><th>Роль</th><th>Доступ</th><th>Первый ответ (p50)</th></tr></thead><tbody>
-        ${p.models.map((m) => `<tr><td><code>${esc(m.id)}</code></td><td>${esc({ fast: "быстрая", main: "основная", deep: "сложные задачи", tts: "озвучивание" }[m.role] || m.role)}</td>
-          <td>${m.available === true ? '<span class="vbadge verified">есть</span>' : m.available === false ? '<span class="vbadge failed">нет</span>' : '<span class="faint">не проверено</span>'}</td>
-          <td>${m.first_token_p50_ms ? fmtMs(m.first_token_p50_ms) + ` <span class="faint">(${m.samples})</span>` : '<span class="faint">—</span>'}</td></tr>`).join("")}
-      </tbody></table>` : ""}
-    </div>
+    ${agencyPanel(S)}
     <div class="panel">
       <h2>Приватность</h2>
       <div class="muted" style="font-size:13.5px">Что можно отправлять во внешний ИИ. Локальные действия работают в любом режиме.</div>
@@ -569,26 +568,10 @@ function renderSettings() {
         <button class="btn ${document.documentElement.dataset.theme === "light" ? "primary" : ""}" data-theme-set="light">Светлая</button>
       </div>
       <label class="toggle"><input type="checkbox" id="motionToggle" ${localStorage.getItem("jarvis.reduceMotion") === "1" ? "checked" : ""}> Без анимации</label>
+      <label class="toggle"><input type="checkbox" id="devToggle" ${S.dev ? "checked" : ""}> Режим разработчика: показывать решения директора (исполнители, причины, кандидаты)</label>
     </div>
   </div>`;
-  $("#keyForm", el).addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const k = $("#keyInput", el);
-    if (!k.value.trim()) return;
-    const key = k.value; k.value = "";
-    toast("Сохраняю ключ и проверяю доступ…");
-    try { const r = await link.request("gemini.set_key", { key }, 40000); S.provider = r.provider; toast(r.provider.status === "ready" ? "Gemini подключён" : "Ключ сохранён, но проверка не прошла", r.provider.status === "ready" ? "" : "warn"); }
-    catch (er) { toast(er.message, "err"); }
-    renderSettings(); renderStatus(); renderComposer();
-  });
-  $("#keyCheck", el)?.addEventListener("click", async () => {
-    try { const r = await link.request("gemini.check", {}, 40000); S.provider = r.provider; } catch (er) { toast(er.message, "err"); }
-    renderSettings(); renderStatus();
-  });
-  $("#keyClear", el)?.addEventListener("click", async () => {
-    try { const r = await link.request("gemini.clear_key"); S.provider = r.provider; toast("Ключ удалён из хранилища"); } catch (er) { toast(er.message, "err"); }
-    renderSettings(); renderStatus(); renderComposer();
-  });
+  wireAgency(el, { link, S, toast, rerender: () => { renderSettings(); renderStatus(); renderComposer(); } });
   $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {
     try { await link.request("privacy.set", { profile: b.dataset.privacy }); S.core.privacy = b.dataset.privacy; } catch (er) { toast(er.message, "err"); }
     renderSettings(); renderStatus(); renderPrivacy(); renderComposer();
@@ -604,6 +587,9 @@ function renderSettings() {
   }));
   $("#speakToggle", el).addEventListener("change", (e) => { voice.speakReplies = e.target.checked; localStorage.setItem("jarvis.speak", e.target.checked ? "1" : "0"); });
   $("#muteToggle", el).addEventListener("change", (e) => { voice.setMuted(e.target.checked); renderStatus(); renderComposer(); });
+  $("#devToggle", el).addEventListener("change", (e) => {
+    S.dev = e.target.checked; localStorage.setItem("jarvis.dev", S.dev ? "1" : "0"); turnCache.clear(); $("#thread").innerHTML = "";
+  });
   $("#motionToggle", el).addEventListener("change", (e) => {
     localStorage.setItem("jarvis.reduceMotion", e.target.checked ? "1" : "0");
     document.documentElement.classList.toggle("anim-off", e.target.checked);

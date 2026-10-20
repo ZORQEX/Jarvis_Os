@@ -110,17 +110,24 @@ export function stepRow(s, progress) {
   const failed = s.error && !busy && state !== "succeeded";
   return `<details class="step" data-state="${esc(state)}">
     <summary><span class="ico">${ico}</span>
-    <span class="label"><b>${esc(toolTitle(s.tool_id))}</b> · ${esc(title)}${failed ? ` — <span class="err-text">${esc(s.error)}</span>` : ""}</span>
+    <span class="label">${AGENT_TOOLS.has(s.tool_id) ? agentLabel(title) : `<b>${esc(toolTitle(s.tool_id))}</b> · ${esc(title)}`}${failed ? ` — <span class="err-text">${esc(s.error)}</span>` : ""}</span>
     <span class="right">${right}</span></summary>
     <pre>${esc(JSON.stringify(details, null, 2))}</pre>
   </details>`;
+}
+
+const AGENT_TOOLS = new Set(["agent_generate", "agent_chat", "claude_code_inspect", "claude_code_change"]);
+function agentLabel(title) {
+  const [who, ...rest] = String(title).split(" · ");
+  return `<b class="who">${esc(who)}</b>${rest.length ? " · " + esc(rest.join(" · ")) : ""}`;
 }
 
 const TITLES = { system_info: "Система", search_files: "Поиск", read_file: "Чтение", open_path: "Открытие",
   create_note: "Заметка", app_open: "Приложение", window_list: "Окна", workspace_switch: "Рабочий стол",
   volume_set: "Звук", screenshot: "Снимок экрана", notify: "Уведомление", reminder_create: "Напоминание",
   cloud_send: "Облако", flora_inbox: "Почта «Флоры»", flora_compare: "Сравнение смет", flora_draft: "Черновик",
-  flora_send: "Отправка (демо)" };
+  flora_send: "Отправка (демо)", agent_generate: "ИИ-шаг", agent_chat: "Ответ", claude_code_inspect: "Claude Code",
+  claude_code_change: "Claude Code", open_url: "Ссылка" };
 export const toolTitle = (id) => TITLES[id] || id;
 
 // ---------------------------------------------------------------- result cards
@@ -140,6 +147,7 @@ export function resultCard(step) {
     case "flora_compare": return floraCompareCard(d);
     case "flora_draft": return floraDraftCard(d);
     case "flora_sent": return floraSentCard(d);
+    case "agent_result": return agentCard(d);
     default: return "";
   }
 }
@@ -201,6 +209,48 @@ function previewCard(d) {
 
 function reminderCard(d) {
   return `<div class="card"><div class="card-head">${ICON.clock}<strong>${esc(d.due_local)}</strong><span>${esc(d.text)}</span></div></div>`;
+}
+
+// ---------------------------------------------------------------- agency cards
+const PNAME = { gemini: "Gemini", openai: "GPT", claude_code: "Claude Code" };
+const ACT = { research: "поиск", analyze: "анализ", write: "текст", translate: "перевод", vision_screen: "экран",
+  chat: "ответ", inspect_code: "просмотр кода", change_code: "изменение кода", compare_estimates: "сметы",
+  read_mail: "почта", send_message: "отправка" };
+const SSTAT = { planned: "в плане", running: "идёт", done: "готово", failed: "ошибка", blocked: "невозможно", skipped: "пропущено" };
+
+function agentCard(d) {
+  const src = (d.sources || []).filter((s) => s.url);
+  const extra = [];
+  if (d.tools_used?.length) extra.push(`<div class="faint" style="font-size:12px">Действия: ${esc(d.tools_used.slice(0, 12).join(" · "))}</div>`);
+  if (d.git?.changed?.length) extra.push(`<div style="font-size:12.5px">Изменены файлы: ${d.git.changed.map((f) => `<code>${esc(f)}</code>`).join(", ")}</div>`);
+  if (d.tests?.ran) extra.push(`<div style="font-size:12.5px">Тесты (JARVIS): ${d.tests.code === 0 ? "✓ прошли" : "✗ не прошли"}<pre class="preview-text" style="padding:6px 0 0;max-height:120px">${esc(d.tests.tail || "")}</pre></div>`);
+  if (!src.length && !extra.length && !d.text) return "";
+  return `<div class="card agent"><div class="card-head">${ICON.spark}<strong>${esc(PNAME[d.provider] || d.provider || "")}</strong>
+      <span class="faint">${esc(d.model || "")}${d.cost_usd != null ? ` · $${Number(d.cost_usd).toFixed(3)}` : ""}${d.total_ms ? " · " + fmtMs(d.total_ms) : ""}</span></div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:6px">
+      ${src.length ? `<div class="srcs">${src.slice(0, 8).map((s, i) => `<button class="src" data-url="${esc(s.url)}" title="${esc(s.url)}">${i + 1}. ${esc(s.title || s.url)}</button>`).join("")}</div>` : ""}
+      ${extra.join("")}
+      ${d.text ? `<details><summary class="faint" style="cursor:pointer;font-size:12px">Результат шага</summary><div class="msg-ai" style="margin-top:6px">${md(d.text)}</div></details>` : ""}
+    </div></div>`;
+}
+
+export function decisionCard(dec, dev = false) {
+  if (!dec || !dec.steps) return "";
+  const interesting = dev || dec.steps.length > 1 || dec.steps.some((s) => ["blocked", "failed"].includes(s.status)) || dec.override;
+  if (!interesting) return "";
+  const rows = dec.steps.map((s, i) => {
+    const who = s.executor_kind === "tool" ? "JARVIS" : PNAME[s.executor] || "—";
+    return `<div class="dstep ${esc(s.status)}"><span class="n">${i + 1}</span><b>${esc(who)}</b><span>${esc(ACT[s.action] || s.action)}</span>
+      <span class="pill ${s.status === "done" ? "completed" : s.status === "running" ? "running" : ["failed", "blocked"].includes(s.status) ? "failed" : ""}">${esc(SSTAT[s.status] || s.status)}</span>
+      ${s.approval === "required" ? `<span class="pill waiting_for_approval">нужно подтверждение</span>` : ""}
+      ${dev || ["blocked", "failed"].includes(s.status) ? `<div class="why">${esc(s.reason || "")}</div>` : ""}
+      ${dev && s.candidates?.length ? `<div class="why faint">кандидаты: ${s.candidates.filter((c) => c.provider).map((c) => `${esc(PNAME[c.provider] || c.provider)} ${c.eligible ? "✓ " + (c.score ?? "") : "✗ " + esc(c.why)}`).join(" · ")}</div>` : ""}
+    </div>`;
+  }).join("");
+  const meta = dev ? `<div class="faint" style="font-size:11.5px;padding:0 14px 10px">план: ${esc(dec.planner)} · режим: ${esc(dec.mode)} · риск: ${esc(dec.risk)} · данные: ${esc(dec.sensitivity)}${dec.override ? " · выбран вами: " + esc(PNAME[dec.override] || dec.override) : ""}${dec.verification?.length ? " · проверки: " + esc(dec.verification.join(", ")) : ""}</div>` : "";
+  return `<div class="card decision-card"><div class="card-head">${ICON.bolt}<strong>План</strong><span class="faint">${esc(dec.objective.slice(0, 90))}</span></div>
+    <div class="dsteps">${rows}</div>${meta}
+    ${(dec.notes || []).length ? `<div class="faint" style="font-size:12px;padding:0 14px 10px">${dec.notes.map(esc).join("<br>")}</div>` : ""}</div>`;
 }
 
 // ---------------------------------------------------------------- Flora cards

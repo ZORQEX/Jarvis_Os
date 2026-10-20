@@ -17,11 +17,20 @@ def _have_tool() -> bool:
     return shutil.which("secret-tool") is not None
 
 
+ENV = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "openai": ("OPENAI_API_KEY",)}
+
+
+def _env(account: str) -> str | None:
+    for var in ENV.get(account, ()):
+        if os.environ.get(var):
+            return os.environ[var].strip()
+    return None
+
+
 def get(account: str) -> str | None:
-    if account == "gemini":
-        env = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if env:
-            return env.strip()
+    env = _env(account)
+    if env:
+        return env
     if not _have_tool():
         return None
     hit = _CACHE.get(account)
@@ -38,7 +47,7 @@ def get(account: str) -> str | None:
 
 
 def source(account: str) -> str | None:
-    if account == "gemini" and (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+    if _env(account):
         return "env"
     return "keyring" if get(account) else None
 

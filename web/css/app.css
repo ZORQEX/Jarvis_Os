@@ -305,6 +305,7 @@ button.row:hover { background: var(--surface-2); }
 .decision svg { width: 15px; height: 15px; }
 .decision.ok svg { color: var(--ok); }
 .decision.no svg { color: var(--warn); }
+.decision > span:first-of-type { white-space: nowrap; }
 .decision .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .approval.closed { border-color: var(--line); background: var(--surface); opacity: .8; }
 .approval.closed .card-head { color: var(--text-3); }
@@ -578,3 +579,31 @@ button.row:hover { background: var(--surface-2); }
 .editor textarea:focus { border-color: var(--accent); }
 .save-state { font-size: 12px; color: var(--text-3); }
 @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- AI agency */
+.agency .director { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13.5px; flex-wrap: wrap; }
+.hdot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-3); flex: none; }
+.hdot.ok { background: var(--ok); } .hdot.warn { background: var(--warn); } .hdot.err { background: var(--err); }
+.pcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 14px; }
+.pcard { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; background: var(--bg-2); display: flex; flex-direction: column; gap: 8px; }
+.pcard .ph { display: flex; align-items: center; gap: 8px; }
+.pcard .ph b { font-size: 15px; }
+.pcard .hstate { font-size: 12px; color: var(--text-3); }
+.pcard .hstate.ok { color: var(--ok); } .pcard .hstate.warn { color: var(--warn); } .pcard .hstate.err { color: var(--err); }
+.pcard .ph .toggle { margin: 0 0 0 auto; }
+.pcard .role { font-size: 13px; color: var(--text-2); }
+.caps { display: flex; flex-wrap: wrap; gap: 4px; }
+.cap { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); }
+.kv.small { grid-template-columns: 96px 1fr; font-size: 12.5px; margin: 0; }
+.kv.small code { font-size: 11.5px; }
+.toggle.mini { margin: 0; gap: 6px; font-size: 12.5px; }
+.toggle.inline { display: inline-flex; }
+.input.sel { height: 28px; min-width: 0; flex: none; padding: 0 6px; font-size: 12.5px; }
+.decision-card .dsteps { display: flex; flex-direction: column; padding: 0 14px 10px; gap: 2px; }
+.dstep { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
+.dstep .n { width: 18px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.dstep .why { flex-basis: 100%; padding-left: 26px; font-size: 12px; color: var(--text-2); }
+.srcs { display: flex; flex-direction: column; gap: 2px; }
+.src { text-align: left; font-size: 12.5px; color: var(--accent); padding: 2px 0; }
+.src:hover { text-decoration: underline; }
+.label .who { color: var(--accent); }

@@ -121,5 +121,43 @@ if (scenario === "flora") {
   await shot("flora-10-journal");
 }
 
+if (scenario === "agency") {
+  const dir = process.env.CALC_DIR;
+  await page.click('[data-nav="settings"]');
+  await page.waitForSelector(".pcard");
+  await page.waitForTimeout(300);
+  await shot("ag-01-settings");
+  let s = Date.now();
+  await page.click('.pcard[data-provider="claude_code"] [data-check]');
+  await page.waitForFunction(() => window.__jarvis.S.providers.find((p) => p.id === "claude_code")?.health === "CONNECTED", null, { timeout: 120000 });
+  timings.claude_live_check_ms = Date.now() - s;
+  await page.waitForTimeout(400);
+  await page.locator('.pcard[data-provider="claude_code"]').screenshot({ path: `${outDir}/ag-02-claude-connected.png` });
+  await page.click('[data-nav="chat"]');
+  s = Date.now();
+  await say("Claude, посмотри код в calc и объясни, почему падает тест", 500);
+  await page.waitForFunction(() => { const S = window.__jarvis.S; const t = Object.values(S.tasks).at(-1); return t && ["completed", "failed"].includes(t.state); }, null, { timeout: 180000 });
+  timings.claude_inspect_ms = Date.now() - s;
+  await page.waitForTimeout(500);
+  await shot("ag-03-inspect");
+  s = Date.now();
+  await say("Исправь ошибку в коде в calc и запусти тесты", 800);
+  await page.waitForSelector(".approval [data-approve]", { timeout: 20000 });
+  await page.waitForTimeout(300);
+  await shot("ag-04-approval");
+  await page.click(".approval [data-approve]");
+  await page.waitForFunction(() => { const S = window.__jarvis.S; const t = Object.values(S.tasks).at(-1); return t && ["completed", "failed"].includes(t.state); }, null, { timeout: 300000 });
+  timings.claude_change_ms = Date.now() - s;
+  await page.waitForTimeout(700);
+  await shot("ag-05-change-done");
+  await say("Найди в интернете поставщиков мрамора и напиши им письмо", 1500);
+  await shot("ag-06-no-cloud-providers");
+  await page.evaluate(() => { localStorage.setItem("jarvis.dev", "1"); });
+  await page.reload();
+  await page.waitForFunction(() => window.__jarvis?.S.connected === true);
+  await page.waitForTimeout(800);
+  await shot("ag-07-dev-inspector");
+}
+
 console.log(JSON.stringify({ errors, timings, state: await page.evaluate(() => window.__jarvis.S.core) }, null, 1));
 await browser.close();

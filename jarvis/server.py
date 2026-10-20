@@ -20,7 +20,8 @@ from .events import redact
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 COOKIE = "jarvis_session"
-UI_TOOLS = {"open_path"}
+UI_TOOLS = {"open_path", "open_url"}
+KEY_PROVIDERS = {"gemini": "JARVIS — Gemini API key", "openai": "JARVIS — OpenAI API key"}
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: data:; "
        "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; "
        "script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
@@ -104,8 +105,7 @@ class Server:
     async def on_startup(self, app):
         self.core.scheduler.start()
         self._fwd = asyncio.create_task(self._forward())
-        if self.core.gemini.configured():
-            asyncio.create_task(self._check_provider())
+        asyncio.create_task(self._check_providers())
 
     async def on_cleanup(self, app):
         self._fwd.cancel()
@@ -114,9 +114,20 @@ class Server:
             await ws.close()
         self.core.audit.write("core.stop")
 
-    async def _check_provider(self):
-        await self.core.gemini.check()
-        self.core.bus.publish("provider", {"provider": self.core.gemini.describe()})
+    async def _check_providers(self):
+        """Startup health: model lists for API providers (free), sign-in status for Claude Code (no usage)."""
+        mgr = self.core.director.providers
+        for pid, p in mgr.providers.items():
+            if p.configured():
+                try:
+                    await p.health_check(live=False)
+                except Exception as e:   # noqa: BLE001 — health must never crash startup
+                    self.core.audit.write("provider.health_error", provider=pid, error=repr(e)[:200])
+        self._publish_providers()
+
+    def _publish_providers(self):
+        self.core.bus.publish("providers", {"providers": self.core.director.providers.describe(),
+                                            "provider": self.core.gemini.describe()})
         self.core.director._touch()
 
     async def _forward(self):
@@ -267,21 +278,6 @@ class Server:
             elif typ == "grant.revoke":
                 self.core.policy.session_grants.discard(str(data.get("tool_id")))
                 res = {"session_grants": sorted(self.core.policy.session_grants)}
-            elif typ == "gemini.set_key":
-                await asyncio.to_thread(secrets.store, "gemini", str(data.get("key", "")), "JARVIS — Gemini API key")
-                self.core.gemini.reset()
-                self.core.audit.write("provider.key_stored", provider="gemini")
-                res = {"provider": await self.core.gemini.check()}
-                d._touch()
-            elif typ == "gemini.clear_key":
-                await asyncio.to_thread(secrets.clear, "gemini")
-                self.core.gemini.reset()
-                self.core.audit.write("provider.key_removed", provider="gemini")
-                res = {"provider": self.core.gemini.describe()}
-                d._touch()
-            elif typ == "gemini.check":
-                res = {"provider": await self.core.gemini.check()}
-                d._touch()
             elif typ == "voice.transcribe":
                 if d.privacy_profile() != "AUTHORIZED_CLOUD":
                     raise ValueError("Распознавание голоса идёт через Gemini — в текущем режиме приватности оно выключено")
@@ -303,6 +299,37 @@ class Server:
                 res = {"task_id": await d.run_ui_tool(data["tool"], dict(data.get("args") or {}))}
             elif typ == "tasks.list":
                 res = self.core.tasks.recent(min(200, int(data.get("limit", 50))))
+            elif typ == "agency.state":
+                res = {"providers": d.providers.describe()}
+            elif typ == "agency.settings":
+                d.providers.update_settings(str(data.get("provider")), **{k: data[k] for k in
+                                            ("enabled", "fallback_eligible", "max_sensitivity") if k in data})
+                self.core.audit.write("provider.settings", provider=data.get("provider"),
+                                      **{k: data[k] for k in ("enabled", "fallback_eligible", "max_sensitivity") if k in data})
+                self._publish_providers()
+                res = {"providers": d.providers.describe()}
+            elif typ == "agency.check":
+                p = d.providers.get(str(data.get("provider")))
+                if not p:
+                    raise ValueError("Неизвестный провайдер")
+                await p.health_check(live=bool(data.get("live")))
+                self._publish_providers()
+                res = {"providers": d.providers.describe()}
+            elif typ in ("provider.set_key", "provider.clear_key"):
+                pid = str(data.get("provider"))
+                if pid not in KEY_PROVIDERS:
+                    raise ValueError("Для этого провайдера ключ не используется")
+                if typ == "provider.set_key":
+                    await asyncio.to_thread(secrets.store, pid, str(data.get("key", "")), KEY_PROVIDERS[pid])
+                else:
+                    await asyncio.to_thread(secrets.clear, pid)
+                p = d.providers.get(pid)
+                p.reset()
+                self.core.audit.write("provider.key_" + ("stored" if typ.endswith("set_key") else "removed"), provider=pid)
+                if typ == "provider.set_key":
+                    await p.health_check()
+                self._publish_providers()
+                res = {"providers": d.providers.describe()}
             elif typ == "flora.action" and d.flora:
                 res = await d.flora.ui_action(d, data)
             else:

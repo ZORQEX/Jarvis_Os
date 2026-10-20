@@ -1,6 +1,6 @@
 # Test matrix — milestone 1 + Flora (2026-10-20)
 
-Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 84 passed.
+Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 111 passed, 1 skipped (opt-in live); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 1 passed.
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -36,3 +36,21 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
   (was 25% before removing infinite idle animations).
 - Local commands (p50/p95 ms, 40 runs): system 16.6/26.8, windows 8.3/10.0, file search 4.3/5.5,
   time 1.9/2.1, Flora triage 14.2/20.7, quote compare 12.1/15.5.
+
+## AI agency (2026-10-21)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Claude Code adapter (restricted CLI, inspect/change modes) | VERIFIED LIVE | test_live.py; UI run: inspect $0.05, change $0.04 in a scratch git repo |
+| Code change needs high-risk approval; JARVIS lists changed files (git) and reruns pytest itself | VERIFIED LIVE | scratch repo: `a - b` → `a + b`, JARVIS pytest: 2 passed |
+| Cancellation kills the Claude Code process | VERIFIED LOCAL | test_cancel_kills_claude_code_process |
+| Gemini adapter (research with sources, vision, tool loop) | IMPLEMENTED UNVERIFIED (no key) | tool loop VERIFIED MOCK (test_ai_loop.py) |
+| OpenAI adapter (Responses API, streaming, tools, web citations) | IMPLEMENTED UNVERIFIED (no key) | shows NOT_CONFIGURED |
+| Routing tests 1–10 from the spec | VERIFIED MOCK | test_agency.py::test_1 … test_10 |
+| Multi-AI chain, context isolation (no unrelated history), provenance + usage ledger | VERIFIED MOCK | test_multi_ai_context_isolation_and_provenance |
+| Fallback by policy; no fallback when disabled; explicit override never substituted | VERIFIED MOCK | test_9, test_provider_failure_falls_back_once_and_reports, test_explicit_override… |
+| Privacy: HIGHLY_SENSITIVE never to cloud; per-provider sensitivity limit; STRICT_OFFLINE | VERIFIED MOCK | test_privacy_*, test_provider_sensitivity_setting…, test_strict_offline_blocks_all_cloud |
+| Invented numbers flagged; source outranks AI in disagreements | VERIFIED LOCAL | test_invented_numbers_are_flagged, test_source_outranks_ai_opinion |
+| LLM planner cannot add a send or lower risk | VERIFIED MOCK | test_llm_planner_cannot_add_send_or_lower_risk |
+| Gmail read/send | NOT IMPLEMENTED | routed to `mail_read`/`email_send` → reported as not connected, no AI call |
+| AI-agency settings page, plan card, developer routing inspector | VERIFIED LOCAL | headless UI run `drive.mjs agency`, 0 console errors |

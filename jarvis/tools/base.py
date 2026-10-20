@@ -72,6 +72,8 @@ class ToolContext:
     progress: Callable[[str, float | None], None] = lambda msg, frac=None: None
     cancelled: Callable[[], bool] = lambda: False
     conversation: dict = field(default_factory=dict)   # short-lived references (last results etc.)
+    payload: dict | None = None    # in-memory only (e.g. prompt context); never persisted or audited
+    step_id: str | None = None
 
 
 class Tool:

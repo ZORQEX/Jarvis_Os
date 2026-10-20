@@ -11,6 +11,7 @@ from .db import now
 from .events import AuditLog, EventBus
 from .policy import Approvals, PolicyEngine
 from .tasks import S, TaskStore
+from .providers.base import ProviderFailure
 from .tools.base import Tool, ToolContext, ToolError, ToolInputError, ToolResult, Verification
 
 
@@ -75,13 +76,13 @@ class Gateway:
                       conversation: dict | None = None,
                       gate: Callable[[], Awaitable[None]] | None = None,
                       cancelled: Callable[[], bool] = lambda: False,
-                      preapproved: str | None = None) -> Outcome:
+                      preapproved: str | None = None, payload: dict | None = None) -> Outcome:
         tool = self.registry.get(tool_id)
         if tool is None:
             return Outcome("invalid", error=f"Неизвестный инструмент: {tool_id}")
         spec = tool.spec
         sid = self.tasks.add_step(task_id, tool_id, args, spec.risk, why)
-        ctx = ToolContext(config=self.config, task_id=task_id, cancelled=cancelled,
+        ctx = ToolContext(config=self.config, task_id=task_id, cancelled=cancelled, payload=payload, step_id=sid,
                           conversation=conversation if conversation is not None else {},
                           progress=lambda msg, frac=None: self.bus.publish(
                               "step.progress", {"step_id": sid, "message": msg, "fraction": frac}, task_id))
@@ -133,6 +134,10 @@ class Gateway:
             return self._fail(sid, task_id, tool_id, t0, f"Превышено время ожидания ({spec.timeout_s:.0f} с)")
         except (ToolError, OSError, ValueError, KeyError) as e:
             return self._fail(sid, task_id, tool_id, t0, str(e) or e.__class__.__name__)
+        except ProviderFailure as e:
+            out = self._fail(sid, task_id, tool_id, t0, str(e))
+            out.data["failure_kind"] = e.kind
+            return out
         ms = (time.perf_counter() - t0) * 1000
         state = "failed" if verification.status == "failed" else "succeeded"
         self.tasks.update_step(sid, state=state, finished_at=now(), duration_ms=round(ms, 1),

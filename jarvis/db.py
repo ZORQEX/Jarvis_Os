@@ -59,6 +59,15 @@ MIGRATIONS: list[str] = [
         id TEXT PRIMARY KEY, project TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL,
         note TEXT, source_refs TEXT NOT NULL DEFAULT '[]', created_at REAL NOT NULL, updated_at REAL NOT NULL);
     """,
+    # 4 — AI agency: decision record per task, provider usage ledger
+    """
+    ALTER TABLE tasks ADD COLUMN decision TEXT;
+    CREATE TABLE provider_usage(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, provider TEXT NOT NULL, model TEXT,
+        task_id TEXT, step_id TEXT, capability TEXT, input_tokens INTEGER, output_tokens INTEGER,
+        cost_usd REAL, latency_ms REAL, ok INTEGER NOT NULL, error_kind TEXT);
+    CREATE INDEX usage_provider ON provider_usage(provider, ts);
+    """,
 ]
 
 

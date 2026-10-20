@@ -61,3 +61,92 @@ async def wait_for(pred, timeout=5.0):
         if asyncio.get_running_loop().time() - t0 > timeout:
             raise TimeoutError("condition")
         await asyncio.sleep(0.01)
+
+
+# ---------------------------------------------------------------- scripted providers (VERIFIED MOCK only)
+from google.genai import types as gtypes  # noqa: E402
+
+from jarvis.providers.base import AIProvider, Cap, GenResult, Health, ProviderFailure  # noqa: E402
+from jarvis.providers.gemini import GeminiProvider  # noqa: E402
+
+
+class FakeProvider(AIProvider):
+    """Scripted provider: replies is a list of str | Exception consumed by generate()."""
+
+    def __init__(self, pid, caps, replies=None, health=Health.CONNECTED, cloud=True, sources=None):
+        self.id = pid
+        self.display_name = {"gemini": "Gemini", "openai": "GPT", "claude_code": "Claude Code"}.get(pid, pid)
+        self.role_ru = "test"
+        self.capabilities = set(caps)
+        self.cloud = cloud
+        self._health = health
+        self.replies = list(replies or [])
+        self.requests = []
+        self.sources = sources or []
+
+    def configured(self):
+        return self._health != Health.NOT_CONFIGURED
+
+    def health(self):
+        return self._health
+
+    async def health_check(self, live=False):
+        return {}
+
+    def model_for(self, cap):
+        return f"{self.id}-model"
+
+    async def generate(self, req, on_delta=None, on_progress=None):
+        self.requests.append(req)
+        r = self.replies.pop(0) if self.replies else f"[{self.id}] ответ"
+        if isinstance(r, Exception):
+            raise r
+        if on_delta:
+            on_delta(r)
+        return GenResult(r, self.id, self.model_for(req.capability),
+                         self.sources if req.capability == Cap.WEB_RESEARCH else [], {"input_tokens": 10,
+                                                                                      "output_tokens": 20},
+                         None, 5, 10, {"tools_used": ["Read x.py"], "turns": 1})
+
+    def describe(self):
+        return {"configured": self.configured()}
+
+
+class ScriptedGemini(GeminiProvider):
+    """Real Gemini adapter logic (tool loop) with a scripted stream()."""
+
+    def __init__(self, config, turns):
+        super().__init__(config)
+        self.turns, self.calls = list(turns), []
+        self.status = "ready"
+
+    def configured(self):
+        return True
+
+    def health(self):
+        return Health.CONNECTED
+
+    async def stream(self, model, contents, tools, **kw):
+        self.calls.append([c.model_copy(deep=True) for c in contents])
+        turn = self.turns.pop(0)
+        if isinstance(turn, Exception):
+            raise turn
+        parts = []
+        for item in turn:
+            if isinstance(item, str):
+                parts.append(gtypes.Part.from_text(text=item))
+                yield {"type": "text", "text": item}
+            else:
+                fc = gtypes.FunctionCall(name=item[0], args=item[1])
+                parts.append(gtypes.Part(function_call=fc))
+                yield {"type": "call", "call": fc}
+        yield {"type": "done", "content": gtypes.Content(role="model", parts=parts),
+               "usage": {"total_token_count": 42}, "first_token_ms": 300, "total_ms": 900}
+
+
+def install(core, **providers):
+    for pid, p in providers.items():
+        core.director.agency.mgr.providers[pid] = p
+        if pid == "gemini":
+            core.director.gemini = p
+    return providers

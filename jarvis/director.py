@@ -12,7 +12,7 @@ from .db import Database, dumps, loads, new_id, now
 from .events import AuditLog, EventBus
 from .gateway import Gateway, Outcome
 from .policy import ApprovalError, Approvals, PolicyEngine
-from .providers.gemini import GeminiProvider, ProviderError
+from .providers.gemini import GeminiProvider
 from .scheduler import Scheduler, fmt_time
 from .tasks import S, TERMINAL, IllegalTransition, TaskStore
 from .tools.base import Risk, Tool, ToolResult, ToolSpec, Verification
@@ -58,10 +58,11 @@ def _set_event() -> asyncio.Event:
 class Director:
     def __init__(self, *, db: Database, bus: EventBus, audit: AuditLog, tasks: TaskStore, policy: PolicyEngine,
                  approvals: Approvals, gateway: Gateway, gemini: GeminiProvider, scheduler: Scheduler, config,
-                 flora=None):
+                 flora=None, providers=None, agency=None):
         self.db, self.bus, self.audit, self.tasks = db, bus, audit, tasks
         self.policy, self.approvals, self.gw, self.gemini = policy, approvals, gateway, gemini
         self.scheduler, self.config, self.flora = scheduler, config, flora
+        self.providers, self.agency = providers, agency
         self.rt: dict[str, Runtime] = {}
         self._last_finish: tuple[float, str] | None = None
         self._state = None
@@ -157,7 +158,7 @@ class Director:
                 self.add_message(cid, "user", text, tid, meta={"source": "ui"})
             self.tasks.transition(tid, S.RUNNING, objective=(route.why if route else "Запрос к ИИ"))
             if route is None:
-                await self._run_ai(tid, cid, text)
+                await self.agency.run(self, tid, cid, text)
             elif route.kind == "reply":
                 self._finish(tid, cid, self._reply(route.reply), meta={"route": "local", "level": 0})
             elif route.kind == "tool":
@@ -271,7 +272,9 @@ class Director:
             lines = [f"- {t['request'][:60]} — {STATE_RU.get(t['state'], t['state'])}" for t in act]
             return f"Активных задач: {len(act)}.\n" + "\n".join(lines)
         if kind == "help":
-            ai = "подключён" if self.gemini.configured() else "не подключён (локальные команды работают без него)"
+            names = [p.display_name for pid, p in self.providers.providers.items()
+                     if self.providers.health(pid).value in ("CONNECTED", "DEGRADED")] if self.providers else []
+            ai = ("подключены: " + ", ".join(names)) if names else "не подключены (локальные команды работают без них)"
             return ("Вот что я делаю сам, без облака:\n"
                     "- **Система**: «состояние системы», «сколько места на диске»\n"
                     "- **Приложения**: «открой браузер / терминал / файлы / калькулятор»\n"
@@ -281,110 +284,8 @@ class Director:
                     "- **Заметки и напоминания**: «запиши заметку: …», «напомни через 10 минут …»\n"
                     "- **Снимок экрана** — после вашего подтверждения\n"
                     "- **Флора**: «что важного по Флоре?» (демо-данные)\n\n"
-                    f"Gemini {ai}. Управление: «пауза», «продолжи», «отмени», «стоп» — экстренная остановка.")
+                    f"ИИ-специалисты {ai}. Управление: «пауза», «продолжи», «отмени», «стоп» — экстренная остановка.")
         return ""
-
-    # ------------------------------------------------------------------ AI path
-    async def _run_ai(self, tid: str, cid: str, text: str) -> None:
-        profile = self.privacy_profile()
-        if profile == "STRICT_OFFLINE":
-            return self._finish(tid, cid, "Режим «Строго офлайн»: облачный ИИ выключен, запрос никуда не отправлен. "
-                                          "Локальные команды работают — скажите «помощь», чтобы увидеть список.",
-                                meta={"route": "local", "cloud": False})
-        if not self.gemini.configured():
-            return self._finish(tid, cid, "Эту просьбу я понял не полностью, а облачный ИИ (Gemini) ещё не подключён. "
-                                          "Подключить можно в **Настройках** — ключ хранится в системном хранилище. "
-                                          "Пока работают локальные команды: скажите «помощь».",
-                                meta={"route": "local", "cloud": False, "needs": "gemini"})
-        if profile == "PRIVATE_LOCAL":
-            out = await self.gw.execute(tid, "cloud_send", {"provider": "Gemini", "preview": text[:400]},
-                                        "Режим «Приватно»: нужна отправка в облако", gate=self._gate(tid))
-            if out.status != "ok":
-                return self._finish(tid, cid, "Хорошо, запрос в облако не отправлен.", meta={"route": "local"})
-
-        role = "deep" if _wants_depth(text) else "main"
-        model = self.gemini.pick_model(role)
-        self.tasks.update(tid, provider=f"gemini:{model}")
-        from google.genai import types
-        contents = self._history(cid, exclude_task=tid)
-        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=text)]))
-        tools = self.gemini.build_tools(self.gw.registry.model_tools())
-        r = self.rt[tid]
-        mid = new_id("m_")
-        r.message_id = mid
-        full = []
-        usage_total: dict = {}
-        first_ms = None
-        rounds = 0
-        try:
-            while True:
-                rounds += 1
-                await self._gate(tid)()
-                r.thinking = True
-                self._touch()
-                calls = []
-                done = None
-                async for ev in self.gemini.stream(model, contents, tools):
-                    if ev["type"] == "text":
-                        if r.thinking:
-                            r.thinking = False
-                            self._touch()
-                        full.append(ev["text"])
-                        self.bus.publish("assistant.delta", {"message_id": mid, "text": ev["text"]}, tid)
-                    elif ev["type"] == "call":
-                        calls.append(ev["call"])
-                    elif ev["type"] == "done":
-                        done = ev
-                r.thinking = False
-                contents.append(done["content"])
-                first_ms = first_ms or done["first_token_ms"]
-                for k, v in (done.get("usage") or {}).items():
-                    if isinstance(v, int):
-                        usage_total[k] = usage_total.get(k, 0) + v
-                self._checkpoint(tid, contents, rounds, model)
-                if not calls:
-                    break
-                if rounds >= self.config.max_tool_rounds:
-                    full.append("\n\n_Остановился: достигнут лимит шагов для одной задачи._")
-                    break
-                parts = []
-                for fc in calls:
-                    out = await self.execute(tid, cid, fc.name, dict(fc.args or {}), "Выбрано моделью Gemini")
-                    parts.append(types.Part.from_function_response(name=fc.name, response=out.for_model()))
-                    if self.policy.estop:
-                        break
-                contents.append(types.Content(role="user", parts=parts))
-                if self.policy.estop:
-                    full.append("\n\nОстановлено: включена экстренная остановка.")
-                    break
-                if full and not full[-1].endswith("\n"):
-                    full.append("\n\n")
-        except ProviderError as e:
-            r.thinking = False
-            msg = ("".join(full).strip() + "\n\n" if full else "") + f"⚠ {e}"
-            return self._finish(tid, cid, msg, failed=True, mid=mid,
-                                meta={"route": "ai", "provider": "gemini", "model": model, "error_kind": e.kind,
-                                      "cloud": True})
-        final = "".join(full).strip() or "Готово."
-        self._finish(tid, cid, final, mid=mid,
-                     meta={"route": "ai", "level": 3 if role == "deep" else 2, "provider": "gemini", "model": model,
-                           "usage": usage_total, "first_token_ms": first_ms, "rounds": rounds, "cloud": True})
-
-    def _history(self, cid: str, exclude_task: str | None = None) -> list:
-        from google.genai import types
-        msgs = [m for m in self.messages(cid, self.config.history_turns * 2 + 2) if m["task_id"] != exclude_task
-                and m["role"] in ("user", "assistant")]
-        msgs = msgs[-self.config.history_turns * 2:]
-        out = []
-        for m in msgs:
-            role = "user" if m["role"] == "user" else "model"
-            if out and out[-1].role == role:
-                out[-1].parts.append(types.Part.from_text(text=m["text"]))
-            else:
-                out.append(types.Content(role=role, parts=[types.Part.from_text(text=m["text"])]))
-        while out and out[0].role != "user":
-            out.pop(0)
-        return out
 
     def _checkpoint(self, tid, contents, rounds, model) -> None:
         try:
@@ -593,8 +494,14 @@ class Director:
         else:
             state = "IDLE"
         return {"state": state, "active_tasks": len(active), "pending_approvals": len(pending),
-                "estop": self.policy.estop, "ai": self.gemini.status if self.gemini.configured() else "unconfigured",
+                "estop": self.policy.estop, "ai": self._ai_summary(),
                 "privacy": self.privacy_profile()}
+
+    def _ai_summary(self) -> str:
+        if not self.providers:
+            return "unconfigured"
+        hs = {self.providers.health(pid).value for pid in self.providers.providers}
+        return "ready" if "CONNECTED" in hs else "partial" if "DEGRADED" in hs else "unconfigured"
 
     def _touch(self) -> None:
         s = self.core_state()
@@ -615,6 +522,7 @@ class Director:
                                  for t in self.tasks.recent(12)],
                 "approvals": self.approvals.pending(), "core": self.core_state(),
                 "provider": self.gemini.describe(), "tools": self.gw.registry.describe(),
+                "providers": self.providers.describe() if self.providers else [],
                 "reminders": self.scheduler.upcoming(), "session_grants": sorted(self.policy.session_grants),
                 "uptime_s": round(time.time() - self.started_at)}
 

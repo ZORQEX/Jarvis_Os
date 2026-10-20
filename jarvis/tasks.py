@@ -79,6 +79,7 @@ class TaskStore:
         d = dict(r)
         d["result"] = loads(d["result"])
         d["checkpoint"] = loads(d["checkpoint"])
+        d["decision"] = loads(d.get("decision"))
         d["steps"] = self.steps(tid)
         return d
 

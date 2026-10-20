@@ -169,7 +169,7 @@ def waybar(cfg: Config, paths: Paths) -> None:
                 tip += f"\nАктивных задач: {state['active_tasks']}"
             if state.get("pending_approvals"):
                 tip += f"\nЖдут подтверждения: {state['pending_approvals']}"
-            tip += "\nИИ: " + {"ready": "Gemini готов", "unconfigured": "Gemini не подключён"}.get(state.get("ai"),
+            tip += "\nИИ: " + {"ready": "специалисты подключены", "partial": "подключены не все специалисты", "unconfigured": "не подключён"}.get(state.get("ai"),
                                                                                                 state.get("ai", "?"))
         text = ICONS.get(s, "󰚩")
         if state and state.get("pending_approvals"):

@@ -31,7 +31,8 @@ jarvis setup-gemini                   # ключ Gemini в GNOME Keyring (скр
 | Локальные команды без ИИ: система, окна, рабочие столы, громкость, приложения, поиск/открытие файлов, заметки, напоминания, снимок экрана | VERIFIED LOCAL |
 | Разрешения: низкий/средний/высокий риск, подтверждение с привязкой к точным параметрам, правка перед подтверждением, экстренная остановка | VERIFIED LOCAL (тесты + UI) |
 | Задачи в SQLite: состояния, шаги, проверка результата, пауза/отмена, восстановление после перезапуска | VERIFIED LOCAL (тесты) |
-| Gemini: потоковые ответы, вызов инструментов через ту же политику | VERIFIED MOCK — без ключа живой вызов не проверен |
+| AI-агентство: директор планирует шаги и выбирает специалиста (Claude Code — код/файлы/терминал, Gemini — интернет/зрение/голос, GPT — тексты/документы/анализ) | VERIFIED LOCAL/MOCK; Claude Code — VERIFIED LIVE |
+| Gemini и GPT | IMPLEMENTED UNVERIFIED — нет ключей (Настройки → AI-агентство) |
 | Голосовой ввод (по нажатию, распознавание Gemini), озвучивание (Gemini TTS) | IMPLEMENTED UNVERIFIED — нужен ключ |
 | «Флора»: разбор почты с доказательствами, сравнение КП, чертежи с пометками, черновик, отправка с подтверждением | VERIFIED MOCK (синтетические данные, демо-почта) |
 | Индикатор Waybar, горячие клавиши Hyprland | VERIFIED LOCAL на копии конфигурации; в вашу панель не установлено |
@@ -66,7 +67,7 @@ SQLite: ~/.local/share/jarvis/jarvis.db · журнал аудита: ~/.local/s
 ## Разработка
 
 ```bash
-uv run pytest -q                                      # 84 теста
+uv run pytest -q                                      # 111 тестов (+1 живой: JARVIS_LIVE=1)
 uv run python scripts/bench.py 40                     # задержки локальных команд
 scripts/dev-server.sh start /tmp/jh                   # изолированное ядро (порт из /tmp/jh/config/config.toml)
 cd tests/ui && npm install && node drive.mjs <port> <token> <out> smoke|flora   # снимки UI
