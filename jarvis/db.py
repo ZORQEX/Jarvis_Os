@@ -48,6 +48,17 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE task_steps ADD COLUMN title TEXT;
     """,
+    # 3 — project workflow: drafts and decision ledger
+    """
+    CREATE TABLE drafts(
+        id TEXT PRIMARY KEY, project TEXT NOT NULL, reply_to TEXT, to_name TEXT, to_addr TEXT NOT NULL,
+        subject TEXT NOT NULL, body TEXT NOT NULL, option TEXT, version INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL CHECK(status IN ('draft','sending','sent','unknown_outcome')),
+        operation_id TEXT, provider_message_id TEXT, sent_at REAL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+    CREATE TABLE project_decisions(
+        id TEXT PRIMARY KEY, project TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL,
+        note TEXT, source_refs TEXT NOT NULL DEFAULT '[]', created_at REAL NOT NULL, updated_at REAL NOT NULL);
+    """,
 ]
 
 

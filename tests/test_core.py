@@ -26,7 +26,8 @@ def test_state_machine_enforced(core):
 
 
 def test_migrations_idempotent(core):
-    assert core.db.migrate() == 2
+    from jarvis.db import MIGRATIONS
+    assert core.db.migrate() == len(MIGRATIONS)
     cols = [r["name"] for r in core.db.all("PRAGMA table_info(task_steps)")]
     assert "title" in cols
 

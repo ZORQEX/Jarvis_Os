@@ -183,5 +183,7 @@ class Gateway:
 
 def _editable_fields(spec) -> list[str]:
     """String parameters the user may edit in the approval card (content, not targets)."""
+    if spec.side_effects == "external":
+        return []   # external content is edited in its own editor; any edit needs a fresh approval
     return [k for k, v in spec.params.get("properties", {}).items()
             if v.get("type") == "string" and k in ("text", "title", "body")]

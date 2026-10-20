@@ -51,7 +51,9 @@ function applySnapshot(d) {
 }
 
 // ------------------------------------------------------------------ events
+let floraMod = null, pendingFlora = null;
 function onEvent(ev) {
+  floraMod?.onEvent(ev);
   const tid = ev.task_id;
   switch (ev.kind) {
     case "message": {
@@ -108,6 +110,7 @@ function onEvent(ev) {
     case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : ""); break;
     case "speech.stop": voice.stopSpeaking(); break;
     case "conversation.new": link.request("snapshot").then(applySnapshot).catch(() => {}); break;
+    case "ui.navigate": pendingFlora = { tab: ev.tab }; nav(ev.view); break;
     case "provider": S.provider = ev.provider; renderStatus(); if (S.view === "settings") renderSettings(); break;
   }
 }
@@ -242,11 +245,12 @@ function turnHtml(t, task, approvals) {
   const body = [];
   if (task) {
     const visible = task.steps.filter((s) => s.tool_id !== "cloud_send" && !["awaiting_approval", "resumed"].includes(s.state));
+    for (const a of approvals) if (a.status !== "pending") body.push(approvalCard(a));
     if (visible.length) {
       body.push(`<div class="steps">${visible.map((s) => stepRow(s, S.progress[s.id])).join("")}</div>`);
       for (const s of visible) { const c = resultCard(s); if (c) body.push(c); }
     }
-    for (const a of approvals) body.push(approvalCard(a));
+    for (const a of approvals) if (a.status === "pending") body.push(approvalCard(a));
   }
   for (const r of t.replies) {
     const err = r.meta?.route === "error" || r.meta?.error_kind;
@@ -338,7 +342,7 @@ function taskCard(t) {
   const canResume = t.state === "paused";
   const sub = t.state === "blocked" ? "прервана перезапуском"
     : running ? `${toolTitle(running.tool_id)} · ${S.progress[running.id] || "выполняю"}`
-    : t.state === "waiting_for_approval" ? "ждёт вашего решения" : STATE_RU[t.state] || t.state;
+    : t.state === "waiting_for_approval" ? "нужно ваше решение" : "";
   return `<div class="task"><div class="top">
       <span class="req" title="${esc(t.request)}">${esc(t.request)}</span>
       <span class="ctl">
@@ -405,7 +409,10 @@ async function submit(text, source) {
 document.addEventListener("click", async (e) => {
   const t = e.target.closest("button, [data-open]");
   if (!t) return;
-  if (t.dataset.nav) return nav(t.dataset.nav);
+  if (t.dataset.nav) {
+    if (t.dataset.floraTab || t.dataset.floraItem) pendingFlora = { tab: t.dataset.floraTab, item: t.dataset.floraItem };
+    return nav(t.dataset.nav);
+  }
   if (t.dataset.suggest) return submit(t.dataset.suggest, "text");
   if (t.id === "railCompanion") { nav("chat"); input.focus(); return; }
   if (t.id === "estopBtn") return estop();
@@ -491,10 +498,14 @@ async function renderTasksView() {
 async function renderFlora() {
   const el = $("#viewFlora");
   try {
-    const mod = await import("./flora.js");
-    mod.render(el, { link, S, toast, submit, nav });
-  } catch {
-    el.innerHTML = `<div class="page"><h1>Проект «Флора»</h1><p class="lead">Модуль ещё не установлен.</p></div>`;
+    const mod = floraMod || (floraMod = await import("./flora.js"));
+    const p = pendingFlora; pendingFlora = null;
+    if (p?.tab) mod.setTab(p.tab);
+    if (p?.item) mod.selectItem(p.item);
+    await mod.render(el, { link, S, toast, submit, nav });
+  } catch (e) {
+    console.error(e);
+    if (!floraMod) el.innerHTML = `<div class="page"><h1>Проект «Флора»</h1><p class="lead">Модуль не загрузился: ${esc(e.message)}</p></div>`;
   }
 }
 

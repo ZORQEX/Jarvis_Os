@@ -54,6 +54,7 @@ class EventBus:
     def __init__(self, db: Database):
         self.db = db
         self._subs: set[asyncio.Queue] = set()
+        self.listeners: list = []   # sync callbacks(kind) inside the core
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -70,6 +71,11 @@ class EventBus:
             cur = self.db.execute("INSERT INTO events(ts,kind,task_id,payload) VALUES(?,?,?,?)",
                                   (ev["ts"], kind, task_id, dumps(redact(payload))))
             ev["seq"] = cur.lastrowid
+        for fn in self.listeners:
+            try:
+                fn(kind)
+            except Exception:   # noqa: BLE001 — a listener must not break publishing
+                pass
         for q in list(self._subs):
             try:
                 q.put_nowait(ev)

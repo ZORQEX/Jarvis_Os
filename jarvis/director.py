@@ -18,6 +18,7 @@ from .tasks import S, TERMINAL, IllegalTransition, TaskStore
 from .tools.base import Risk, Tool, ToolResult, ToolSpec, Verification
 
 COMPLETED_FLASH_S = 2.5
+_STATE_KINDS = {"approval.created", "approval.updated", "step.updated", "task.updated", "task.created"}
 
 
 class CloudConsent(Tool):
@@ -68,6 +69,7 @@ class Director:
         self.started_at = time.time()
         self.policy.estop = bool(db.get_kv("estop", False))
         scheduler.on_fire = self._on_reminder
+        bus.listeners.append(lambda kind: self._touch() if kind in _STATE_KINDS else None)
 
     # ------------------------------------------------------------------ conversations
     def conversation_id(self) -> str:

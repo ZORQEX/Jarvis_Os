@@ -151,6 +151,9 @@ class Server:
     async def artifact(self, req):
         cfg = self.core.config
         roots = [cfg.expand(cfg.screenshot_dir), cfg.expand(cfg.write_dir), self.core.paths.artifacts]
+        if self.core.director.flora:
+            from .flora.mail import FIXTURES
+            roots.append(FIXTURES.resolve())
         try:
             p = Path(req.query.get("path", "")).resolve()
         except (OSError, ValueError):
@@ -160,8 +163,10 @@ class Server:
         ctype = mimetypes.guess_type(p.name)[0] or ""
         if not (ctype.startswith("image/") or ctype in ("application/pdf", "text/markdown", "text/plain")):
             raise web.HTTPForbidden()
-        return web.FileResponse(p, headers={"Cache-Control": "private, max-age=60",
-                                            "X-Content-Type-Options": "nosniff"})
+        # Files are untrusted content: sandbox them so e.g. an SVG opened directly can never run script.
+        return web.FileResponse(p, headers={"Cache-Control": "private, max-age=60", "Content-Type": ctype,
+                                            "X-Content-Type-Options": "nosniff",
+                                            "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'"})
 
     async def api_state(self, req):
         return web.json_response(self.core.director.core_state())

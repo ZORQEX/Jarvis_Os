@@ -136,6 +136,10 @@ export function resultCard(step) {
     case "note": return noteCard(d);
     case "file_preview": return previewCard(d);
     case "reminder": return reminderCard(d);
+    case "flora_inbox": return floraInboxCard(d);
+    case "flora_compare": return floraCompareCard(d);
+    case "flora_draft": return floraDraftCard(d);
+    case "flora_sent": return floraSentCard(d);
     default: return "";
   }
 }
@@ -184,9 +188,9 @@ function shotCard(d) {
 }
 
 function noteCard(d) {
-  return `<div class="card"><div class="card-head">${ICON.note}<strong>${esc(d.name)}</strong>
-    <span class="faint">${esc(shortPath(d.path.replace(/\/[^/]+$/, "")))}</span>
-    <button class="btn ghost" style="margin-left:auto" data-open="${esc(d.path)}">${ICON.open} Открыть</button></div></div>`;
+  return `<div class="card"><div class="row" style="grid-template-columns:26px minmax(0,1fr) auto">${ICON.note}
+    <span class="t"><div>${esc(d.name.replace(/\.md$/, ""))}</div><div class="p">${esc(shortPath(d.path.replace(/\/[^/]+$/, "")))}</div></span>
+    <button class="btn ghost" data-open="${esc(d.path)}">${ICON.open} Открыть</button></div></div>`;
 }
 
 function previewCard(d) {
@@ -199,10 +203,71 @@ function reminderCard(d) {
   return `<div class="card"><div class="card-head">${ICON.clock}<strong>${esc(d.due_local)}</strong><span>${esc(d.text)}</span></div></div>`;
 }
 
+// ---------------------------------------------------------------- Flora cards
+const TYPE_RU = { DECISION_REQUIRED: "решение", QUESTION: "вопрос", PROMISE: "обещание", FYI: "к сведению" };
+export const typeBadge = (t) => `<span class="tbadge ${esc(t)}">${esc(TYPE_RU[t] || t)}</span>`;
+export const ruDate = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("ru-RU", { weekday: "short", day: "numeric", month: "long" });
+export const rub = (v, cur = "RUB") => v == null ? "—" : Math.round(v).toLocaleString("ru-RU") + (cur === "RUB" ? " ₽" : " €");
+
+function floraInboxCard(d) {
+  const a = d.analysis;
+  if (!a) return "";
+  const rows = a.items.slice(0, 6).map((i) => `<button class="row" data-nav="flora" data-flora-item="${esc(i.id)}">
+    ${typeBadge(i.type)}<span class="t"><div>${esc(i.subject)}</div><div class="p">${esc(i.from.name)}</div></span>
+    <span class="r">${i.deadline ? "до " + esc(ruDate(i.deadline)) : ""}</span></button>`).join("");
+  return `<div class="card"><div class="card-head">${ICON.mail}<strong>Флора · входящие</strong><span class="demo-badge">демо</span>
+    <span class="faint" style="margin-left:auto">${a.items.length} по проекту · ${a.excluded.length} скрыто</span></div>
+    <div class="rows flora-rows">${rows}</div>
+    <div class="card-foot"><button class="btn" data-nav="flora">Открыть проект</button></div></div>`;
+}
+
+function floraCompareCard(d) {
+  const c = d.comparison;
+  const an = c.anomalies.map((x) => `<div class="callout warn">${ICON.alert}<span>${esc(x.text)} — ячейка <code>${esc(x.cell)}</code>: <code>${esc(x.formula || "")}</code></span></div>`).join("");
+  return `<div class="card"><div class="card-head">${ICON.file}<strong>Сметы «Флоры»</strong><span class="demo-badge">демо</span></div>
+    <div class="stats"><div class="stat"><div class="k">Согласовано (v1)</div><div class="v">${rub(c.base_total)}</div></div>
+      <div class="stat"><div class="k">Предложено (v2)</div><div class="v">${rub(c.new_total)}</div></div>
+      <div class="stat"><div class="k">Разница</div><div class="v" style="color:var(--warn)">+${rub(c.delta)}</div><div class="sub">по строкам, с НДС</div></div></div>
+    <div style="padding:0 14px 14px;display:flex;flex-direction:column;gap:8px">${an}
+    <button class="btn" style="align-self:flex-start" data-nav="flora" data-flora-tab="quotes">Подробное сравнение</button></div></div>`;
+}
+
+function floraDraftCard(d) {
+  const dr = d.draft;
+  return `<div class="card"><div class="card-head">${ICON.mail}<strong>Черновик</strong><span class="faint">кому: ${esc(dr.to_name)}</span>
+    <span class="pill" style="margin-left:auto">не отправлен</span></div>
+    <pre class="preview-text" style="font-family:var(--font);font-size:13.5px">${esc(dr.body)}</pre>
+    <div class="card-foot"><button class="btn" data-nav="flora" data-flora-tab="reply">Открыть и править</button></div></div>`;
+}
+
+function floraSentCard(d) {
+  return `<div class="card"><div class="card-head">${ICON.check}<strong>${d.duplicate ? "Уже было отправлено" : "Отправлено"} (демо)</strong>
+    <span class="faint">${esc(d.to)} · ${esc(d.provider_message_id)}</span></div></div>`;
+}
+
 // ---------------------------------------------------------------- approval card
+function packet(p) {
+  return `<dl class="packet">
+    <dt>Канал</dt><dd>Демо-почта (письмо не покидает компьютер)</dd>
+    <dt>От</dt><dd>client@demo.example</dd>
+    <dt>Кому</dt><dd>${esc(p.to)}</dd>
+    <dt>Тема</dt><dd>${esc(p.subject)}</dd>
+    <dt>Вложения</dt><dd>нет</dd>
+    <dt>Проект</dt><dd>Флора · версия черновика ${esc(p.version)}</dd>
+    <dt>Текст</dt><dd><pre>${esc(p.body)}</pre></dd>
+  </dl>`;
+}
+
 export function approvalCard(a) {
   const s = a.summary || {};
   const open = a.status === "pending";
+  if (!open) {
+    const ok = a.status === "approved";
+    const label = { approved: "Разрешено вами", denied: "Отклонено", expired: "Не подтверждено вовремя" }[a.status] || a.status;
+    const edited = ok && JSON.stringify(a.decided_args) !== JSON.stringify(a.args) ? " · с вашими правками" : "";
+    return `<div class="decision ${ok ? "ok" : "no"}">${ok ? ICON.shield : ICON.x}<span>${esc(label)}${edited}</span>
+      <span class="faint">· ${esc(s.action || s.title)} · ${fmtWhen(a.decided_at || a.created_at)}</span></div>`;
+  }
   const editable = (s.editable || []).filter((k) => typeof a.args?.[k] === "string");
   const statusRu = { approved: "Разрешено", denied: "Отклонено", expired: "Срок истёк" }[a.status];
   const risk = { low: "низкий риск", moderate: "средний риск", high: "высокий риск" }[a.risk] || a.risk;
@@ -213,6 +278,7 @@ export function approvalCard(a) {
       <span class="risk ${esc(a.risk)}">${esc(risk)}</span></div>
     <div class="what">${esc(s.action || s.title)}</div>
     <div class="why">${esc(s.impact || [s.reason, effects].filter(Boolean).join(" · "))}</div>
+    ${a.tool_id === "flora_send" ? packet(a.args) : ""}
     ${open ? editable.map((k) => `<textarea data-edit="${esc(k)}" aria-label="Изменить: ${esc(k)}">${esc(a.args[k])}</textarea>`).join("") : ""}
     ${open ? `<div class="actions">
       <button class="btn warn" data-approve="${esc(a.id)}">${ICON.check} Разрешить</button>

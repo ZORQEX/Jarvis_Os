@@ -56,6 +56,7 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     try:
         from .flora.workflow import FloraWorkflow
         flora = FloraWorkflow(paths, db, bus, audit, gemini, config)
+        flora.approvals = approvals
         for t in flora.tools():
             registry.tools[t.spec.id] = t
     except ImportError:

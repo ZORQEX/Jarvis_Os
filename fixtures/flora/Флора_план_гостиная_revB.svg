@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" font-family="Adwaita Sans, Noto Sans, sans-serif">
+  <rect width="900" height="700" fill="#fbfaf7"/>
+  <g stroke="#26282c" stroke-width="14" fill="none" stroke-linecap="square">
+    <path d="M80 70 H680 V550 H470.0" data-element="wall-south-east"/>
+    <path d="M290.0 550 H80 V70" data-element="wall-south-west"/>
+  </g>
+  <g data-element="partition-kitchen" stroke="#26282c" stroke-width="8">
+    <path d="M420 70 V260"/><path d="M420 360 V550"/>
+  </g>
+  <g data-element="W-3">
+    <rect x="290.0" y="543.0" width="180.0" height="14" fill="#fbfaf7"/>
+    <g stroke="#2f6fdf" stroke-width="2.5"><path d="M290.0 545 H470.0"/><path d="M290.0 550 H470.0"/><path d="M290.0 555 H470.0"/></g>
+    <text x="380.0" y="584" text-anchor="middle" font-size="15" fill="#2f6fdf" font-weight="600">W-3 · 1800×1500</text>
+    <g stroke="#7a808a" stroke-width="1"><path d="M290.0 598 H470.0"/><path d="M290.0 592 V604"/><path d="M470.0 592 V604"/></g>
+    <text x="380.0" y="616" text-anchor="middle" font-size="12" fill="#7a808a">1800</text>
+  </g>
+  <g data-element="W-1" stroke="#2f6fdf" stroke-width="2.5"><path d="M75 190 V310"/><path d="M85 190 V310"/></g>
+  <text x="60" y="255" font-size="12" fill="#2f6fdf" text-anchor="end">W-1</text>
+  <g data-element="W-2" stroke="#2f6fdf" stroke-width="2.5"><path d="M675 400 V490"/><path d="M685 400 V490"/></g>
+  <text x="698" y="450" font-size="12" fill="#2f6fdf">W-2</text>
+  <text x="250" y="300" font-size="20" fill="#26282c" text-anchor="middle">Гостиная</text>
+  <text x="250" y="324" font-size="13" fill="#7a808a" text-anchor="middle">27,6 м²</text>
+  <text x="550.0" y="300" font-size="20" fill="#26282c" text-anchor="middle">Кухня</text>
+  <g stroke="#7a808a" stroke-width="1"><path d="M80 40 H680"/><path d="M80 34 V46"/><path d="M680 34 V46"/></g>
+  <text x="380.0" y="32" text-anchor="middle" font-size="12" fill="#7a808a">6000</text>
+  <g transform="translate(560 600)">
+    <rect width="320" height="84" fill="#fff" stroke="#26282c"/>
+    <text x="12" y="22" font-size="13" font-weight="600" fill="#26282c">ФЛОРА · Гостиная и кухня · План</text>
+    <text x="12" y="42" font-size="12" fill="#26282c">Ревизия B · 12.09.2026</text>
+    <text x="12" y="60" font-size="11" fill="#7a808a">Согласовано заказчиком 15.09.2026</text>
+    <text x="12" y="76" font-size="10" fill="#b86e12">СИНТЕТИЧЕСКИЕ ДЕМО-ДАННЫЕ</text>
+  </g>
+</svg>
