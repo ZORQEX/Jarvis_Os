@@ -510,7 +510,8 @@ class GeminiProvider(AIProvider):
                 raise pe from None
         raise last or ProviderError("server", "Gemini не ответил")
 
-    async def transcribe(self, audio: bytes, mime: str, lang_hint: str = "ru", names: list[str] | None = None) -> str:
+    async def transcribe(self, audio: bytes, mime: str, lang_hint: str = "ru", names: list[str] | None = None,
+                         expect: str | None = None) -> str:
         from google.genai import types
         self._guard()
         client = self.client()
@@ -523,7 +524,12 @@ class GeminiProvider(AIProvider):
                   "commands such as «открой …», «отправь <кому> в Telegram / WhatsApp / на почту: <текст>», "
                   "«напиши <кому> …», «отмени сообщение …». Recipients are usually Russian first names in the dative "
                   "case. Write service names as Telegram, WhatsApp; times like 13:00. Do not add words that were not spoken.")
-        if names:
+        if expect == "confirm":
+            # Measured: with the assistant's name in the context a short «Да.» came back as «Джарвис».
+            prompt = ("Transcribe this short Russian answer verbatim. The assistant has just asked the user to confirm "
+                      "sending a message, so expect answers like «Да», «Да, отправляй», «Нет», «Не надо», «Измени текст …». "
+                      "Output only the transcript; empty string if there is no speech.")
+        elif names:
             prompt += " Names the user often messages: " + ", ".join(names[:15]) + "."
         last = None
         for model in self.chain(self.pick_model("fast")):

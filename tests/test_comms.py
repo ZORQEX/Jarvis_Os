@@ -115,7 +115,7 @@ async def test_voice_schedule_telegram_then_executor_sends_at_time(core, hub):
     assert a["args"]["deliveries"][0]["to_id"] == "u:1:11" and a["args"]["due_at"] > time.time()
     assert g.seen == ["Джарвис, отправь Ивану Петрову в Telegram в 13:00: Привет, буду через час."]   # only the command
     tts = core.director.speech.engine
-    await wait_for(lambda: any(c.startswith("Запланировать") for c in tts.calls))   # the question is spoken
+    await wait_for(lambda: any(c.endswith("Запланировать?") for c in tts.calls))   # the question is spoken
     assert not hub.providers["telegram"].sent
     await core.director.submit("Да.", "voice")
     await wait_done(core, tid)
@@ -129,11 +129,11 @@ async def test_voice_schedule_telegram_then_executor_sends_at_time(core, hub):
     hub.outbox.start()
     try:
         await wait_for(lambda: hub.outbox.get(job["id"])["status"] == "sent", 5)
-        await wait_for(lambda: "отправлено" in last_text(core))
+        await wait_for(lambda: "отправлено" in last_text(core).lower())
     finally:
         await hub.outbox.stop()
     assert hub.providers["telegram"].sent == [("u:1:11", "Привет, буду через час.", None, job["id"])]
-    assert last_text(core) == "Сообщение Иван Петров в Telegram отправлено."
+    assert last_text(core) == "Отправлено по расписанию: Иван Петров, Telegram."
     assert hub.outbox.get(job["id"])["verified"].startswith("verified")
 
 
@@ -182,7 +182,7 @@ async def test_whatsapp_immediate_send_after_yes(core, hub):
     await core.director.submit("да", "voice")
     await wait_done(core, tid)
     assert hub.providers["whatsapp"].sent[0][:2] == ("phone:79990001122", "Привет.")
-    assert last_text(core) == "Готово. Сообщение Иван Петров в WhatsApp отправлено."
+    assert last_text(core) == "Готово. Отправил: Иван Петров, WhatsApp."
     step = core.tasks.get(tid)["steps"][-1]
     assert step["verification"]["status"] == "verified"
 
@@ -197,7 +197,7 @@ async def test_email_with_subject_and_text_confirmation(core, hub):
     await core.director.submit("Да")                     # typed "да" in the window works too
     await wait_done(core, tid)
     assert hub.providers["email"].sent[0][:3] == ("sergey@example.com", "Сергей, документы готовы.", "Документы готовы")
-    assert last_text(core) == "Готово. Письмо Сергей Орлов на почту отправлено."
+    assert last_text(core) == "Готово. Отправил: Сергей Орлов, почта."
 
 
 # ---------------------------------------------------------------- honesty and safety
@@ -452,3 +452,24 @@ async def test_wake_word_alone_answers_yes(core, hub):
     t = await core.director.submit("Джарвис.", "voice")
     await wait_done(core, t)
     assert last_text(core) == "Да?"
+
+
+async def test_new_command_replaces_an_unanswered_question(core, hub):
+    intents(core, {"action": "send", "recipients": [{"name": "Иван Петров", "platform": "telegram"}], "message": "Первое"},
+            {"action": "send", "recipients": [{"name": "Алина", "platform": "whatsapp"}], "message": "Второе"})
+    t1 = await core.director.submit("Отправь Ивану Петрову в Telegram: Первое", "voice")
+    a1 = await pending_send(core)
+    t2 = await core.director.submit("Отправь Алине в WhatsApp: Второе", "voice")
+    await wait_done(core, t1)
+    assert core.approvals.get(a1["id"])["status"] == "expired"
+    a2 = await pending_send(core)
+    assert a2["args"]["body"] == "Второе"
+    await core.director.submit("Да.", "voice")          # unambiguous: only one open question
+    await wait_done(core, t2)
+    assert hub.providers["whatsapp"].sent and not hub.providers["telegram"].sent
+
+
+def test_spoken_question_is_clear_without_declension(core, hub):
+    q = core.director.comms.question({"deliveries": [{"channel": "email", "to_id": "s@x.ru", "to_name": "Сергей Орлов"}],
+                                      "body": "Документы готовы.", "subject": "Документы готовы"})
+    assert q == "Кому: Сергей Орлов, почта. Тема: «Документы готовы». Текст: «Документы готовы». Отправить?"

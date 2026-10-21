@@ -69,3 +69,29 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Follow-up context («А сколько ему лет?») | VERIFIED LIVE | answered about Elon Musk |
 | Voice → Claude Code routing («открой проект и проверь ошибку») | VERIFIED MOCK (planner) | live STT of the synthetic phrase was garbled |
 | Real microphone on this desktop | NOT VERIFIED | needs the user's voice and a one-time microphone permission |
+
+## Voice output fix (2026-10-21)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Answers are audible in the real window | VERIFIED LOCAL | cause found: Chromium's PipeWire stream volume was 4 % (−84 dB); JARVIS window now has its own `application.id=jarvis-workos` stream (100 %); speaker monitor peak 32 701 during a spoken answer |
+| Honest states (synthesizing / speaking only when sound starts / error) | VERIFIED LOCAL | voice.js, app.js; test_speech_failure_is_reported_and_text_stays |
+| TTS failure keeps the text and says so | VERIFIED MOCK | test_tts_falls_back_and_reports_failure |
+| Sound check + "make JARVIS louder" (only JARVIS's own stream) | IMPLEMENTED | Settings → Голос |
+
+## Communications (2026-10-21)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| One provider contract, capabilities, honest CONNECTED / NOT CONNECTED / ERROR | VERIFIED LOCAL | Messages view, drive.mjs comms |
+| Voice → Gemini intent → confirmation spoken → «да» → provider → result spoken | VERIFIED (real STT, Gemini, Piper; provider = test double) | scratch voice_e2e.py |
+| Telegram real send / schedule | IMPLEMENTED, NOT VERIFIED — needs the user's Telegram login | — |
+| WhatsApp real send | IMPLEMENTED, NOT VERIFIED — needs QR scan; QR display VERIFIED LOCAL | drive.mjs commsqr |
+| E-mail real send | IMPLEMENTED, NOT VERIFIED — needs an app password | — |
+| Persistent schedule, atomic claim (no double send), crash → unknown, missed, bounded retry | VERIFIED MOCK | test_comms.py |
+| Cancel / edit (new confirmation) / status by voice | VERIFIED MOCK | test_comms.py |
+| Ambiguous recipient or platform asked before anything is sent | VERIFIED MOCK | test_comms.py |
+| Multi-channel / multi-recipient with one confirmation | VERIFIED MOCK | test_comms.py |
+| Trusted rules (explicit, revocable, click-only) | VERIFIED MOCK | test_trust_rule_skips_confirmation_until_revoked |
+| Emergency stop blocks scheduled delivery; content tamper blocks delivery | VERIFIED MOCK | test_comms.py |
+| Attachments | NOT IMPLEMENTED | architecture ready (caps.can_send_file=false) |

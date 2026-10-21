@@ -126,6 +126,7 @@ class CommsAgent:
     def __init__(self, hub, gemini, config):
         self.hub, self.gemini, self.config = hub, gemini, config
         self.revisions: dict[str, dict] = {}       # task id → revised args (edit while a confirmation is open)
+        self.superseded: set[str] = set()           # tasks whose open question was replaced by a newer command
 
     # ---------------------------------------------------------------- entry points
     def pending(self, ctx: dict) -> dict | None:
@@ -287,6 +288,11 @@ class CommsAgent:
         await self._confirm_and_run(director, tid, cid, args, intent)
 
     async def _confirm_and_run(self, director, tid, cid, args: dict, intent: dict) -> None:
+        # One open message question at a time: a new command replaces an unanswered one, so «да» is never ambiguous.
+        for a in director.approvals.pending():
+            if a["tool_id"] == "message_send" and a["task_id"] != tid:
+                self.superseded.add(a["task_id"])
+                director.approvals._finish(a["id"], "expired", None, reason="Новая команда — прежний вопрос снят")
         while True:
             self._say(director, tid, self.question(args))
             out = await director.execute(tid, cid, "message_send", args, "Отправка по вашей команде")
@@ -295,38 +301,43 @@ class CommsAgent:
                 args = rev
                 continue
             break
-        director._finish(tid, cid, self.result_text(args, out), meta=self._meta(intent, out=out),
+        text = self.result_text(args, out)
+        if out.status == "denied" and tid in self.superseded:
+            self.superseded.discard(tid)
+            text = "Не отправлено: вы дали новую команду, не ответив на вопрос."
+        director._finish(tid, cid, text, meta=self._meta(intent, out=out),
                          failed=out.status in ("failed", "invalid"),
                          result={"status": out.status, "step_id": out.step_id})
 
+    @staticmethod
+    def _to(args: dict) -> str:
+        """«Иван Петров, Telegram» — names stay in the nominative, so no Russian declension guesswork."""
+        ch = {"telegram": "Telegram", "whatsapp": "WhatsApp", "email": "почта"}
+        return "; ".join(f"{d['to_name']}, {ch[d['channel']]}" for d in args["deliveries"])
+
     def question(self, args: dict) -> str:
-        ds = args["deliveries"]
-        to = self._join([f"{self._dative(d['to_name'])} {CHANNEL_TO[d['channel']]}" for d in ds])
-        body = _short(args["body"], 160)
-        if args.get("replaces"):
-            head = "Изменить запланированное:"
-        elif args.get("due_at"):
-            head = f"Запланировать {when_ru(args['due_at'])}"
-        else:
-            head = "Отправить"
-        if all(d["channel"] == "email" for d in ds) and not args.get("replaces"):
-            return f"{head} {to} письмо «{args.get('subject') or body}»: {body}?"
-        return f"{head} {to}: «{body}»?"
+        body = _short(args["body"], 160).rstrip(" .!?…")
+        parts = [f"Кому: {self._to(args)}."]
+        if args.get("due_at"):
+            parts.append(f"Когда: {when_ru(args['due_at'])}.")
+        if args.get("subject"):
+            parts.append(f"Тема: «{args['subject'].rstrip(' .')}».")
+        parts.append(f"Текст: «{body}».")
+        verb = "Изменить?" if args.get("replaces") else "Запланировать?" if args.get("due_at") else "Отправить?"
+        return " ".join(parts + [verb])
 
     def result_text(self, args: dict, out) -> str:
-        to = self._join([f"{self._dative(d['to_name'])} {CHANNEL_TO[d['channel']]}" for d in args["deliveries"]])
+        to = self._to(args)
         if out.status == "ok":
             if out.result.data.get("scheduled"):
-                return f"Готово. Запланировал: {to}, {when_ru(args['due_at'])}. Отменить можно словами «отмени сообщение»."
+                return f"Готово. Запланировал на {when_ru(args['due_at'])}: {to}. Отменить можно словами «отмени сообщение»."
             res = out.result.data.get("results") or []
             bad = [r for r in res if r["status"] != "sent"]
             if bad:
                 return ("Отправлено частично. " + "; ".join(r["summary"] for r in res) + ".")
             if out.verification and out.verification.status == "unverified":
                 return f"Отправил {to}, но сервис пока не подтвердил: {out.verification.detail}."
-            noun = "Письмо" if all(d["channel"] == "email" for d in args["deliveries"]) else "Сообщение"
-            verb = "отправлено" if noun == "Письмо" else "отправлено"
-            return f"Готово. {noun} {to} {verb}."
+            return f"Готово. Отправил: {to}."
         if out.status == "denied":
             if "экстренная" in (out.error or "").lower():
                 return "Не отправлено: включена экстренная остановка. Скажите «продолжи», чтобы снять её."

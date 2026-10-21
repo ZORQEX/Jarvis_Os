@@ -158,7 +158,9 @@ class Server:
             sp.mark(turn, "stt_start")
         try:
             names = self.core.comms.vocabulary() if self.core.comms else None
-            text = await self.core.gemini.transcribe(audio, mime, names=names)
+            from .comms.agent import VOICE_APPROVABLE
+            confirming = any(a["tool_id"] in VOICE_APPROVABLE for a in d.approvals.pending())
+            text = await self.core.gemini.transcribe(audio, mime, names=names, expect="confirm" if confirming else None)
         except Exception as e:   # noqa: BLE001
             if sp:
                 sp.annotate(turn, error=str(e)[:200])

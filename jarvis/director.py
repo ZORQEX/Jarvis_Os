@@ -512,6 +512,7 @@ class Director:
     async def deliver_job(self, job: dict) -> None:
         """Outbox executor callback: a scheduled message is due. Runs as a visible task through the Gateway."""
         from .comms.base import CHANNEL_TO
+        CH = {"telegram": "Telegram", "whatsapp": "WhatsApp", "email": "почта"}
         cid = self.conversation_id()
         who = f"{job['to_name']} {CHANNEL_TO.get(job['channel'], '')}"
         tid = self.tasks.create(f"Отправка по расписанию: {who}", cid, route="comms", level=0)
@@ -524,7 +525,7 @@ class Director:
             if j["status"] == "sending":      # policy/validation stopped it before any send attempt
                 j = self.hub.outbox.update(j["id"], status="failed", last_error=out.error or "Не отправлено")
             if out.status == "ok":
-                text, failed = f"Сообщение {who} отправлено.", False
+                text, failed = f"Отправлено по расписанию: {job['to_name']}, {CH.get(job['channel'], job['channel'])}.", False
                 if out.verification and out.verification.status == "unverified":
                     text += f" Подтверждения от сервиса пока нет: {out.verification.detail}."
             elif j["status"] == "scheduled":
