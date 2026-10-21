@@ -1,5 +1,4 @@
 """«Полный доступ»: what it opens, what still asks, what stays closed."""
-import time
 from pathlib import Path
 
 import pytest
@@ -7,7 +6,7 @@ import pytest
 from jarvis.comms.base import Contact
 from jarvis.tools.base import ToolInputError, resolve_in_scopes
 
-from conftest import wait_done, wait_for
+from conftest import wait_done
 from test_comms import FakeMessenger, Intents, PEOPLE, pending_send
 
 

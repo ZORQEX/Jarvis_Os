@@ -19,7 +19,7 @@ import tempfile
 import time
 
 from ..db import Database
-from .base import AIProvider, Cap, GenResult, Health, ProviderFailure, StepRequest
+from .base import AIProvider, Cap, GenResult, Health, ProviderFailure, StepRequest, usage_of
 
 INSPECT_TOOLS = ["Read", "Glob", "Grep"]
 CHANGE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
@@ -205,7 +205,7 @@ class ClaudeCodeProvider(AIProvider):
         self.db.set_kv("claude_code_verified_at", time.time())
         usage = result.get("usage") or {}
         return GenResult(result.get("result", "").strip(), "claude_code", model, [],
-                         {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")},
+                         usage_of(usage),
                          result.get("total_cost_usd"), first, (time.perf_counter() - t0) * 1000,
                          {"turns": result.get("num_turns"), "tools_used": tools_used, "mode": req.mode,
                           "permission_denials": result.get("permission_denials") or []})

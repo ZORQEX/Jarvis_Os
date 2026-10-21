@@ -11,7 +11,7 @@ import struct
 import time
 from pathlib import Path
 
-from .base import (Risk, Tool, ToolContext, ToolError, ToolInputError, ToolResult, ToolSpec,
+from .base import (Risk, Tool, ToolError, ToolInputError, ToolResult, ToolSpec,
                    Verification, run_cmd)
 
 # name aliases -> (argv, expected window class regex, display name)

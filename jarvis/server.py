@@ -7,17 +7,16 @@ import base64
 import hmac
 import json
 import mimetypes
-import os
 import re
 import secrets as pysecrets
 import time
 from pathlib import Path
 
-from aiohttp import WSMsgType, web
+from aiohttp import WSCloseCode, WSMsgType, web
 
 from . import secrets
 from .app import Core, build
-from .events import redact
+from .events import redact, spawn
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 COOKIE = "jarvis_session"
@@ -62,6 +61,7 @@ class Server:
         self.mcp_secret = pysecrets.token_urlsafe(32)
         r.add_post("/mcp/call", self.mcp_call)
         self.app.on_startup.append(self.on_startup)
+        self.app.on_shutdown.append(self.on_shutdown)
         self.app.on_cleanup.append(self.on_cleanup)
         self.sockets: set[web.WebSocketResponse] = set()
 
@@ -114,11 +114,11 @@ class Server:
         self.core.claude.bridge = {"url": f"http://127.0.0.1:{self.port}/mcp/call", "secret": self.mcp_secret}
         self.core.scheduler.start()
         if self.core.comms:
-            asyncio.get_running_loop().create_task(self.core.comms.start())
+            spawn(self.core.comms.start(), "comms-start")
         if self.core.director.speech:
-            asyncio.create_task(self._prewarm_speech())
+            spawn(self._prewarm_speech(), "speech-prewarm")
         self._fwd = asyncio.create_task(self._forward())
-        asyncio.create_task(self._check_providers())
+        spawn(self._check_providers(), "providers-check")
 
     async def _prewarm_speech(self):
         try:
@@ -131,6 +131,11 @@ class Server:
                 await stt.start()                 # load the recognition model before the first phrase
             except Exception as e:   # noqa: BLE001
                 self.core.audit.write("stt.prewarm_failed", error=repr(e)[:200])
+
+    async def on_shutdown(self, app):
+        """Close the windows' live connections first: otherwise aiohttp waits for them (measured: 15–35 s stop)."""
+        for ws in list(self.sockets):
+            await ws.close(code=WSCloseCode.GOING_AWAY, message=b"JARVIS restarting")
 
     async def on_cleanup(self, app):
         self._fwd.cancel()
@@ -183,7 +188,7 @@ class Server:
             if sp:
                 sp.annotate(turn, error=str(e)[:200])
                 sp.say("notice-" + (turn or "x"), "Не удалось распознать речь. Повтори, пожалуйста.", turn)
-            raise ValueError("Не удалось распознать речь: " + str(e)[:150])
+            raise ValueError("Не удалось распознать речь: " + str(e)[:150]) from None
         if sp:
             sp.mark(turn, "stt_end")
             sp.annotate(turn, stt_model=stt_model, transcript=text)
@@ -282,7 +287,7 @@ class Server:
         try:
             p = Path(req.query.get("path", "")).resolve()
         except (OSError, ValueError):
-            raise web.HTTPNotFound()
+            raise web.HTTPNotFound() from None
         if not any(p.is_relative_to(r) for r in roots) or not p.is_file():
             raise web.HTTPNotFound()
         ctype = mimetypes.guess_type(p.name)[0] or ""
@@ -346,7 +351,7 @@ class Server:
                     data = json.loads(msg.data)
                 except ValueError:
                     continue
-                asyncio.create_task(self._handle(ws, data))
+                spawn(self._handle(ws, data), "ws-request")
         finally:
             self.sockets.discard(ws)
         return ws
@@ -442,7 +447,7 @@ class Server:
                 res = self._voices()
             elif typ == "voice.preview":
                 tid = "preview_" + pysecrets.token_hex(4)
-                asyncio.create_task(self._voice_preview(str(data.get("voice")), tid))
+                spawn(self._voice_preview(str(data.get("voice")), tid), "voice-preview")
                 res = {"task_id": tid}
             elif typ == "voice.output":
                 res = await audio_output(fix=bool(data.get("fix")))
@@ -641,4 +646,5 @@ def run(host: str | None = None, port: int | None = None) -> None:
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise SystemExit("JARVIS слушает только loopback-адрес")
     print(f"JARVIS WorkOS on http://{host}:{srv.port}", flush=True)
-    web.run_app(srv.app, host=host, port=srv.port, print=None, handle_signals=True, access_log=None)
+    web.run_app(srv.app, host=host, port=srv.port, print=None, handle_signals=True, access_log=None,
+                shutdown_timeout=5)

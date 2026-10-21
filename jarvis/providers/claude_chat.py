@@ -24,7 +24,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .base import AIProvider, Cap, GenResult, Health, ProviderFailure, StepRequest
+from .base import AIProvider, Cap, GenResult, Health, ProviderFailure, StepRequest, usage_of
 from .claude_code import _clean_env
 
 STEP_SYSTEM = """Ты — специалист внутри ассистента JARVIS. Выполни только порученный шаг.
@@ -69,8 +69,8 @@ def classify(text: str) -> str:
 
 
 class _Turn:
-    def __init__(self, on_delta, on_tool):
-        self.on_delta, self.on_tool = on_delta, on_tool
+    def __init__(self, on_delta, on_tool, proc=None):
+        self.on_delta, self.on_tool, self.proc = on_delta, on_tool, proc
         self.text, self.result, self.tools = "", None, []
         self.first_ms = None
         self.t0 = time.perf_counter()
@@ -143,7 +143,7 @@ class ClaudeChatProvider(AIProvider):
         return self.describe()
 
     def model_for(self, cap: Cap) -> str:
-        return self.model
+        return self.config.claude_fast_model if cap == Cap.PLANNING else self.model
 
     def describe(self) -> dict:
         return {"provider": "claude", "configured": self.configured(), "key_settable": False, "status": self.status,
@@ -203,10 +203,15 @@ class ClaudeChatProvider(AIProvider):
             except ValueError:
                 continue
             t, turn = ev.get("type"), self.turn
+            if t == "result" and isinstance(ev.get("total_cost_usd"), (int, float)):
+                # In a long-lived session Claude reports the cost of the WHOLE session so far: keep the difference.
+                prev = getattr(proc, "jarvis_cost", 0.0)
+                ev["turn_cost_usd"] = round(max(0.0, ev["total_cost_usd"] - prev), 6)
+                proc.jarvis_cost = ev["total_cost_usd"]
             if t == "system" and ev.get("subtype") == "init":
                 self.model = ev.get("model") or self.model
-            if turn is None:
-                continue
+            if turn is None or turn.proc is not proc:
+                continue          # output of an old (restarted) process never touches the current question
             if t == "stream_event":
                 d = (ev.get("event") or {}).get("delta") or {}
                 if d.get("type") == "text_delta" and d.get("text"):
@@ -227,10 +232,11 @@ class ClaudeChatProvider(AIProvider):
             elif t == "result":
                 turn.result = ev
                 turn.done.set()
-        # process ended
-        if self.turn and not self.turn.done.is_set():
-            self.turn.result = {"is_error": True, "result": "Claude Code остановился"}
-            self.turn.done.set()
+        # process ended: only ITS question fails (measured race: an old process's end failed a new question in 13 ms)
+        turn = self.turn
+        if turn and turn.proc is proc and not turn.done.is_set():
+            turn.result = {"is_error": True, "result": "Claude Code остановился"}
+            turn.done.set()
 
     async def _stop(self) -> None:
         if self.proc and self.proc.returncode is None:
@@ -257,7 +263,7 @@ class ClaudeChatProvider(AIProvider):
         handed_off = False
         try:
             await self._start()
-            turn = self.turn = _Turn(on_delta, on_tool)
+            turn = self.turn = _Turn(on_delta, on_tool, self.proc)
             msg = {"type": "user", "message": {"role": "user", "content": text}}
             self.proc.stdin.write((json.dumps(msg, ensure_ascii=False) + "\n").encode())
             await self.proc.stdin.drain()
@@ -291,7 +297,8 @@ class ClaudeChatProvider(AIProvider):
                 turn.on_delta = turn.on_tool = None
                 self.turn = None
                 self.lock.release()
-        asyncio.get_running_loop().create_task(finish())
+        from ..events import spawn
+        spawn(finish(), "claude-interrupt")
 
     # ---------------------------------------------------------------- conversation with JARVIS tools
     async def run_tool_loop(self, system: str, history: list[dict], user_text: str, tools, execute, on_delta=None,
@@ -320,6 +327,11 @@ class ClaudeChatProvider(AIProvider):
                 thinking(True)
         try:
             turn = await self._send(text, on_delta, on_tool)
+            res = turn.result or {}
+            if res.get("result") == "Claude Code остановился" and not turn.text and not turn.tools:
+                # The process died before answering (crash, killed, update): start a fresh one and ask once more.
+                await self._stop()
+                turn = await self._send(text, on_delta, on_tool)
         finally:
             self.current_execute = None
             if thinking:
@@ -334,9 +346,8 @@ class ClaudeChatProvider(AIProvider):
         self.status, self.last_error, self.last_error_kind = "ready", None, None
         usage = res.get("usage") or {}
         final = turn.text.strip() or str(res.get("result") or "").strip()
-        return GenResult(final, "claude", self.model, [], {"input_tokens": usage.get("input_tokens"),
-                                                          "output_tokens": usage.get("output_tokens")},
-                         res.get("total_cost_usd"), turn.first_ms, (time.perf_counter() - t0) * 1000,
+        return GenResult(final, "claude", self.model, [], usage_of(usage),
+                         res.get("turn_cost_usd"), turn.first_ms, (time.perf_counter() - t0) * 1000,
                          {"rounds": len(turn.tools), "tools_used": turn.tools})
 
     async def mcp_call(self, name: str, args: dict) -> dict:
@@ -434,8 +445,7 @@ class ClaudeChatProvider(AIProvider):
                 sources.append({"title": u, "url": u})
         usage = result.get("usage") or {}
         self.status = "ready"
-        return GenResult(final, "claude", model, sources[:10], {"input_tokens": usage.get("input_tokens"),
-                                                               "output_tokens": usage.get("output_tokens")},
+        return GenResult(final, "claude", model, sources[:10], usage_of(usage),
                          result.get("total_cost_usd"), first, (time.perf_counter() - t0) * 1000,
                          {"tools_used": used, "grounding": "WebSearch" in used})
 

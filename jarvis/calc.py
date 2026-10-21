@@ -117,7 +117,7 @@ def answer(text: str) -> str | None:
     if m and not re.search(r"[+\-*/]|плюс|минус|умнож|раздел", t):
         n = _num(m.group(1))
         return f"{fmt(math.sqrt(n))}. Квадратный корень из {fmt(n)} — {fmt(math.sqrt(n))}."
-    m = re.search(rf"(?:сколько\s+будет|посчитай|вычисли|calculate|сколько\s+это)\s+(.+?)\??$", t) or \
+    m = re.search(r"(?:сколько\s+будет|посчитай|вычисли|calculate|сколько\s+это)\s+(.+?)\??$", t) or \
         re.fullmatch(r"\s*([\d\s.,+\-*/x×÷^()]+(?:в квадрате|в кубе)?)\s*(?:=|равно)?\s*\??\s*", t)
     if m:
         expr = m.group(1)

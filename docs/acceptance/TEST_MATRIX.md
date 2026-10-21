@@ -1,6 +1,6 @@
 # Test matrix — milestone 1 + Flora (2026-10-20)
 
-Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 137 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-21).
+Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 227 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -107,3 +107,26 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Message commands: local first, Claude JSON otherwise | VERIFIED LIVE | 4.3 s with claude-haiku-5-5 |
 | No Gemini code or dependency left | VERIFIED LOCAL | test_no_gemini_code_left_in_the_application |
 | Tests never call the real Claude | VERIFIED LOCAL | conftest: providers «not installed» unless scripted |
+
+## Full audit (2026-10-22)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Static analysis clean (pyflakes, bugbear loop/raise rules, invisible characters, fire-and-forget tasks) | VERIFIED LOCAL | `uvx ruff@0.15.6 check jarvis tests scripts --select F,RUF006,B023,PLE,B904` → 0 |
+| Background tasks are kept referenced and their errors are printed, never lost | VERIFIED LOCAL | `events.spawn` used for every background task |
+| Claude process killed → next question still answered (one automatic restart) | VERIFIED LIVE (dev JARVIS) | SIGKILL of the conversation process, next answer «Да.» in 3.2 s; before: failed in 13 ms |
+| Output of an old Claude process never fails the new question | VERIFIED LOCAL | test_an_old_process_ending_never_fails_the_new_question |
+| Cost of the long-lived conversation recorded per answer (Claude reports a running total) | VERIFIED LIVE + LOCAL | 10 answers: ledger now 0.023 $ instead of 0.13 $; test_session_cost_is_recorded_per_answer_not_cumulative |
+| Token ledger counts cached context too | VERIFIED LIVE | conversation context 6.2k → 7.4k tokens over 10 turns (MAX_TURNS 40 kept) |
+| Single letter / translation / web question goes to the warm conversation (no new process) | VERIFIED LIVE + MOCK | «столица Японии» ~1–1.4 s; «сделай короче» edits the letter; numbers and sources still checked |
+| Several conversational clauses = one Claude message, no planning call | VERIFIED LIVE + MOCK | «Запомни число… Ответь одним словом» 1.3 s (was +2.7–3.5 s) |
+| Silero / speech recognition / Piper restart once when their process dies | VERIFIED LOCAL | test_silero_restarts_once…, test_local_stt_restarts_once… (real subprocesses) |
+| No temporary-file leaks | VERIFIED LOCAL | 7 124 empty dirs found in /tmp and removed; Silero returns audio through the pipe; Piper dir is created on use and pid-tagged; tests use one auto-removed dir |
+| Speech recognition int8 model | VERIFIED LOCAL | 20 noisy synthetic commands: identical transcripts to the full model, RAM 1417 → 523 MB; multi-length warm-up: first phrase 2.1 s → 0.5 s |
+| Phrase cache bounded | VERIFIED LOCAL | test_silero_phrase_cache_is_bounded (300 phrases max) |
+| Core stops quickly with the window open; window reconnects | VERIFIED LOCAL | SIGTERM → stopped in 155–309 ms (was 15–35 s); all workers gone |
+| «Отправь себе в WhatsApp» never searches contacts | VERIFIED LIVE | before: matched another person's chat containing «Себя» (approval card, denied, nothing sent); now own number read from WhatsApp Web, sent to «Вы (заметки)» in 6 s, ✓ |
+| Real sends after the audit | VERIFIED LIVE (to self) | Telegram №168012; e-mail found in «Отправленные»; WhatsApp «прочитано»; schedule + cancel by command |
+| Reminder fires on time; STRICT_OFFLINE blocks Claude, local commands work | VERIFIED LIVE (dev JARVIS) | «через 1 минуту» fired at the minute; offline: windows list answered locally |
+| UI scenarios | VERIFIED LOCAL | drive.mjs smoke, approval-deny, view, flora, comms, commsqr, two, voiceui, agency → 0 console errors |
+

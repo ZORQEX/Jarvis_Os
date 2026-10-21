@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-import getpass
 import http.client
 import json
 import os

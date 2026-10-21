@@ -3,12 +3,12 @@ clarification or confirmation → Gateway tool. Claude only reads the command (n
 the providers perform the real action; the agent never says "sent" unless a provider confirmed it."""
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import re
 import time
 
 from ..db import now
+from ..events import spawn
 from .base import CHANNEL_RU, CHANNEL_TO, UNSUPPORTED, CommsError, Contact
 from .contacts import best, is_self, match_score
 from .outbox import STATUS_RU, _short, when_ru
@@ -107,7 +107,7 @@ _FILLER = {"джарвис", "jarvis", "говорю", "пожалуйста", "
             "э", "ээ", "эм", "давай", "срочно", "отправь", "отправить", "напиши", "написать", "пошли", "скажи", "передай",
             "черкни", "сейчас", "с", "сердечком", "смайликом", "это", "этому", "человеку", "теперь", "ещё", "еще", "тоже",
             "у", "для", "что", "чтобы", "сегодня", "завтра", "послезавтра", "вечером", "утром", "днем", "днём", "ночью",
-            "позже", "попозже", "потом", "текст", "а", "и"}
+            "позже", "попозже", "потом", "текст", "и"}
 _PRONOUN = {"ей", "ему", "им", "её", "его"}
 
 
@@ -339,7 +339,6 @@ class CommsAgent:
             intent["when"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(due))
         if due is not None and due < now() - 60:
             return self._ask(director, tid, cid, intent, "time", "Это время уже прошло. На когда запланировать?", resolved)
-        remaining = []
         for i, r in enumerate(rcps):
             name, plat = (r.get("name") or "").strip(), r.get("platform") or "unknown"
             last = ctx.get("last_contact")
@@ -359,7 +358,7 @@ class CommsAgent:
                                      f"Куда отправить {self._dative(name)}: в Telegram, WhatsApp или на почту?", resolved)
             p = self.hub.provider(plat)
             if hasattr(p, "warm") and p.connected():
-                asyncio.ensure_future(p.warm())     # get WhatsApp Web ready while the user hears the question
+                spawn(p.warm(), "whatsapp-warm")     # get WhatsApp Web ready while the user hears the question
             if not p.connected():
                 st = p.status()
                 return director._finish(tid, cid, f"{p.title} не подключён — отправить не могу. {st.requirement} "

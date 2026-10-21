@@ -15,8 +15,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..providers.base import SENSITIVITY, sens_rank
-from .decision import ACTIONS, Decision, DecisionError, Step, validate
+from ..providers.base import sens_rank
+from .decision import Decision, DecisionError, Step, validate
 
 VERBS = (r"напиши|подготовь|составь|сравни|найди|отправь|переведи|сохрани|открой|исправь|почини|запусти|проверь|"
          r"выбери|покажи|сделай|объясни|создай|опубликуй|разошли|поищи|узнай|оцени|выдели|посмотри|прочитай|"

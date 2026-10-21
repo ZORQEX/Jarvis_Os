@@ -202,10 +202,8 @@ class SpeechManager:
         for r in self.db.all("SELECT * FROM voice_turns ORDER BY created_at DESC LIMIT ?", (limit,)):
             d = dict(r)
             base = d["speech_end"] or d["stt_start"] or d["created_at"]
-
-            def ms(k):
-                return round((d[k] - base) * 1000) if d.get(k) and base else None
-            d["ms"] = {k: ms(k) for k in TURN_FIELDS if k not in ("speech_start", "speech_end")}
+            d["ms"] = {k: (round((d[k] - base) * 1000) if d.get(k) and base else None)
+                       for k in TURN_FIELDS if k not in ("speech_start", "speech_end")}
             d["ms"]["speech_duration"] = round((d["speech_end"] - d["speech_start"]) * 1000) \
                 if d["speech_start"] and d["speech_end"] else None
             out.append(d)

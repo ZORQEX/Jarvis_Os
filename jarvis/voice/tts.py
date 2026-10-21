@@ -9,6 +9,7 @@ Piper (GPL-3.0) runs as a separate, unmodified process from ~/.local/share/jarvi
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -53,14 +54,42 @@ def clean_for_speech(text: str) -> str:
     return t.strip()
 
 
+CACHE_MAX = 300          # ≈ 300 short phrases × ~100 KB ≈ 30 MB at most
+
+
+class WorkerDied(RuntimeError):
+    """The speech process ended (crash, OOM, killed): the caller may restart it once."""
+
+
+async def _kill(proc) -> None:
+    if proc and proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+
+
+def sweep_stale_dirs() -> None:
+    """Remove JARVIS speech temp dirs whose owning process is gone (dir name carries the pid)."""
+    for d in Path(tempfile.gettempdir()).glob("jarvis-tts-*-*"):
+        try:
+            pid = int(d.name.split("-")[2])
+        except (IndexError, ValueError):
+            continue
+        if pid != os.getpid() and not Path(f"/proc/{pid}").exists() and d.owner() == Path.home().owner():
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class SileroTTS:
     name = "silero"
+    worker = Path(__file__).with_name("silero_worker.py")
 
     def __init__(self, home: Path = SILERO_HOME, speaker: str = "aidar", rate: float = 1.0):
         self.home, self.speaker, self.rate = home, speaker, rate
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
-        self.cache: dict[tuple, bytes] = {}
+        self.cache: dict[tuple, bytes] = {}       # short phrases only, bounded (see CACHE_MAX)
         self._n = 0
 
     @property
@@ -77,11 +106,10 @@ class SileroTTS:
     async def start(self) -> None:
         if self.proc and self.proc.returncode is None:
             return
-        worker = Path(__file__).with_name("silero_worker.py")
         self.proc = await asyncio.create_subprocess_exec(
-            str(self.python), "-I", str(worker), str(self.model),
+            str(self.python), "-I", str(self.worker), str(self.model),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-            start_new_session=True, limit=1 << 20)
+            start_new_session=True, limit=64 << 20)
         line = await asyncio.wait_for(self.proc.stdout.readline(), 60)       # model load: ~2–4 s
         if not line or not json.loads(line).get("ready"):
             self.proc = None
@@ -95,31 +123,40 @@ class SileroTTS:
         if key in self.cache:
             return self.cache[key]
         async with self.lock:                     # one phrase at a time, in order
-            await self.start()
-            self._n += 1
-            rid = f"r{self._n}"
-            req = {"id": rid, "text": text, "speaker": key[1], "rate": key[2]}
+            try:
+                data = await self._ask(text, key)
+            except WorkerDied:
+                await self.stop()                     # crashed or killed while idle: one fresh start, same phrase
+                data = await self._ask(text, key)
+            if len(text) < 80:
+                if len(self.cache) >= CACHE_MAX:      # bounded: a long-running JARVIS must not grow forever
+                    self.cache.pop(next(iter(self.cache)))
+                self.cache[key] = data
+            return data
+
+    async def _ask(self, text: str, key: tuple) -> bytes:
+        await self.start()
+        self._n += 1
+        rid = f"r{self._n}"
+        req = {"id": rid, "text": text, "speaker": key[1], "rate": key[2]}
+        try:
             self.proc.stdin.write((json.dumps(req, ensure_ascii=False) + "\n").encode())
             await self.proc.stdin.drain()
-            while True:
-                line = await asyncio.wait_for(self.proc.stdout.readline(), 30)
-                if not line:
-                    self.proc = None
-                    raise RuntimeError("Silero остановился")
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                if r.get("id") != rid:
-                    continue
-                if r.get("error"):
-                    raise RuntimeError("Silero: " + r["error"])
-                path = Path(r["path"])
-                data = path.read_bytes()
-                path.unlink(missing_ok=True)
-                if len(text) < 80:
-                    self.cache[key] = data
-                return data
+        except (BrokenPipeError, ConnectionResetError) as e:
+            raise WorkerDied("Silero остановился") from e
+        while True:
+            line = await asyncio.wait_for(self.proc.stdout.readline(), 30)
+            if not line:
+                raise WorkerDied("Silero остановился")
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("id") != rid:
+                continue
+            if r.get("error"):
+                raise RuntimeError("Silero: " + r["error"])
+            return base64.b64decode(r["wav_b64"])
 
     async def prewarm(self) -> None:
         await self.start()
@@ -127,9 +164,7 @@ class SileroTTS:
             await self.synth(a)
 
     async def stop(self) -> None:
-        if self.proc and self.proc.returncode is None:
-            self.proc.kill()
-            await self.proc.wait()
+        await _kill(self.proc)
         self.proc = None
 
     async def configure(self, speaker: str, rate: float) -> None:
@@ -143,7 +178,7 @@ class PiperTTS:
         self.home, self.voice, self.rate = home, voice, rate
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
-        self.outdir = Path(tempfile.mkdtemp(prefix="jarvis-tts-"))
+        self.outdir: Path | None = None           # created on first start only (measured: 7065 empty dirs leaked)
         self.started_at: float | None = None
         self.cache: dict[str, bytes] = {}
 
@@ -161,6 +196,9 @@ class PiperTTS:
     async def start(self) -> None:
         if self.proc and self.proc.returncode is None:
             return
+        if self.outdir is None or not self.outdir.is_dir():
+            sweep_stale_dirs()
+            self.outdir = Path(tempfile.mkdtemp(prefix=f"jarvis-tts-{os.getpid()}-"))
         self.proc = await asyncio.create_subprocess_exec(
             str(self.python), "-m", "piper", "-m", str(self.model), "-d", str(self.outdir),
             "--length-scale", f"{1.0 / max(0.6, min(1.6, self.rate)):.3f}",
@@ -175,20 +213,30 @@ class PiperTTS:
         if text in self.cache:
             return self.cache[text]
         async with self.lock:                     # Piper handles one line at a time, in order
-            await self.start()
+            try:
+                return await self._ask(text)
+            except WorkerDied:
+                await _kill(self.proc)
+                self.proc = None
+                return await self._ask(text)
+
+    async def _ask(self, text: str) -> bytes:
+        await self.start()
+        try:
             self.proc.stdin.write((text + "\n").encode())
             await self.proc.stdin.drain()
-            while True:
-                line = await asyncio.wait_for(self.proc.stderr.readline(), 30)
-                if not line:
-                    self.proc = None
-                    raise RuntimeError("Piper остановился")
-                s = line.decode("utf-8", "replace").strip()
-                if "Wrote " in s:
-                    path = Path(s.split("Wrote ", 1)[1].strip())
-                    data = path.read_bytes()
-                    path.unlink(missing_ok=True)
-                    return data
+        except (BrokenPipeError, ConnectionResetError) as e:
+            raise WorkerDied("Piper остановился") from e
+        while True:
+            line = await asyncio.wait_for(self.proc.stderr.readline(), 30)
+            if not line:
+                raise WorkerDied("Piper остановился")
+            s = line.decode("utf-8", "replace").strip()
+            if "Wrote " in s:
+                path = Path(s.split("Wrote ", 1)[1].strip())
+                data = path.read_bytes()
+                path.unlink(missing_ok=True)
+                return data
 
     async def prewarm(self) -> None:
         await self.start()
@@ -196,10 +244,11 @@ class PiperTTS:
             self.cache[clean_for_speech(a)] = await self.synth(a)
 
     async def stop(self) -> None:
-        if self.proc and self.proc.returncode is None:
-            self.proc.kill()
-            await self.proc.wait()
-        shutil.rmtree(self.outdir, ignore_errors=True)
+        await _kill(self.proc)
+        self.proc = None
+        if self.outdir:
+            shutil.rmtree(self.outdir, ignore_errors=True)
+            self.outdir = None
 
 
 class VoiceEngine:

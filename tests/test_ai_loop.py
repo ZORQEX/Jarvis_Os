@@ -58,7 +58,7 @@ async def test_model_cannot_call_ui_only_or_unknown_tools(core, fake):
 async def test_send_request_is_never_executed_without_mail_and_approval(core, fake):
     g = fake([])
     tid = await core.director.submit("отправь всё")
-    t = await wait_done(core, tid)
+    await wait_done(core, tid)
     msg = core.director.messages(core.director.conversation_id())[-1]["text"]
     assert "Ничего не отправлено" in msg or "модуль связи" in msg
     assert not g.calls and not core.director.flora.mail.sent_all()
@@ -91,3 +91,81 @@ async def test_tool_round_limit(core, fake):
     t = await wait_done(core, tid)
     assert len([s for s in t["steps"] if s["tool_id"] == "system_info"]) == 2
     assert g.tool_results[-1]["status"] == "denied" and "лимит шагов" in g.tool_results[-1]["error"]
+
+
+async def test_single_letter_uses_the_warm_conversation_not_a_new_process(core, fake):
+    g = fake([["Уважаемые коллеги, пришлите, пожалуйста, прайс-лист."]])
+    started = []
+
+    async def no_oneshot(*a, **k):
+        started.append(1)
+        raise AssertionError("no separate Claude Code start for a single letter")
+    g.generate = no_oneshot
+    tid = await core.director.submit("Напиши письмо поставщику мрамора с просьбой прислать прайс-лист")
+    await wait_done(core, tid)
+    assert not started and "черновик" in g.calls[0]["user"]
+    assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("Уважаемые")
+
+
+async def test_several_conversational_clauses_are_one_message_without_planning(core, fake):
+    g = fake([["Запомнил."]])
+
+    async def no_planning(*a, **k):
+        raise AssertionError("no planning call for a plain conversational request")
+    g.generate = no_planning
+    tid = await core.director.submit("Запомни число 4711. Ответь одним словом: запомнил.")
+    await wait_done(core, tid)
+    assert len(g.calls) == 1 and "4711" in g.calls[0]["user"]
+
+
+async def test_an_old_process_ending_never_fails_the_new_question(tmp_path):
+    import asyncio as aio
+    from jarvis.config import Config
+    from jarvis.providers.claude_chat import ClaudeChatProvider, _Turn
+
+    class P:
+        def __init__(self):
+            self.stdout = aio.StreamReader()
+    p = ClaudeChatProvider(Config(), None, tmp_path)
+    old, new = P(), P()
+    reader_old = aio.create_task(p._read(old))
+    p.turn = _Turn(None, None, new)          # a question already sent to the NEW process
+    old.stdout.feed_eof()                    # …and only now does the old process's output end
+    await reader_old
+    assert not p.turn.done.is_set()          # the new question is untouched
+    new.stdout.feed_data(b'{"type":"result","subtype":"success","result":"ok"}\n')
+    new.stdout.feed_eof()
+    await p._read(new)
+    assert p.turn.done.is_set() and p.turn.result["result"] == "ok"
+
+
+async def test_single_web_question_keeps_sources_and_checks(core, fake):
+    fake([["Курс сегодня 92,1 ₽. Источник: https://cbr.ru/currency_base/daily/"]])
+    tid = await core.director.submit("Найди в интернете курс доллара на сегодня")
+    await wait_done(core, tid)
+    last = core.director.messages(core.director.conversation_id())[-1]
+    assert "Проверка: Ответ модели" not in last["text"]
+    vers = [st.get("verification") or {} for st in core.tasks.steps(tid)]
+    assert any(v.get("status") == "verified" and "источники" in v.get("detail", "").lower() for v in vers), vers
+
+
+async def test_session_cost_is_recorded_per_answer_not_cumulative(tmp_path):
+    import asyncio as aio
+    from jarvis.config import Config
+    from jarvis.providers.claude_chat import ClaudeChatProvider, _Turn
+
+    class P:
+        def __init__(self):
+            self.stdout = aio.StreamReader()
+    c = ClaudeChatProvider(Config(), None, tmp_path)
+    proc = P()
+    reader = aio.create_task(c._read(proc))
+    costs = []
+    for total in (0.004, 0.0072, 0.0083):
+        c.turn = _Turn(None, None, proc)
+        proc.stdout.feed_data(('{"type":"result","subtype":"success","result":"ok","total_cost_usd":%s}\n' % total).encode())
+        await aio.wait_for(c.turn.done.wait(), 2)
+        costs.append(c.turn.result["turn_cost_usd"])
+    proc.stdout.feed_eof()
+    await reader
+    assert costs == [0.004, 0.0032, 0.0011]

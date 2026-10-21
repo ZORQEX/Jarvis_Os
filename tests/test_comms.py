@@ -1,6 +1,5 @@
 """Communication agent: Telegram / WhatsApp / e-mail through one abstraction, confirmation, outbox, scheduling.
 Providers here are test doubles (VERIFIED MOCK); real-service checks live in test_comms_live.py."""
-import asyncio
 import datetime as dt
 import time
 
@@ -286,7 +285,7 @@ async def test_retry_is_bounded_and_only_when_nothing_left(core, hub):
     hub.outbox.start()
     try:
         for n in range(1, 5):
-            await wait_for(lambda: hub.outbox.get(j["id"])["attempts"] == n and hub.outbox.get(j["id"])["status"] != "sending")
+            await wait_for(lambda n=n: hub.outbox.get(j["id"])["attempts"] == n and hub.outbox.get(j["id"])["status"] != "sending")
             if hub.outbox.get(j["id"])["status"] == "scheduled":
                 core.db.execute("UPDATE comm_jobs SET due_at=? WHERE id=?", (time.time() - 1, j["id"]))
                 hub.outbox.wake()
@@ -595,6 +594,48 @@ def test_local_reading_leaves_unclear_commands_to_claude():
 def test_chat_header_with_emoji_is_the_same_chat_but_another_name_is_not():
     from jarvis.comms.whatsapp import _same_name
     assert _same_name("Мама ❤️", "Мама ❤️") and _same_name("Мама ❤", "Мама ❤️")      # alt without variation selector
-    assert _same_name("‪Мама ❤️‬", "Мама ❤️")                              # invisible direction marks
+    assert _same_name("\u202aМама ❤️\u202c", "Мама ❤️")                              # invisible direction marks
     assert not _same_name("Мама ", "Мама ❤️")        # the emoji-less header is a DIFFERENT chat «Мама»
     assert not _same_name("Рома", "Мама ❤️")
+
+
+# ---------------------------------------------------------------- «себе» in WhatsApp is never a contact search
+class _WAPage:
+    def __init__(self, wid):
+        self.wid = wid
+
+    async def evaluate(self, js, *a):
+        if "last-wid" in js:
+            return self.wid
+        raise AssertionError("no contact search for «себе»")
+
+    def is_closed(self):
+        return False
+
+
+def _wa(core, wid):
+    from jarvis.comms.whatsapp import WhatsAppProvider
+    wa = WhatsAppProvider(core.db, core.paths.data / "wa-test")
+    core.db.set_kv("whatsapp_linked", True)
+    wa.page = _WAPage(wid)
+
+    async def ready():
+        return None
+    wa._ensure = ready
+    return wa
+
+
+async def test_whatsapp_self_uses_own_number_from_whatsapp_web(core):
+    wa = _wa(core, '"77001112233:12@c.us"')
+    c = await wa.search("себе")
+    assert [(x.id, x.name) for x in c] == [("phone:77001112233", "Вы (заметки)")]
+    assert core.db.get_kv("whatsapp_phone") == "77001112233"
+    assert core.comms.is_self({"channel": "whatsapp", "to_id": "phone:77001112233"})
+    assert not core.comms.is_self({"channel": "whatsapp", "to_id": "chat:Лена Себя"})
+
+
+async def test_whatsapp_self_without_known_number_asks_instead_of_guessing(core):
+    wa = _wa(core, None)
+    with pytest.raises(CommsError) as e:
+        await wa.search("себе")
+    assert e.value.kind == "not_found" and "номер" in str(e.value)

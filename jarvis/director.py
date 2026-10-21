@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from . import router as rt
 from .db import Database, dumps, loads, new_id, now
-from .events import AuditLog, EventBus
+from .events import AuditLog, EventBus, spawn
 from .gateway import Gateway, Outcome
 from .policy import ApprovalError, Approvals, PolicyEngine
 from .scheduler import Scheduler, fmt_time
@@ -356,7 +356,7 @@ class Director:
             # Drop answers in progress that change nothing on the computer; never interrupt real actions.
             readonly = {"agent_chat", "agent_generate", "claude_code_inspect", "search_files", "read_file", "system_info",
                         "window_list", "flora_inbox", "flora_compare"}
-            for tid, r in list(self.rt.items()):
+            for tid in list(self.rt):
                 t = self.tasks.get(tid)
                 if not t or S(t["state"]) not in (S.RUNNING, S.PLANNING):
                     continue
@@ -476,7 +476,7 @@ class Director:
                 self.policy.grant_session(tool.spec)
         if a["task_id"] not in self.rt:
             # The task that asked lost its runtime (JARVIS restarted): resume it here.
-            asyncio.create_task(self._resume_from_approval(a))
+            spawn(self._resume_from_approval(a), "resume-after-approval")
         self._touch()
         return a
 

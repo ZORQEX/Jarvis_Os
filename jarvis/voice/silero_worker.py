@@ -2,15 +2,17 @@
 
 Protocol (one JSON object per line):
   stdin  {"id": "...", "text": "...", "speaker": "xenia", "rate": 1.0}
-  stdout {"id": "...", "path": "/tmp/....wav", "ms": 123}   or   {"id": "...", "error": "..."}
+  stdout {"id": "...", "wav_b64": "...", "ms": 123}   or   {"id": "...", "error": "..."}
+The audio goes back inside the line itself: no temporary files to leak.
 Silero reads only Cyrillic words, so numbers, «%» and Latin words are spelled out here first.
 Model licence: Silero (snakers4/silero-models) — non-commercial use; see the model card.
 """
+import base64
+import io
 import json
 import os
 import re
 import sys
-import tempfile
 import time
 import wave
 
@@ -50,7 +52,7 @@ def number(m: re.Match) -> str:
     s = m.group(0).replace(" ", "").replace(" ", "").replace(" ", "")
     try:
         if "," in s or "." in s:
-            whole, frac = re.split(r"[.,]", s, 1)
+            whole, frac = re.split(r"[.,]", s, maxsplit=1)
             return num2words(int(whole), lang="ru") + " целых " + num2words(int(frac), lang="ru")
         return num2words(int(s), lang="ru")
     except (ValueError, OverflowError):
@@ -83,7 +85,6 @@ def main() -> None:
     model_path = sys.argv[1]
     model = torch.package.PackageImporter(model_path).load_pickle("tts_models", "model")
     model.to(torch.device("cpu"))
-    outdir = tempfile.mkdtemp(prefix="jarvis-silero-")
     print(json.dumps({"ready": True, "speakers": list(getattr(model, "speakers", []))}), flush=True)
     for line in sys.stdin:
         try:
@@ -108,13 +109,14 @@ def main() -> None:
                                             put_accent=True, put_yo=True)
                 pieces.append(audio)
             wavdata = torch.cat(pieces).clamp(-1, 1).mul(32767).to(torch.int16).numpy().tobytes()
-            path = os.path.join(outdir, f"{rid}.wav")
-            with wave.open(path, "wb") as w:
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
                 w.setnchannels(1)
                 w.setsampwidth(2)
                 w.setframerate(SR)
                 w.writeframes(wavdata)
-            print(json.dumps({"id": rid, "path": path, "ms": round((time.perf_counter() - t0) * 1000)}), flush=True)
+            print(json.dumps({"id": rid, "wav_b64": base64.b64encode(buf.getvalue()).decode(),
+                              "ms": round((time.perf_counter() - t0) * 1000)}), flush=True)
         except Exception as e:   # noqa: BLE001
             print(json.dumps({"id": rid, "error": f"{e.__class__.__name__}: {str(e)[:200]}"}), flush=True)
 

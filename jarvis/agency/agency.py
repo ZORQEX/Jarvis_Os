@@ -13,9 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..db import dumps, new_id, now
-from ..providers.base import CAP_RU, Cap, ProviderFailure, StepRequest
-from .decision import Decision, validate
-from .planner import R as PLAN_RE, claude_roots, find_workdir, heuristic_plan, llm_plan
+from ..providers.base import Cap, ProviderFailure, StepRequest
+from .decision import Decision, Step, validate
+from .verifier import verify_step
+from .planner import claude_roots, find_workdir, heuristic_plan, llm_plan, R as PLAN_RE, verifications
 from .routing import choose, route
 from .tools import PROVIDER_NAMES
 
@@ -53,6 +54,13 @@ def compact_history(msgs: list[dict], keep: int = 6, per_msg: int = 600) -> tupl
     return recent, summary
 
 
+CONVERSATIONAL = {"chat", "write", "translate"}
+WRITE_GUIDE = ("\nПодготовь только черновик (ничего не отправляется). Пиши естественно и готово к отправке. "
+               "Не выдумывай факты: цифр, дат и условий, которых нет в данных, не пиши. Если не хватает "
+               "чего-то действительно важного (имя получателя, цена, срок), поставь не больше 2–3 пометок "
+               "[уточнить]; подпись оставь общей («С уважением,»).")
+
+
 @dataclass
 class StepOut:
     ok: bool
@@ -76,6 +84,14 @@ class Agency:
         tools = set(self.registry.tools)
         d, conf = heuristic_plan(tid, text)
         validate(d, set(self.mgr.providers), tools)
+        if len(d.steps) >= 2 and all(s.action in CONVERSATIONAL for s in d.steps) and not d.override:
+            # «Запомни число… Ответь одним словом»: several conversational clauses are ONE message to Claude — no
+            # separate planning call (measured: +2.7–3.5 s and an extra AI call for nothing).
+            from ..router import strip_wake
+            d.steps = [Step(id="s1", action="chat", instruction=strip_wake(text) or text)]
+            d.mode, conf = "single_ai", 1.0
+            d.verification = verifications(d.steps)
+            validate(d, set(self.mgr.providers), tools)
         if conf < 0.6 and len(d.steps) >= 2 and privacy == "AUTHORIZED_CLOUD":
             pid, _, _ = choose(self.mgr, Cap.PLANNING, "INTERNAL" if d.sensitivity != "HIGHLY_SENSITIVE"
                                else d.sensitivity, privacy)
@@ -259,14 +275,17 @@ class Agency:
             return await self._tool_step(director, tid, cid, s, why)
         if s.action == "chat":
             return await self._chat_step(director, tid, cid, s, on_delta)
+        if len(d.steps) == 1 and s.action in ("write", "translate", "research") and not s.depends_on \
+                and hasattr(self.mgr.get(s.executor), "run_tool_loop"):
+            # A single text/translation/web question goes to the warm conversation: no new Claude Code start
+            # (measured: «столица Японии» 2.8 s one-off vs ~1 s), cheaper (cached prompt), and «сделай короче» works.
+            instr = s.instruction + (WRITE_GUIDE if s.action in ("write", "translate") else
+                                     "\n\nНайди свежие сведения в интернете и в конце назови источники ссылками.")
+            return await self._chat_step(director, tid, cid, s, on_delta, instruction=instr, check=s.action)
         ctx = self._context(director, cid, d, s, outs)
         instr = s.instruction
         if s.action in ("write", "translate"):
-            instr += ("\n\nОбщая задача пользователя: " + d.objective[:600] +
-                      "\nПодготовь только черновик (ничего не отправляется). Пиши естественно и готово к отправке. "
-                      "Не выдумывай факты: цифр, дат и условий, которых нет в данных, не пиши. Если не хватает "
-                      "чего-то действительно важного (имя получателя, цена, срок), поставь не больше 2–3 пометок "
-                      "[уточнить]; подпись оставь общей («С уважением,»).")
+            instr += "\n\nОбщая задача пользователя: " + d.objective[:600] + WRITE_GUIDE
         elif s.action == "analyze":
             instr += "\n\nОбщая задача: " + d.objective[:600] + \
                      "\nОпирайся только на данные выше, ссылайся на источники, отметь неопределённость."
@@ -332,7 +351,8 @@ class Agency:
                                     if f], None, None, step_ref=out.step_id,
                        verification=out.verification.as_dict() if out.verification else None)
 
-    async def _chat_step(self, director, tid, cid, s, on_delta) -> StepOut:
+    async def _chat_step(self, director, tid, cid, s, on_delta, instruction: str | None = None,
+                         check: str | None = None) -> StepOut:
         p = self.mgr.get(s.executor)
         sid = director.tasks.add_step(tid, "agent_chat", {"provider": p.id, "instruction": s.instruction[:500]},
                                       "low", s.reason)
@@ -354,7 +374,7 @@ class Agency:
                 director._touch()
         t0 = time.perf_counter()
         try:
-            res = await p.run_tool_loop(system, hist, s.instruction, self.registry.model_tools(), execute,
+            res = await p.run_tool_loop(system, hist, instruction or s.instruction, self.registry.model_tools(), execute,
                                         on_delta, self.config.max_tool_rounds, lambda: director.policy.estop,
                                         lambda c, n, m: director._checkpoint(tid, c, n, m), thinking,
                                         role="voice" if voice else "main", conversation=cid)
@@ -365,14 +385,22 @@ class Agency:
             return StepOut(False, provider=p.id, error=str(e), failure_kind=e.kind, step_ref=sid)
         finally:
             thinking(False)
-        self.mgr.record(p.id, res.model, tid, sid, "general", res.usage, res.cost_usd, res.total_ms, True)
-        ver = {"status": "unverified", "detail": "Ответ модели; действия на компьютере проверены отдельно в их шагах"}
+        self.mgr.record(p.id, res.model, tid, sid, s.capability or "general", res.usage, res.cost_usd, res.total_ms, True)
+        sources = []
+        if check == "research":
+            from ..providers.claude_chat import URL_RE
+            sources = [{"title": u, "url": u} for u in dict.fromkeys(x.rstrip(".,;)") for x in URL_RE.findall(res.text))][:10]
+        if check:      # a letter / translation / web answer gets the same checks as before (numbers, sources)
+            st, detail = verify_step(check, res.text, sources, [s.instruction])
+            ver = {"status": st, "detail": detail}
+        else:
+            ver = {"status": "unverified", "detail": "Ответ модели; действия на компьютере проверены отдельно в их шагах"}
         director.tasks.update_step(sid, state="succeeded", finished_at=now(), duration_ms=round(res.total_ms or 0, 1),
                                    result={"summary": f"{p.display_name}: ответ", "card": None,
                                            "data": {"provider": p.id, "model": res.model, "usage": res.usage,
                                                     "first_token_ms": res.first_token_ms, "rounds": res.meta.get("rounds")}},
                                    verification=ver)
-        return StepOut(True, res.text, [], p.id, res.model, step_ref=sid, verification=ver)
+        return StepOut(True, res.text, sources, p.id, res.model, step_ref=sid, verification=ver)
 
     # ------------------------------------------------------------------ presentation
     def _present(self, director, tid, cid, d: Decision, outs: dict, final, mid: str):
@@ -393,12 +421,6 @@ class Agency:
         if sends and any(s.status != "done" for s in sends):
             parts.append("Ничего не отправлено: отправка возможна только после вашего явного подтверждения.")
         # Verification flags from the final content step.
-        for s in done:
-            v = outs[s.id].verification or {}
-            if s.action == "research" and "Квота поиска" in (v.get("detail") or ""):
-                parts.insert(0, "_⚠ Поиск в интернете сейчас недоступен (исчерпана квота Google для ключа) — ответ "
-                                "основан на знаниях модели, без источников; проверьте актуальность._")
-                break
         if final and main and main.verification and main.verification.get("status") in ("unverified", "failed") and \
                 final.action in ("write", "translate", "analyze", "research"):
             parts.append(f"_Проверка: {main.verification['detail']}_")

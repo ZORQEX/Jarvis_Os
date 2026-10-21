@@ -1,7 +1,7 @@
 """Local speech recognition worker — runs in its own virtualenv (~/.local/share/jarvis/stt), never imported by JARVIS.
 
-Model: GigaAM v3 e2e RNN-T (Sber, MIT licence) through onnx-asr/onnxruntime on the CPU. It writes punctuation, digits
-and Latin brand names itself. Measured on this laptop: ~0.1 s for «Да», ~0.7–1.7 s for a command.
+Model: GigaAM v3 e2e RNN-T (Sber, MIT licence), int8 build, via onnx-asr/onnxruntime on the CPU. It writes
+punctuation, digits and Latin brand names itself. Measured on this laptop: ~0.3–0.5 s for a command, ~520 MB RAM.
 
 Protocol (one JSON object per line):
   stdin  {"id": "...", "path": "/tmp/x.wav"}          16 kHz mono 16-bit WAV, deleted by JARVIS afterwards
@@ -34,9 +34,19 @@ def load_wav(path: str) -> np.ndarray:
 
 
 def main() -> None:
-    model = onnx_asr.load_model(MODEL)
-    model.recognize(np.zeros(16000, dtype=np.float32))     # warm-up
-    print(json.dumps({"ready": True, "model": MODEL}), flush=True)
+    # int8 first: same transcripts as the full model on our 20-command test set, 523 MB RAM instead of 1417 MB,
+    # slightly faster (measured). The full model is used only if the int8 files are not downloaded.
+    quant = "int8"
+    try:
+        model = onnx_asr.load_model(MODEL, quantization="int8")
+    except Exception:   # noqa: BLE001
+        model, quant = onnx_asr.load_model(MODEL), "fp32"
+    # Warm up on several lengths: onnxruntime prepares buffers per input size (measured: first phrases 2.1/1.4 s with
+    # a 1 s silence warm-up, 0.5/0.4 s after this one; costs ~4 s once, in the background at JARVIS start).
+    rng = np.random.default_rng(0)
+    for sec in (1, 3, 6):
+        model.recognize(rng.normal(0, 0.05, 16000 * sec).astype(np.float32))
+    print(json.dumps({"ready": True, "model": MODEL, "quantization": quant}), flush=True)
     for line in sys.stdin:
         try:
             req = json.loads(line)

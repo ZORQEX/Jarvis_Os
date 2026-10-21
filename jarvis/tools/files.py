@@ -10,7 +10,7 @@ import stat
 import time
 from pathlib import Path
 
-from .base import (Risk, Tool, ToolContext, ToolError, ToolInputError, ToolResult, ToolSpec,
+from .base import (Risk, Tool, ToolError, ToolInputError, ToolResult, ToolSpec,
                    Verification, resolve_in_scopes, run_cmd)
 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".venv", "venv", ".cache", "site-packages", "target", "dist"}

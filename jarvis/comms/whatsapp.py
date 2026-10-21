@@ -34,14 +34,14 @@ SEL_INVALID_PHONE = ["div[data-animate-modal-popup='true']", "[role='dialog']"]
 
 def _visible(s: str) -> str:
     """WhatsApp wraps some names in invisible direction marks (U+202A…U+202E, U+2066…U+2069, U+200E/F)."""
-    return re.sub(r"[‎‏‪-‮⁦-⁩]", "", s or "").strip()
+    return re.sub("[\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", s or "").strip()
 
 
 def _same_name(header: str, key: str) -> bool:
     """Is the open chat the one we chose? Compared without spaces, invisible marks and emoji variation selectors, but
     WITH the emoji themselves — «Мама ❤️» and «Мама» are different chats and must stay different."""
     def k(s: str) -> str:
-        return re.sub(r"[\s​-‏‪-‮⁦-⁩︎️]", "", s or "")
+        return re.sub("[\\s\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufe0e\ufe0f]", "", s or "")
     return k(header) == k(key)
 
 
@@ -290,6 +290,7 @@ class WhatsAppProvider(Provider):
         await self.stop()
         shutil.rmtree(self.profile, ignore_errors=True)       # the link can also be removed on the phone
         self.db.set_kv("whatsapp_linked", False)
+        self.db.set_kv("whatsapp_phone", None)           # another account may be linked next
         self.state, self.detail, self.qr_png = "not_connected", "", None
 
     async def _ensure(self) -> None:
@@ -324,6 +325,21 @@ class WhatsAppProvider(Provider):
         self.state = "connected"
         self._touch()
         await self._dismiss_popups()
+        if not self.db.get_kv("whatsapp_phone"):
+            await self._learn_own_number()
+
+    async def _learn_own_number(self) -> str:
+        """The user's own WhatsApp number, as WhatsApp Web itself keeps it («last-wid-md» = "<digits>:<device>@c.us").
+        Only the phone number is read — no keys, cookies or session data."""
+        try:
+            wid = await self.page.evaluate("() => localStorage.getItem('last-wid-md') || localStorage.getItem('last-wid') || ''")
+        except Exception:   # noqa: BLE001
+            return ""
+        m = re.match(r'"?(\d{10,15})[:@]', wid or "")
+        if m:
+            self.db.set_kv("whatsapp_phone", m.group(1))
+            return m.group(1)
+        return ""
 
     # Only harmless buttons are ever pressed to close a WhatsApp pop-up (tips, notification prompts, «what's new»).
     SAFE_BUTTONS = ["Понятно", "OK", "ОК", "Ок", "Продолжить", "Закрыть", "Не сейчас", "Позже", "Пропустить",
@@ -368,9 +384,16 @@ class WhatsAppProvider(Provider):
     # ---------------------------------------------------------------- contacts
     async def search(self, name: str) -> list[Contact]:
         if is_self(name):
+            # «себе» is never searched among contacts (measured: it matched a chat «… Себя …» of another person).
             own = re.sub(r"\D", "", self.db.get_kv("whatsapp_phone") or "")
+            if not own:
+                async with self._lock:
+                    await self._ensure()
+                    own = await self._learn_own_number()
             if own:
                 return [Contact("whatsapp", "phone:" + own, "Вы (заметки)", "+" + own, "ваш номер")]
+            raise CommsError("Не знаю ваш номер в WhatsApp. Скажите номер в команде: «Отправь в WhatsApp на +7…»",
+                             "not_found")
         digits = re.sub(r"\D", "", name)
         if len(digits) >= 10:
             return [Contact("whatsapp", "phone:" + digits, "+" + digits, "+" + digits, "номер из команды")]

@@ -2,12 +2,11 @@
 the exact arguments from a resolved recipient, and the Gateway asks the user before anything leaves."""
 from __future__ import annotations
 
-import time
 
-from ..db import Database, new_id, now
+from ..db import new_id, now
 from ..tools.base import Risk, Tool, ToolError, ToolInputError, ToolResult, ToolSpec, Verification
-from .base import CHANNEL_TO, CommsError, Contact, Receipt, content_digest
-from .outbox import Outbox, _short, when_ru
+from .base import CHANNEL_TO, Contact, content_digest
+from .outbox import _short, when_ru
 
 DELIVERY = {"type": "object", "required": ["channel", "to_id", "to_name"], "properties": {
     "channel": {"type": "string", "enum": ["telegram", "whatsapp", "email"]},

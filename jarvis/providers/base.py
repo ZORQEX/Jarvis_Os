@@ -123,3 +123,13 @@ class AIProvider:
 
 
 Executor = Callable[[str, dict], Awaitable[dict]]
+
+
+def usage_of(u: dict) -> dict:
+    """Token use of one answer. «input_tokens» counts the WHOLE context Claude read (new + cached), so the usage
+    numbers in Settings show how big the conversation really is; the cached part is listed separately."""
+    cached, written = u.get("cache_read_input_tokens") or 0, u.get("cache_creation_input_tokens") or 0
+    fresh = u.get("input_tokens")
+    total = (fresh or 0) + cached + written if (fresh is not None or cached or written) else None
+    return {"input_tokens": total, "output_tokens": u.get("output_tokens"),
+            "cache_read_tokens": cached, "cache_write_tokens": written}

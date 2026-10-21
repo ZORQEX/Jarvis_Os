@@ -8,6 +8,7 @@ import tempfile
 import time
 
 os.environ["JARVIS_HOME"] = tempfile.mkdtemp(prefix="jarvis-bench-")
+__import__("atexit").register(__import__("shutil").rmtree, os.environ["JARVIS_HOME"], True)
 from jarvis.app import build  # noqa: E402
 
 CMDS = ["состояние системы", "какие окна открыты", "найди файл смета", "который час", "Что важного по Флоре?",

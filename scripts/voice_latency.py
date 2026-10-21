@@ -2,6 +2,7 @@
 Usage: uv run python scripts/voice_latency.py <tmp_dir> ["фраза" ...]  — prints per-stage timings from the end of speech."""
 import asyncio, base64, os, subprocess, sys, tempfile, time
 os.environ["JARVIS_HOME"] = tempfile.mkdtemp(prefix="jarvis-e2e-")
+__import__("atexit").register(__import__("shutil").rmtree, os.environ["JARVIS_HOME"], True)
 from jarvis.app import build
 from jarvis.server import Server
 from jarvis.voice.tts import PiperTTS
@@ -30,7 +31,7 @@ async def main():
             if ev["kind"] == "speech.end" and ev.get("task_id") == tid: break
         t = core.director.speech.turns(1)[0]; ms = t["ms"]
         msg = core.director.messages(core.director.conversation_id())[-1]["text"]
-        f = lambda k: f"{ms[k]/1000:5.2f}" if ms.get(k) is not None else "   — "
+        f = lambda k, ms=ms: f"{ms[k]/1000:5.2f}" if ms.get(k) is not None else "   — "
         print(f"[{t['route']:7}] {r['text'][:52]!r}")
         print(f"   STT {f('stt_end')} | first token {f('ttft')} | first sentence {f('first_sentence')} | FIRST AUDIO {f('first_audio_sent')} | answer done {f('answer_done')} | speech done {f('speech_done')}  [{t['stt_model']}]")
         print(f"   -> {msg[:150]!r}")

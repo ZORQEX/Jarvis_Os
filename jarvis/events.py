@@ -4,11 +4,29 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 from .db import Database, dumps, now
+
+_BACKGROUND: set = set()
+
+
+def spawn(coro, name: str | None = None):
+    """Run a background coroutine safely: asyncio keeps only weak references to tasks, so an un-referenced task can
+    be garbage-collected mid-run. Keep it until it ends, and never lose its error silently."""
+    t = asyncio.get_running_loop().create_task(coro, name=name)
+    _BACKGROUND.add(t)
+
+    def done(task):
+        _BACKGROUND.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            print(f"JARVIS background task {task.get_name()} failed: {task.exception()!r}", file=sys.stderr)
+    t.add_done_callback(done)
+    return t
+
 
 # Fields whose values never reach logs.
 _SECRET_KEYS = re.compile(r"(api[_-]?key|token|secret|password|passwd|cookie|authorization|audio_b64)", re.I)

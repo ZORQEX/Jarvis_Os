@@ -47,13 +47,13 @@ if [[ ! -x "$SILERO/.venv/bin/python" ]]; then
 fi
 [[ -s "$SILERO/models/v5_2_ru.pt" ]] || curl -fsSL -o "$SILERO/models/v5_2_ru.pt" "https://models.silero.ai/models/tts/ru/v5_2_ru.pt"
 
-# Speech recognition on this computer: GigaAM v3 (Sber, MIT) via onnx-asr/onnxruntime, own virtualenv, ~1 GB.
+# Speech recognition on this computer: GigaAM v3 (Sber, MIT), int8 build (~230 MB, ~520 MB RAM), own virtualenv.
 STT="$HOME/.local/share/jarvis/stt"
 if [[ ! -x "$STT/.venv/bin/python" ]]; then
   mkdir -p "$STT" && (cd "$STT" && uv venv -q --python 3.12 .venv \
     && uv pip install -q --python .venv/bin/python "onnx-asr[cpu,hub]==0.12.0")
 fi
-[[ -d "$STT/hf" ]] || HF_HOME="$STT/hf" "$STT/.venv/bin/python" -c "import onnx_asr; onnx_asr.load_model('gigaam-v3-e2e-rnnt')"
+HF_HOME="$STT/hf" "$STT/.venv/bin/python" -c "import onnx_asr; onnx_asr.load_model('gigaam-v3-e2e-rnnt', quantization='int8')"
 
 # Emergency fallback voice only (used if Silero cannot start): Piper (GPL-3.0, separate process), voice "denis" (CC0).
 PIPER="$HOME/.local/share/jarvis/piper"

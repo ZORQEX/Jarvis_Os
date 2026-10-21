@@ -1,13 +1,10 @@
 import asyncio
-import hashlib
-import os
 from pathlib import Path
 
 import pytest
 
 from jarvis import router
 from jarvis.events import redact
-from jarvis.gateway import Outcome
 from jarvis.policy import action_digest
 from jarvis.tasks import S, IllegalTransition
 from jarvis.tools.base import Risk, Tool, ToolInputError, ToolResult, ToolSpec, Verification, resolve_in_scopes

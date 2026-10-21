@@ -3,7 +3,7 @@ providers and models exist, how they are configured, and how they performed."""
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 from ..db import Database, now
 from .base import CAP_RU, SENSITIVITY, AIProvider, Cap, Health, sens_rank

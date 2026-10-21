@@ -374,3 +374,76 @@ async def test_slow_answer_gets_a_spoken_hold_phrase(core, speech):
     await wait_done(core, tid, timeout=8)
     await wait_for(lambda: len(speech.engine.calls) >= 2)
     assert speech.engine.calls[0] in ACKS and speech.engine.calls[1].startswith("Ответ")
+
+
+FAKE_WORKER = r'''
+import base64, json, os, sys
+marker = os.environ["FAKE_MARKER"]
+print(json.dumps({"ready": True}), flush=True)
+for line in sys.stdin:
+    req = json.loads(line)
+    if not os.path.exists(marker):            # first request ever: "crash" without answering
+        open(marker, "w").close()
+        os._exit(1)
+    if "path" in req:
+        print(json.dumps({"id": req["id"], "text": "привет"}), flush=True)
+    else:
+        print(json.dumps({"id": req["id"], "wav_b64": base64.b64encode(b"RIFF" + req["text"].encode()).decode()}), flush=True)
+'''
+
+
+def _fake_worker(tmp_path, monkeypatch):
+    import sys
+    w = tmp_path / "w.py"
+    w.write_text(FAKE_WORKER)
+    monkeypatch.setenv("FAKE_MARKER", str(tmp_path / "crashed"))
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").symlink_to(sys.executable)
+    return w
+
+
+async def test_silero_restarts_once_when_its_process_dies(tmp_path, monkeypatch):
+    from jarvis.voice.tts import SileroTTS
+    s = SileroTTS(home=tmp_path)
+    s.worker = _fake_worker(tmp_path, monkeypatch)
+    try:
+        assert await s.synth("Первая фраза после сбоя.") == b"RIFF" + "Первая фраза после сбоя.".encode()
+        old = s.proc.pid
+        s.proc.kill()                                   # killed while idle (OOM, update, user)
+        await s.proc.wait()
+        assert (await s.synth("Вторая.")).startswith(b"RIFF") and s.proc.pid != old
+    finally:
+        await s.stop()
+
+
+async def test_silero_phrase_cache_is_bounded(tmp_path, monkeypatch):
+    from jarvis.voice import tts
+    monkeypatch.setattr(tts, "CACHE_MAX", 3)
+    s = tts.SileroTTS(home=tmp_path)
+    s.worker = _fake_worker(tmp_path, monkeypatch)
+    (tmp_path / "crashed").touch()
+    try:
+        for i in range(10):
+            await s.synth(f"Фраза номер {i}.")
+        assert len(s.cache) == 3
+    finally:
+        await s.stop()
+
+
+async def test_local_stt_restarts_once_when_its_process_dies(tmp_path, monkeypatch):
+    from jarvis.voice.stt import LocalSTT
+    s = LocalSTT(home=tmp_path)
+    s.worker = _fake_worker(tmp_path, monkeypatch)
+    try:
+        assert await s.transcribe(b"RIFF....WAVEfmt ") == "привет"
+    finally:
+        await s.stop()
+
+
+def test_piper_creates_no_temp_dir_until_used(tmp_path):
+    import tempfile
+    from pathlib import Path
+    from jarvis.voice.tts import PiperTTS
+    before = set(Path(tempfile.gettempdir()).glob("jarvis-tts-*"))
+    PiperTTS(home=tmp_path)
+    assert set(Path(tempfile.gettempdir()).glob("jarvis-tts-*")) == before

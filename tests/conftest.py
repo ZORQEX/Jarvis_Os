@@ -1,5 +1,4 @@
 import asyncio
-import os
 import socket
 from pathlib import Path
 
@@ -77,7 +76,7 @@ async def wait_for(pred, timeout=5.0):
 # ---------------------------------------------------------------- scripted providers (VERIFIED MOCK only)
 import tempfile  # noqa: E402
 
-from jarvis.providers.base import AIProvider, Cap, GenResult, Health, ProviderFailure  # noqa: E402
+from jarvis.providers.base import AIProvider, Cap, GenResult, Health  # noqa: E402
 from jarvis.providers.claude_chat import ClaudeChatProvider  # noqa: E402
 
 
@@ -123,13 +122,16 @@ class FakeProvider(AIProvider):
         return {"configured": self.configured()}
 
 
+_TMP = tempfile.TemporaryDirectory(prefix="jarvis-test-claude-")     # one folder per test run, removed at exit
+
+
 class ScriptedClaude(ClaudeChatProvider):
     """The Claude conversation provider with a scripted turn instead of the Claude Code process.
     A turn is a list of str (streamed text) and (tool_name, args) tuples — tool calls run through JARVIS's Gateway
     exactly as MCP calls from the real Claude would (VERIFIED MOCK, not a live API test)."""
 
     def __init__(self, config, turns):
-        super().__init__(config, None, Path(tempfile.mkdtemp(prefix="jarvis-test-claude-")))
+        super().__init__(config, None, Path(_TMP.name) / f"claude-{id(self)}")
         self.turns, self.calls, self.tool_results = list(turns), [], []
         self.status = "ready"
 

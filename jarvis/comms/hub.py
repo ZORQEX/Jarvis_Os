@@ -20,7 +20,9 @@ class CommsHub:
 
     def is_self(self, d: dict) -> bool:
         own = ((self.db.get_kv("email_account") or {}).get("address") or "").lower()
-        return d["to_id"] == "self" or bool(own and d["to_id"] == own)
+        wa = "".join(ch for ch in str(self.db.get_kv("whatsapp_phone") or "") if ch.isdigit())
+        return d["to_id"] == "self" or bool(own and d["to_id"] == own) or bool(
+            wa and d.get("channel") == "whatsapp" and d["to_id"] == "phone:" + wa)
 
     def provider(self, channel: str) -> Provider:
         p = self.providers.get(channel)

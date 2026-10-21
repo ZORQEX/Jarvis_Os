@@ -1,7 +1,6 @@
 """Live provider checks. Opt-in (costs real usage): JARVIS_LIVE=1 uv run pytest tests/test_live.py -q"""
 import os
 import re
-import subprocess
 
 import pytest
 
@@ -24,7 +23,6 @@ async def test_claude_code_live_inspect(core, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------- Claude (the user's Claude Code sign-in)
-import tempfile  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 from jarvis.config import Config  # noqa: E402
@@ -34,8 +32,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
-async def claude():
-    p = ClaudeChatProvider(Config(), None, Path(tempfile.mkdtemp(prefix="jarvis-live-claude-")))
+async def claude(tmp_path):
+    p = ClaudeChatProvider(Config(), None, tmp_path / "claude")
     yield p
     await p.stop()
 

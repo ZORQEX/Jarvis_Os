@@ -10,7 +10,6 @@ import asyncio
 import datetime as dt
 import hashlib
 import json
-from pathlib import Path
 
 from ..db import Database, dumps, loads, new_id, now
 from ..events import AuditLog, EventBus
