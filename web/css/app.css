@@ -632,3 +632,15 @@ button.row:hover { background: var(--surface-2); }
 .revise textarea, .revise input { width: 100%; margin-top: 6px; }
 .pcard .input { flex: none; min-width: 0; width: 100%; }
 .pcard details .input { display: block; }
+
+/* ---------------------------------------------------------------- voice picker */
+.vgroup { font-size: 12px; color: var(--text-3); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+.vgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.vcard { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; background: var(--bg-2); display: flex; flex-direction: column; gap: 6px; }
+.vcard.on { border-color: var(--accent); background: var(--accent-soft); }
+.vcard.off { opacity: .5; }
+.vcard .vh { display: flex; flex-direction: column; gap: 1px; }
+.vcard .vh b { font-size: 14px; }
+.vcard .vh span, .vcard .vd { font-size: 12px; }
+.vcard .va { display: flex; gap: 6px; align-items: center; margin-top: auto; }
+.vcard .va .btn { height: 28px; font-size: 12.5px; padding: 0 10px; }

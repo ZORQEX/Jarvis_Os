@@ -253,3 +253,44 @@ async def test_speech_failure_is_reported_and_text_stays(core):
     kinds = [e["kind"] for e in drain()]
     assert "speech.error" in kinds and "speech.audio" not in kinds and "speech.synth" in kinds
     assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("Ответ есть")
+
+
+async def test_cloud_voice_falls_back_to_local_and_reports_it():
+    from jarvis.voice.tts import VoiceEngine
+
+    class FakePiper(FakeTTS):
+        voice, rate = "ru_RU-denis-medium", 1.0
+        cache = {}
+
+        async def configure(self, voice, rate):
+            self.voice, self.rate = voice, rate
+
+    class DeadGemini:
+        def configured(self):
+            return True
+
+        def client(self):
+            raise RuntimeError("429 quota")
+    p = FakePiper()
+    eng = VoiceEngine(p, DeadGemini(), "gemini:Charon")
+    out = [c async for c in eng.synth_stream("Привет.")]
+    assert out == [b"RIFF" + "Привет.".encode()] and eng.last_engine == "piper" and "429" in eng.last_fallback
+    await eng.set_voice("piper:ruslan", 1.2)
+    assert p.voice == "ru_RU-ruslan-medium" and p.rate == 1.2 and eng.cloud is None
+
+
+async def test_streamed_voice_chunks_are_played_in_order(core):
+    class Chunky(FakeTTS):
+        async def synth_stream(self, text):
+            for i in range(3):
+                yield f"RIFF{i}".encode()
+    sp = SpeechManager(core.db, core.bus, Chunky())
+    core.director.speech = sp
+    install(core, gemini=ScriptedGemini(core.config, [["Ответ."]]))
+    drain = audio_events(core)
+    tid = await core.director.submit("Что такое API?", "voice")
+    await wait_done(core, tid)
+    await wait_for(lambda: any(e["kind"] == "speech.end" for e in drain()))
+    audio = [e for e in drain() if e["kind"] == "speech.audio"]
+    assert [base64.b64decode(e["audio_b64"]) for e in audio] == [b"RIFF0", b"RIFF1", b"RIFF2"]
+    assert [e["seq"] for e in audio] == [1, 2, 3]

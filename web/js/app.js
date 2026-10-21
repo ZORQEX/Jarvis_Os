@@ -611,9 +611,15 @@ function renderSettings() {
     </div>
     <div class="panel">
       <h2>Голос</h2>
-      <div class="muted" style="font-size:13.5px">Речь распознаёт Gemini; отвечает голосом локальный синтез (Piper, голос «Денис») —
-        ответ начинает звучать, пока Gemini ещё пишет. Микрофон слушает только когда включён (кнопка или разговор); речь определяется на компьютере,
-        в облако уходят только сами фразы.</div>
+      <div class="muted" style="font-size:13.5px">Речь распознаёт Gemini; ответ начинает звучать, пока Gemini ещё пишет.
+        Микрофон слушает только когда включён (кнопка или разговор); речь определяется на компьютере, в облако уходят только сами фразы.</div>
+      <h2 style="font-size:13.5px;margin:14px 0 2px">Голос JARVIS</h2>
+      <div class="faint" style="font-size:12.5px">Живые голоса — Gemini: звучат естественно, первый звук ~0,5–1 с, расходуют квоту ключа;
+        если Gemini недоступен, JARVIS скажет локальным голосом. Локальные — мгновенные и без интернета, но звучат проще.</div>
+      <div id="voicePicker" class="vpick"></div>
+      <div class="field"><span style="font-size:13.5px">Скорость речи (локальные голоса):</span>
+        <input type="range" id="rateRange" min="0.8" max="1.3" step="0.05" style="flex:1;min-width:160px">
+        <span class="faint" id="rateVal"></span></div>
       <label class="toggle"><input type="checkbox" id="speakToggle" ${voice.speakReplies ? "checked" : ""}> Озвучивать ответы и на текстовые запросы</label>
       <label class="toggle"><input type="checkbox" id="muteToggle" ${voice.muted ? "checked" : ""}> Выключить микрофон</label>
       <div class="field"><span style="font-size:13.5px">Пауза, после которой фраза считается законченной:</span>
@@ -676,6 +682,7 @@ function renderSettings() {
   });
   renderVoiceTurns($("#voiceTurns", el));
   renderAudioOut();
+  renderVoicePicker();
   $("#soundTest", el).addEventListener("click", async () => {
     try { await link.request("voice.test"); } catch (er) { toast(er.message, "err"); return; }
     setTimeout(() => voice.checkOutput(true), 900);
@@ -687,6 +694,39 @@ function renderSettings() {
     localStorage.setItem("jarvis.reduceMotion", e.target.checked ? "1" : "0");
     document.documentElement.classList.toggle("anim-off", e.target.checked);
   });
+}
+
+async function renderVoicePicker() {
+  const box = $("#voicePicker");
+  if (!box) return;
+  let d;
+  try { d = await link.request("voice.voices"); } catch (e) { box.innerHTML = `<div class="faint">${esc(e.message)}</div>`; return; }
+  const card = (v) => `<div class="vcard ${v.id === d.current ? "on" : ""} ${v.available ? "" : "off"}">
+      <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"} · ${v.kind === "cloud" ? "живой, Gemini" : "локальный"}</span></div>
+      <div class="faint vd">${esc(v.desc)}${v.license && v.license.includes("NC") ? `<br><span style="color:var(--warn)">${esc(v.license)}</span>` : ""}</div>
+      <div class="va"><button class="btn ghost" data-vprev="${esc(v.id)}" ${v.available ? "" : "disabled"}>▶ Послушать</button>
+        ${v.id === d.current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`;
+  const live = d.voices.filter((v) => v.kind === "cloud"), local = d.voices.filter((v) => v.kind === "local");
+  box.innerHTML = `<div class="vgroup">Живые</div><div class="vgrid">${live.map(card).join("")}</div>
+    <div class="vgroup">Локальные</div><div class="vgrid">${local.map(card).join("")}</div>
+    ${d.last_fallback ? `<div class="cerr" style="margin-top:6px">Последний ответ прозвучал локальным голосом: Gemini-голос недоступен (${esc(d.last_fallback)})</div>` : ""}`;
+  $$("[data-vprev]", box).forEach((b) => b.addEventListener("click", () => {
+    voice.stopSpeaking();
+    link.request("voice.preview", { voice: b.dataset.vprev }).catch((er) => toast(er.message, "err"));
+  }));
+  $$("[data-vset]", box).forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try { await link.request("voice.set", { voice: b.dataset.vset }); toast("Голос выбран"); renderVoicePicker(); }
+    catch (er) { toast(er.message, "err"); b.disabled = false; }
+  }));
+  const r = $("#rateRange"), rv = $("#rateVal");
+  if (r) {
+    r.value = d.rate; rv.textContent = `×${(+d.rate).toFixed(2).replace(".", ",")}`;
+    r.onchange = async () => {
+      rv.textContent = `×${(+r.value).toFixed(2).replace(".", ",")}`;
+      try { await link.request("voice.set", { voice: d.current, rate: +r.value }); } catch (er) { toast(er.message, "err"); }
+    };
+  }
 }
 
 function renderAudioOut() {

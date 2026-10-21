@@ -126,23 +126,30 @@ class SpeechStream:
                 self.mgr.mark(self.turn_id, "tts_start")
                 if self.seq == 0:
                     self.mgr.bus.publish("speech.synth", {}, self.task_id)    # real state: synthesizing speech
+                eng = self.mgr.engine
                 try:
-                    audio = await self.mgr.engine.synth(text)
+                    if hasattr(eng, "synth_stream"):          # cloud voices: play pieces as they arrive
+                        async for audio in eng.synth_stream(text):
+                            self._emit(text, audio)
+                    else:
+                        self._emit(text, await eng.synth(text))
                 except Exception as e:   # noqa: BLE001 — speech failure must never hide the text answer
                     self.mgr.bus.publish("speech.error", {"error": str(e)[:200]}, self.task_id)
                     continue
-                if self.cancelled or not audio:
-                    continue
-                self.mgr.mark(self.turn_id, "first_audio_sent")
-                self.seq += 1
-                self.mgr.bus.publish("speech.audio", {"seq": self.seq, "text": text, "mime": "audio/wav",
-                                                      "audio_b64": base64.b64encode(audio).decode()}, self.task_id)
             self.mgr.bus.publish("speech.end", {"segments": self.seq}, self.task_id)
             self.mgr.mark(self.turn_id, "speech_done")
         except asyncio.CancelledError:
             self.mgr.bus.publish("speech.cancelled", {}, self.task_id)
         finally:
             self.mgr.streams.pop(self.task_id, None)
+
+    def _emit(self, text: str, audio: bytes) -> None:
+        if self.cancelled or not audio:
+            return
+        self.mgr.mark(self.turn_id, "first_audio_sent")
+        self.seq += 1
+        self.mgr.bus.publish("speech.audio", {"seq": self.seq, "text": text, "mime": "audio/wav",
+                                              "audio_b64": base64.b64encode(audio).decode()}, self.task_id)
 
 
 TURN_FIELDS = ("speech_start", "speech_end", "stt_start", "stt_end", "request_start", "ttft", "first_sentence",

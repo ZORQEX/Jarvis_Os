@@ -34,11 +34,45 @@ def clean_for_speech(text: str) -> str:
     return t.strip()
 
 
+# Voices the user can choose in Settings → Голос. Local = Piper (offline, instant). Cloud = Gemini TTS (much more natural,
+# measured first sound 0.5–1.0 s when streamed, uses the Gemini quota; falls back to the local voice on any error).
+VOICES: list[dict] = [
+    {"id": "piper:denis", "engine": "piper", "model": "ru_RU-denis-medium", "name": "Денис", "gender": "м",
+     "kind": "local", "desc": "Локальный, мгновенный, работает без интернета", "license": "CC0 (данные), Piper GPL-3.0"},
+    {"id": "piper:dmitri", "engine": "piper", "model": "ru_RU-dmitri-medium", "name": "Дмитрий", "gender": "м",
+     "kind": "local", "desc": "Локальный, чуть ниже и глуше", "license": "CC0 (данные)"},
+    {"id": "piper:ruslan", "engine": "piper", "model": "ru_RU-ruslan-medium", "name": "Руслан", "gender": "м",
+     "kind": "local", "desc": "Локальный, дикторская манера", "license": "CC BY-NC-SA 4.0 — только личное некоммерческое использование"},
+    {"id": "gemini:Kore", "engine": "gemini", "model": "Kore", "name": "Кора", "gender": "ж",
+     "kind": "cloud", "desc": "Живой женский, уверенный"},
+    {"id": "gemini:Aoede", "engine": "gemini", "model": "Aoede", "name": "Аэда", "gender": "ж",
+     "kind": "cloud", "desc": "Живой женский, лёгкий и непринуждённый"},
+    {"id": "gemini:Leda", "engine": "gemini", "model": "Leda", "name": "Леда", "gender": "ж",
+     "kind": "cloud", "desc": "Живой женский, молодой"},
+    {"id": "gemini:Zephyr", "engine": "gemini", "model": "Zephyr", "name": "Зефир", "gender": "ж",
+     "kind": "cloud", "desc": "Живой женский, яркий"},
+    {"id": "gemini:Charon", "engine": "gemini", "model": "Charon", "name": "Харон", "gender": "м",
+     "kind": "cloud", "desc": "Живой мужской, спокойный, как у JARVIS из фильмов"},
+    {"id": "gemini:Puck", "engine": "gemini", "model": "Puck", "name": "Пак", "gender": "м",
+     "kind": "cloud", "desc": "Живой мужской, бодрый"},
+    {"id": "gemini:Orus", "engine": "gemini", "model": "Orus", "name": "Орус", "gender": "м",
+     "kind": "cloud", "desc": "Живой мужской, твёрдый"},
+    {"id": "gemini:Fenrir", "engine": "gemini", "model": "Fenrir", "name": "Фенрир", "gender": "м",
+     "kind": "cloud", "desc": "Живой мужской, эмоциональный"},
+]
+DEFAULT_VOICE = "piper:denis"
+PREVIEW = "Привет! Я JARVIS. Так я буду звучать, когда отвечаю. Что сделать?"
+
+
+def voice_info(vid: str) -> dict:
+    return next((v for v in VOICES if v["id"] == vid), next(v for v in VOICES if v["id"] == DEFAULT_VOICE))
+
+
 class PiperTTS:
     name = "piper"
 
-    def __init__(self, voice: str = "ru_RU-denis-medium", home: Path = PIPER_HOME):
-        self.home, self.voice = home, voice
+    def __init__(self, voice: str = "ru_RU-denis-medium", home: Path = PIPER_HOME, rate: float = 1.0):
+        self.home, self.voice, self.rate = home, voice, rate
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
         self.outdir = Path(tempfile.mkdtemp(prefix="jarvis-tts-"))
@@ -59,8 +93,10 @@ class PiperTTS:
     async def start(self) -> None:
         if self.proc and self.proc.returncode is None:
             return
+        # length_scale < 1 speaks faster; a little more noise makes the intonation less flat.
         self.proc = await asyncio.create_subprocess_exec(
             str(self.python), "-m", "piper", "-m", str(self.model), "-d", str(self.outdir),
+            "--length-scale", f"{1.0 / max(0.6, min(1.6, self.rate)):.3f}", "--noise-scale", "0.75", "--noise-w-scale", "0.9",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
             start_new_session=True)
         self.started_at = time.time()
@@ -97,6 +133,166 @@ class PiperTTS:
             self.proc.kill()
             await self.proc.wait()
         shutil.rmtree(self.outdir, ignore_errors=True)
+
+    async def configure(self, voice: str, rate: float) -> None:
+        """Switch voice/speed: the Piper process restarts with the new model on the next phrase."""
+        if voice == self.voice and abs(rate - self.rate) < 1e-3:
+            return
+        async with self.lock:
+            if self.proc and self.proc.returncode is None:
+                self.proc.kill()
+                await self.proc.wait()
+            self.proc, self.voice, self.rate = None, voice, rate
+            self.cache.clear()
+            self.outdir.mkdir(parents=True, exist_ok=True)
+
+
+class GeminiVoiceTTS:
+    """Natural cloud voice (Gemini TTS), streamed: the first piece of sound arrives before the phrase is finished."""
+    name = "gemini-voice"
+
+    def __init__(self, gemini, voice: str = "Kore", model: str = "gemini-3.8-flash-tts"):
+        self.gemini, self.voice, self.model = gemini, voice, model
+        self.cache: dict[str, bytes] = {}
+
+    def available(self) -> bool:
+        return self.gemini.configured()
+
+    async def synth_stream(self, text: str):
+        """Yields WAV chunks (24 kHz mono PCM, each a complete little WAV) as Gemini produces them."""
+        from google.genai import types
+        text = clean_for_speech(text)
+        if not text:
+            return
+        if text in self.cache:
+            yield self.cache[text]
+            return
+        cfg = types.GenerateContentConfig(response_modalities=["AUDIO"], speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.voice))))
+        client = self.gemini.client()
+        it = await asyncio.wait_for(client.aio.models.generate_content_stream(model=self.model, contents=text,
+                                                                              config=cfg), 8)
+        got = False
+        pcm_all = b""
+        async for ch in _timeout_iter(it, 15):
+            cand = (ch.candidates or [None])[0]
+            for p in (cand.content.parts or []) if cand and cand.content else []:
+                if p.inline_data and p.inline_data.data:
+                    got = True
+                    pcm_all += p.inline_data.data
+                    yield _wav(p.inline_data.data, _rate(p.inline_data.mime_type))
+        if not got:
+            raise RuntimeError("Gemini не вернул звук")
+        if len(text) < 80:
+            self.cache[text] = _wav(pcm_all, 24000)
+
+    async def synth(self, text: str) -> bytes:
+        chunks = [c async for c in self.synth_stream(text)]
+        if len(chunks) == 1:
+            return chunks[0]
+        return _wav(b"".join(_pcm(c) for c in chunks), 24000)
+
+    async def prewarm(self) -> None:
+        return None          # every phrase costs quota: nothing is synthesized in advance
+
+    async def stop(self) -> None:
+        return None
+
+
+def _rate(mime: str | None) -> int:
+    m = re.search(r"rate=(\d+)", mime or "")
+    return int(m.group(1)) if m else 24000
+
+
+def _wav(pcm: bytes, rate: int) -> bytes:
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def _pcm(wav_bytes: bytes) -> bytes:
+    import io
+    import wave
+    with wave.open(io.BytesIO(wav_bytes)) as w:
+        return w.readframes(w.getnframes())
+
+
+async def _timeout_iter(it, per_chunk: float):
+    ait = it.__aiter__()
+    while True:
+        try:
+            yield await asyncio.wait_for(ait.__anext__(), per_chunk)
+        except StopAsyncIteration:
+            return
+
+
+class VoiceEngine:
+    """What SpeechManager talks to. Holds the chosen voice; a cloud voice falls back to the local one on any error,
+    and the failure is reported, never hidden."""
+
+    def __init__(self, piper: PiperTTS, gemini, voice_id: str = DEFAULT_VOICE, rate: float = 1.0):
+        self.piper, self.gemini = piper, gemini
+        self.cloud: GeminiVoiceTTS | None = None
+        self.voice_id, self.rate = DEFAULT_VOICE, rate
+        self.last_engine = "piper"
+        self.last_fallback: str | None = None
+        self.cache = piper.cache
+        self._pending = (voice_id, rate)
+
+    @property
+    def name(self) -> str:
+        return self.voice_id
+
+    async def apply(self) -> None:
+        if self._pending:
+            vid, rate = self._pending
+            self._pending = None
+            await self.set_voice(vid, rate)
+
+    async def set_voice(self, voice_id: str, rate: float = 1.0) -> dict:
+        v = voice_info(voice_id)
+        self.voice_id, self.rate = v["id"], rate
+        if v["engine"] == "piper":
+            self.cloud = None
+            await self.piper.configure(v["model"], rate)
+        else:
+            self.cloud = GeminiVoiceTTS(self.gemini, v["model"])
+            await self.piper.configure(self.piper.voice, rate)     # local fallback keeps its own voice
+        return v
+
+    async def synth_stream(self, text: str):
+        await self.apply()
+        if self.cloud and self.cloud.available():
+            sent = False
+            try:
+                async for chunk in self.cloud.synth_stream(text):
+                    sent = True
+                    yield chunk
+                self.last_engine, self.last_fallback = "gemini", None
+                return
+            except Exception as e:   # noqa: BLE001
+                if sent:
+                    raise RuntimeError(f"Голос Gemini оборвался: {e}") from None
+                self.last_fallback = f"{e.__class__.__name__}: {str(e)[:120]}"
+        yield await self.piper.synth(text)
+        self.last_engine = "piper"
+
+    async def synth(self, text: str) -> bytes:
+        chunks = [c async for c in self.synth_stream(text)]
+        return chunks[0] if len(chunks) == 1 else _wav(b"".join(_pcm(c) for c in chunks), 24000)
+
+    async def prewarm(self) -> None:
+        await self.apply()
+        await self.piper.prewarm()
+
+    async def stop(self) -> None:
+        await self.piper.stop()
 
 
 class GeminiTTS:
