@@ -34,6 +34,7 @@ SCHEMA = {
         "subject": {"type": "string"},
         "when": {"type": "string"},
         "time_unclear": {"type": "boolean"},
+        "in_minutes": {"type": "number"},
         "target": {"type": "object", "properties": {
             "name": {"type": "string"}, "platform": {"type": "string"}, "when": {"type": "string"},
             "all": {"type": "boolean"}}},
@@ -72,7 +73,9 @@ message: ровно текст, который уйдёт получателю. 
 Без кавычек вокруг. Нет текста — "".
 subject: только для почты: названная тема или короткая тема 2–5 слов по смыслу; иначе "".
 when: время отправки «YYYY-MM-DDTHH:MM», если указано. «в 13:00» — сегодня, если ещё не наступило, иначе завтра.
-«завтра в 10 утра» → завтра 10:00. «через 15 минут» → сейчас + 15 минут. Не указано — "".
+«завтра в 10 утра» → завтра 10:00. Не указано — "".
+in_minutes: только для относительного времени («через 15 минут» → 15, «через час» → 60, «через полчаса» → 30);
+тогда when = "". Для точного времени («в 13:00», «завтра в 10») — 0.
 time_unclear: true, если про время сказано размыто («вечером», «попозже») и точного часа нет.
 target (для cancel/edit): кого/что искать: name (именительный падеж или «__pending__», если речь о только что подготовленном
 сообщении), platform, when («YYYY-MM-DDTHH:MM» или ""), all=true, если сказано «все».
@@ -87,7 +90,7 @@ def _local_dt(s: str) -> float | None:
     if not s:
         return None
     try:
-        d = dt.datetime.fromisoformat(s[:16])
+        d = dt.datetime.fromisoformat(s[:19])
     except ValueError:
         return None
     if d.tzinfo is not None:
@@ -226,6 +229,11 @@ class CommsAgent:
         if intent.get("time_unclear"):
             return self._ask(director, tid, cid, intent, "time", "Во сколько отправить?", resolved)
         due = _local_dt(intent.get("when"))
+        mins = intent.get("in_minutes")
+        if isinstance(mins, (int, float)) and not isinstance(mins, bool) and 0 < mins <= 366 * 24 * 60:
+            due = now() + float(mins) * 60     # «через N минут»: exact, not rounded to the minute
+            intent["in_minutes"] = None        # a follow-up turn must not shift it again
+            intent["when"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(due))
         if due is not None and due < now() - 60:
             return self._ask(director, tid, cid, intent, "time", "Это время уже прошло. На когда запланировать?", resolved)
         remaining = []

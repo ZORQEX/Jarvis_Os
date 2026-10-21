@@ -482,3 +482,15 @@ async def test_cancel_message_to_self(core, hub):
     t = await core.director.submit("Отмени сообщение себе")
     await wait_done(core, t)
     assert hub.outbox.get(j["id"])["status"] == "cancelled"
+
+
+async def test_relative_time_is_exact_not_rounded(core, hub):
+    intents(core, {"action": "send", "recipients": [{"name": "Иван Петров", "platform": "telegram"}],
+                   "message": "Через минуту", "in_minutes": 1})
+    t0 = time.time()
+    tid = await core.director.submit("Отправь Ивану Петрову в Telegram через 1 минуту: Через минуту")
+    a = await pending_send(core)
+    assert 55 <= a["args"]["due_at"] - t0 <= 65
+    core.director.decide(a["id"], True)
+    await wait_done(core, tid)
+    assert hub.outbox.scheduled() and not hub.providers["telegram"].sent
