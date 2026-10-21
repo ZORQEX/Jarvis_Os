@@ -8,6 +8,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets as pysecrets
 import time
 from pathlib import Path
@@ -174,6 +175,17 @@ class Server:
                 from .voice.tts import NOT_HEARD
                 sp.say("notice-" + (turn or "x"), NOT_HEARD, turn)
             return {"text": "", "turn": turn}
+        # A phrase cut off mid-command («Отправь…», «…в», «…моей») is kept and joined with the next one, instead of
+        # being answered on its own (measured: «Отправь» / «в Телеграме» / «любимые с сердечком» became 3 requests).
+        frag = getattr(self, "_fragment", None)
+        if frag and time.time() - frag[1] < FRAGMENT_TTL_S:
+            text = frag[0] + " " + text
+        self._fragment = None
+        if data.get("submit", True) and is_fragment(text):
+            self._fragment = (text.rstrip(" .,…"), time.time())
+            if sp:
+                sp.annotate(turn, route="fragment")
+            return {"text": text, "turn": turn, "pending": True}
         task_id = None
         if data.get("submit", True):
             if sp:
@@ -416,6 +428,27 @@ class Server:
                                              ensure_ascii=False))
             except (ConnectionResetError, RuntimeError):
                 pass
+
+
+FRAGMENT_TTL_S = 15.0
+_DANGLING = {"в", "во", "на", "и", "а", "но", "или", "что", "чтобы", "для", "к", "ко", "по", "с", "со", "у", "о", "об",
+             "мне", "ему", "ей", "моей", "моему", "моим", "контакту", "сообщение", "письмо", "текст", "который", "которая",
+             "это", "этому", "этой", "про", "потом", "затем", "ещё", "еще", "также", "the", "to", "and"}
+_VERB_ONLY = re.compile(r"(джарвис\s*)?(отправь|напиши|пошли|скажи|сообщи|передай|запланируй|напомни|открой|найди)"
+                        r"(\s+(сообщение|письмо|мне|ему|ей|в|на))?")
+
+
+def is_fragment(text: str) -> bool:
+    """A phrase that obviously continues: a bare command verb, or ending on a preposition/conjunction/«моей»."""
+    t = re.sub(r"[^\w\s:]", " ", text.lower().replace("ё", "е")).strip()
+    if not t or len(t) > 300:
+        return False
+    if text.rstrip().endswith((":", ",", "—", "-")):
+        return True
+    if _VERB_ONLY.fullmatch(re.sub(r"\s+", " ", t)):
+        return True
+    words = t.split()
+    return bool(words) and words[-1] in _DANGLING and len(words) < 25
 
 
 COMMS_UI = {"comms.state", "comms.telegram.begin", "comms.telegram.finish", "comms.telegram.logout",

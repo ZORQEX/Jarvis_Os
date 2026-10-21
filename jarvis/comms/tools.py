@@ -13,7 +13,8 @@ DELIVERY = {"type": "object", "required": ["channel", "to_id", "to_name"], "prop
     "channel": {"type": "string", "enum": ["telegram", "whatsapp", "email"]},
     "to_id": {"type": "string", "minLength": 1, "maxLength": 300},
     "to_name": {"type": "string", "minLength": 1, "maxLength": 200},
-    "to_address": {"type": "string", "maxLength": 300}}}
+    "to_address": {"type": "string", "maxLength": 300},
+    "guess": {"type": "boolean"}}}      # recipient found by a similar, not exact, name: always asked
 
 
 def _contact(d: dict) -> Contact:

@@ -32,7 +32,10 @@ const voice = new Voice({
     S.voice = v; renderStatus(); renderComposer(); renderPrivacy();
     if (v === "interrupted") setTimeout(() => { if (S.voice === "interrupted") voice.set(voice.listening ? "listening" : null); }, 700);
   },
-  onTurn: () => { if (S.view !== "chat") nav("chat"); },
+  onTurn: (r) => {
+    if (r?.pending) { toast(`Слушаю дальше: «${(r.text || "").slice(0, 60)}…»`); return; }   // phrase cut off: wait for the rest
+    if (S.view !== "chat") nav("chat");
+  },
   onError: (m) => toast(m, "warn"),
   onOutput: (r) => {
     S.audioOut = r;
@@ -614,7 +617,7 @@ function renderSettings() {
       <label class="toggle"><input type="checkbox" id="speakToggle" ${voice.speakReplies ? "checked" : ""}> Озвучивать ответы и на текстовые запросы</label>
       <label class="toggle"><input type="checkbox" id="muteToggle" ${voice.muted ? "checked" : ""}> Выключить микрофон</label>
       <div class="field"><span style="font-size:13.5px">Пауза, после которой фраза считается законченной:</span>
-        <input type="range" id="silenceRange" min="400" max="1500" step="50" value="${voice.silenceMs}" style="flex:1;min-width:160px">
+        <input type="range" id="silenceRange" min="600" max="3000" step="100" value="${voice.silenceMs}" style="flex:1;min-width:160px">
         <span class="faint" id="silenceVal">${(voice.silenceMs / 1000).toFixed(2).replace(".", ",")} с</span></div>
       <div class="field" style="margin-top:10px">
         <button class="btn" id="soundTest">Проверить звук</button>
@@ -668,7 +671,7 @@ function renderSettings() {
   $("#speakToggle", el).addEventListener("change", (e) => { voice.speakReplies = e.target.checked; localStorage.setItem("jarvis.speak", e.target.checked ? "1" : "0"); });
   $("#muteToggle", el).addEventListener("change", (e) => { voice.setMuted(e.target.checked); renderStatus(); renderComposer(); });
   $("#silenceRange", el).addEventListener("input", (e) => {
-    voice.silenceMs = +e.target.value; localStorage.setItem("jarvis.silenceMs", String(voice.silenceMs));
+    voice.silenceMs = +e.target.value; localStorage.setItem("jarvis.silenceMs2", String(voice.silenceMs));
     $("#silenceVal", el).textContent = (voice.silenceMs / 1000).toFixed(2).replace(".", ",") + " с";
   });
   renderVoiceTurns($("#voiceTurns", el));

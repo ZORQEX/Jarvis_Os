@@ -494,3 +494,33 @@ async def test_relative_time_is_exact_not_rounded(core, hub):
     core.director.decide(a["id"], True)
     await wait_done(core, tid)
     assert hub.outbox.scheduled() and not hub.providers["telegram"].sent
+
+
+async def test_similar_name_is_offered_and_asked(core, hub):
+    hub.providers["telegram"].people = PEOPLE["telegram"] + [("u:9:99", "Любимая ❤️", "")]
+    intents(core, {"action": "send", "recipients": [{"name": "любимое", "platform": "telegram"}], "message": "Я тебя люблю"})
+    tid = await core.director.submit("Отправь сообщение в Telegram любимое: я тебя люблю", "voice")
+    a = await pending_send(core)
+    d = a["args"]["deliveries"][0]
+    assert d["to_id"] == "u:9:99" and d["guess"] is True
+    assert core.director.comms.question(a["args"]).startswith("Похоже, вы имеете в виду контакт «Любимая ❤️»")
+    await core.director.submit("Нет", "voice")
+    await wait_done(core, tid)
+    assert "Назовите контакт точнее" in last_text(core) and not hub.providers["telegram"].sent
+
+
+async def test_guessed_recipient_ignores_trust_rules(core, hub):
+    hub.providers["telegram"].people = [("u:9:99", "Любимая ❤️", "")]
+    hub.add_rule("telegram", "u:9:99", "Любимая ❤️")
+    intents(core, {"action": "send", "recipients": [{"name": "любимые", "platform": "telegram"}], "message": "Привет"})
+    tid = await core.director.submit("Отправь любимые в Telegram: Привет")
+    a = await pending_send(core)                  # a rule exists, but the name was only similar: still asked
+    core.director.decide(a["id"], True)
+    await wait_done(core, tid)
+    assert hub.providers["telegram"].sent
+
+
+def test_cut_off_phrases_are_detected():
+    from jarvis.server import is_fragment
+    assert is_fragment("Отправь.") and is_fragment("Отправь сообщение в") and is_fragment("Отправь моей")
+    assert not is_fragment("Отправь Ивану в Telegram: привет") and not is_fragment("Да.") and not is_fragment("Привет.")

@@ -32,8 +32,32 @@ def _stem_eq(a: str, b: str) -> bool:
     return common >= max(3, max(len(a), len(b)) - 2) and common >= n - 1
 
 
+def _loose_eq(a: str, b: str) -> bool:
+    """Two different last letters: adjectives used as names (любимая/любимое/любимые), родная/родной."""
+    n = min(len(a), len(b))
+    common = 0
+    while common < n and a[common] == b[common]:
+        common += 1
+    return n >= 6 and common >= n - 2
+
+
+GUESS = 0.5     # scores below 0.6 are guesses: JARVIS asks «вы имеете в виду …?»
+
+
+def _guess(query: str, name: str) -> bool:
+    """Close but not certain: a typo or speech-recognition slip (любимые / Любимая ❤️, Сережа / Серёжа)."""
+    import difflib
+    q, n = norm(query), norm(name)
+    if len(q) < 3 or not n:
+        return False
+    if len(q) >= 4 and (q in n or n in q):
+        return True
+    return difflib.SequenceMatcher(None, q, n).ratio() >= 0.72 or any(
+        difflib.SequenceMatcher(None, q, w).ratio() >= 0.8 for w in tokens(name) if len(w) >= 4)
+
+
 def match_score(query: str, *names: str) -> float:
-    """0 = no match; 1 = exact. Every word of the query must match a word of the candidate."""
+    """0 = no match; 1 = exact; GUESS (0.5) = only similar. Every word of the query must match a word of the name."""
     q = tokens(query)
     if not q:
         return 0.0
@@ -50,6 +74,10 @@ def match_score(query: str, *names: str) -> float:
             best = max(best, 0.9 if len(q) == len(c) else 0.8)
         elif all(any(_stem_eq(t, w) for w in c) for t in q):
             best = max(best, 0.7)
+        elif all(any(_stem_eq(t, w) or _loose_eq(t, w) for w in c) for t in q):
+            best = max(best, 0.6)          # probable, but JARVIS asks «это нужный контакт?»
+    if not best and any(n and _guess(query, n) for n in names):
+        best = GUESS
     return best
 
 

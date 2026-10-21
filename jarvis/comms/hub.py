@@ -87,6 +87,8 @@ class CommsHub:
         if spec.id != "message_send" or args.get("replaces"):
             return None
         ds = args.get("deliveries") or []
+        if any(d.get("guess") for d in ds):
+            return None          # a guessed recipient is always confirmed by the user, whatever the rules
         if ds and self.full_access() and all(self.is_self(d) for d in ds):
             return Decision("allow", "Полный доступ: сообщение самому себе")
         rules = [self.rule_for(d["channel"], d["to_id"]) for d in args.get("deliveries") or []]

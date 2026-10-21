@@ -62,6 +62,9 @@ action:
 - cancel — отменить запланированное; edit — изменить запланированное или только что подготовленное;
 - trust — «больше не спрашивай подтверждение для сообщений X в Y»; save_contact — «запомни почту/номер X»;
 - other — команда не про сообщения.
+Если фраза начинается с «нет», «не то», «не так», а дальше идёт команда отправить — это новая команда send, не отмена.
+Пользователь может называть контакт так, как он записан: «контакту Любимая», «моей любимой», «маме» → name «Любимая»,
+«мама» (без слов «контакт», «мой», «моей»). Слова «с сердечком», «со смайликом» к имени не относятся.
 recipients: каждый получатель отдельно, name — в именительном падеже, как назвал пользователь: «Ивану» → «Иван»,
 «Сергею Петрову» → «Сергей Петров», «маме» → «мама». «себе», «мне» → «себе». «ему», «ей», «этому человеку», «ему же» → «__last__».
 Если e-mail адрес или номер телефона продиктован — name = адрес/номер.
@@ -278,7 +281,10 @@ class CommsAgent:
                                 for n, o in enumerate(opts, 1))
                 return self._ask(director, tid, cid, intent, "recipient", f"Нашёл несколько: {lst}. Кому отправить?",
                                  resolved, options=opts)
-            resolved.append(self._delivery(cands[0]))
+            d = self._delivery(cands[0])
+            if cands[0].score < 0.7:
+                d["guess"] = True          # «любимое» → «Любимая ❤️»: ask «это она?» before anything is sent
+            resolved.append(d)
         if not resolved:
             return self._ask(director, tid, cid, intent, "recipient_name", "Кому отправить?", resolved)
         body = (intent.get("message") or "").strip()
@@ -325,7 +331,9 @@ class CommsAgent:
 
     def question(self, args: dict) -> str:
         body = _short(args["body"], 160).rstrip(" .!?…")
-        parts = [f"Кому: {self._to(args)}."]
+        guessed = [d["to_name"] for d in args["deliveries"] if d.get("guess")]
+        parts = [f"Похоже, вы имеете в виду контакт «{self._join(guessed)}» — это нужный контакт?"] if guessed else []
+        parts.append(f"Кому: {self._to(args)}.")
         if args.get("due_at"):
             parts.append(f"Когда: {when_ru(args['due_at'])}.")
         if args.get("subject"):
@@ -349,7 +357,11 @@ class CommsAgent:
         if out.status == "denied":
             if "экстренная" in (out.error or "").lower():
                 return "Не отправлено: включена экстренная остановка. Скажите «продолжи», чтобы снять её."
-            return "Хорошо, не отправляю." if "отклонили" in (out.error or "") else f"Не отправлено: {out.error}."
+            if "отклонили" in (out.error or ""):
+                if any(d.get("guess") for d in args["deliveries"]):
+                    return "Хорошо, не отправляю. Назовите контакт точнее — как он записан в контактах."
+                return "Хорошо, не отправляю."
+            return f"Не отправлено: {out.error}."
         return f"Не отправлено: {out.error}"
 
     async def _continue(self, director, tid, cid, p: dict, text: str) -> None:

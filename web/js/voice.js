@@ -15,7 +15,10 @@ export class Voice {
     this.onTurn = onTurn || (() => {});
     this.muted = localStorage.getItem("jarvis.micMuted") === "1";
     this.speakReplies = localStorage.getItem("jarvis.speak") === "1";
-    this.silenceMs = +(localStorage.getItem("jarvis.silenceMs") || 650);
+    // Pause that ends a phrase. 0.65 s cut the user off mid-command («Отправь» / «в Телеграме» / …): now 1.3 s.
+    this.silenceMs = +(localStorage.getItem("jarvis.silenceMs2") || 1300);
+    this.closeWhenQuiet = false;  // mic button: stay open while JARVIS answers, so it can be interrupted
+    this.lastAudioEnd = 0;
     this.supported = !!(navigator.mediaDevices?.getUserMedia && window.AudioWorkletNode);
     this.state = null;  // null | listening | recording | transcribing | synthesizing | speaking | interrupted | error
     this.conversation = false;    // hands-free: keep listening after each answer
@@ -68,6 +71,7 @@ export class Voice {
   }
 
   closeMic() {
+    this.closeWhenQuiet = false;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.node?.disconnect(); this.node = null;
@@ -79,7 +83,7 @@ export class Voice {
 
   async listenOnce() {                      // mic button: one utterance, ends by itself on silence
     if (this.listening && !this.conversation) { this.closeMic(); return; }
-    this.once = true;
+    this.once = true; this.closeWhenQuiet = false;
     await this.openMic();
   }
 
@@ -93,10 +97,15 @@ export class Voice {
   // ---------------------------------------------------------------- VAD (local, ~20 ms frames)
   frame({ rms, pcm }) {
     const speaking = this.audio;
-    // Higher bar while JARVIS talks, so its own voice from the speakers is not taken for the user.
-    const thr = Math.max(0.012, this.floor * 3.2) * (speaking ? 2.4 : 1);
-    const need = speaking ? 14 : 4;          // frames of voice to start (280 ms / 80 ms)
+    // Slightly higher bar while JARVIS talks (echo cancellation removes most of its own voice), so the user can
+    // still cut in with a normal voice: 1.7× threshold for 200 ms (was 2.4× for 280 ms — too hard to interrupt).
+    const thr = Math.max(0.012, this.floor * 3.2) * (speaking ? 1.7 : 1);
+    const need = speaking ? 10 : 4;          // frames of voice to start (200 ms / 80 ms)
     setLevel(Math.min(1, rms * 8));
+    if (!this.seg && this.closeWhenQuiet && !speaking && this.state !== "transcribing" && this.state !== "synthesizing"
+        && now() - this.idleSince > 6000 && now() - this.lastAudioEnd > 2000) {
+      this.closeWhenQuiet = false; this.closeMic(); return;   // answer finished: the single-phrase mic turns off
+    }
     if (!this.seg) {
       this.preroll.push(pcm);
       if (this.preroll.length > 20) this.preroll.shift();     // keep 400 ms before speech start
@@ -130,7 +139,7 @@ export class Voice {
     if (voicedMs < 250) { this.set("listening"); return; }
     const wav = encodeWav(frames);
     this.idleSince = now();
-    if (this.once && !this.conversation) { this.once = false; this.closeMic(); }
+    if (this.once && !this.conversation) { this.once = false; this.closeWhenQuiet = true; }
     this.set("transcribing");
     try {
       const r = await this.link.request("voice.transcribe", {
@@ -174,6 +183,7 @@ export class Voice {
     this.playing.push(item);
     src.onended = () => {
       this.playing = this.playing.filter((x) => x !== item);
+      this.lastAudioEnd = now();
       if (!this.playing.length && this.state === "speaking") this.set(this.listening ? "listening" : null);
     };
     const delay = Math.max(0, (at - this.out.currentTime) * 1000);
