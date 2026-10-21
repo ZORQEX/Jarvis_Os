@@ -3,6 +3,7 @@ runs it as a persistent task and keeps one canonical runtime state."""
 from __future__ import annotations
 
 import asyncio
+import re
 import os
 import time
 from dataclasses import dataclass, field
@@ -67,6 +68,7 @@ class Director:
         self.speech = None           # SpeechManager, set by the composition root
         self.stt = None              # LocalSTT (speech recognition on this computer)
         self.comms = None            # CommsAgent
+        self.history = None          # ActionHistory (lasting actions only), set by the composition root
         self.hub = None              # CommsHub
         self.rt: dict[str, Runtime] = {}
         self._last_finish: tuple[float, str] | None = None
@@ -137,6 +139,16 @@ class Director:
             from .comms.agent import yes_no
             yn = yes_no(text)
             pend = [a for a in self.approvals.pending() if self.voice_approvable(a["tool_id"])] if yn is not None else []
+            if len(pend) > 1:
+                # Several actions wait: a bare «да» must not pick one at random.
+                self.add_message(cid, "user", text, meta={"source": source})
+                names = "; ".join((a.get("summary") or {}).get("action", "")[:70] for a in pend[:3])
+                reply = f"Ждут решения несколько действий ({len(pend)}): {names}. Нажмите нужную кнопку на экране."
+                self.add_message(cid, "assistant", reply, meta={"route": "control", "level": 0})
+                if self.speech and source == "voice":
+                    self.speech.say("notice-" + (turn or "x"), f"Ждут решения несколько действий — {len(pend)}. "
+                                    "Выберите на экране.", turn)
+                return ""
             if len(pend) == 1:
                 self.add_message(cid, "user", text, pend[0]["task_id"], meta={"source": source, "decision": yn})
                 if self.speech and turn:
@@ -529,8 +541,10 @@ class Director:
         return level
 
     def voice_approvable(self, tool_id: str) -> bool:
-        from .comms.agent import VOICE_APPROVABLE
-        return tool_id in VOICE_APPROVABLE or (self.policy.full_access and tool_id != "trust_rule_add")
+        """Any confirmation can be answered by voice («да» / «разрешаю» / «нет») — the spoken question names the exact
+        action, and the approval stays bound to its arguments. Durable permission changes stay click-only."""
+        from .comms.agent import CLICK_ONLY
+        return tool_id not in CLICK_ONLY
 
     def _speak_approval(self, kind: str, ev: dict | None = None) -> None:
         """In a voice task a confirmation is also asked aloud (message sends phrase their own question)."""
@@ -540,9 +554,8 @@ class Director:
         r = self.rt.get(a["task_id"])
         if not r or not r.voice or a["tool_id"] in ("message_send", "cloud_send"):
             return
-        how = "Скажите «да» или «нет»." if self.voice_approvable(a["tool_id"]) else "Подтвердите кнопкой на экране."
-        self.speech.speak_now(a["task_id"], f"Нужно ваше решение: {(a['summary'] or {}).get('action', '')[:160]}. {how}",
-                              r.turn)
+        how = "Разрешить?" if self.voice_approvable(a["tool_id"]) else "Подтвердите кнопкой на экране."
+        self.speech.speak_now(a["task_id"], f"Нужно разрешение: {spoken_action(a)}. {how}", r.turn)
 
     # ------------------------------------------------------------------ scheduled messages
     async def deliver_job(self, job: dict) -> None:
@@ -654,14 +667,20 @@ class Director:
         for t in self.tasks.active():
             tasks[t["id"]] = t
         return {"conversation_id": cid, "messages": msgs, "tasks": tasks,
-                "recent_tasks": [{"id": t["id"], "request": t["request"], "state": t["state"],
-                                  "created_at": t["created_at"], "route": t["route"]}
-                                 for t in self.tasks.recent(12)],
                 "approvals": self.approvals.pending(), "core": self.core_state(),
                 "provider": self.ai.describe(), "tools": self.gw.registry.describe(),
                 "providers": self.providers.describe() if self.providers else [],
                 "reminders": self.scheduler.upcoming(), "session_grants": sorted(self.policy.session_grants),
                 "uptime_s": round(time.time() - self.started_at)}
+
+
+def spoken_action(a: dict) -> str:
+    """The approval question said aloud: short, without long paths («…/projects/calc» → «папке calc»)."""
+    t = str((a.get("summary") or {}).get("action", ""))
+    t = re.sub(r"(?:~|/)[^\s«»,;]*/([^\s/«»,;]+)/?", r"папке \1", t)
+    t = re.sub(r"\bв\s+папке\s+папке\b", "в папке", t)
+    t = t.replace("«", "").replace("»", "")
+    return t[:140].rstrip(" .;,")
 
 
 STATE_RU = {"created": "создана", "queued": "в очереди", "planning": "планирую", "running": "выполняется",

@@ -355,6 +355,7 @@ export function approvalCard(a) {
     ${open ? `<div class="actions">
       <button class="btn warn" data-approve="${esc(a.id)}">${ICON.check} Разрешить</button>
       <button class="btn ghost" data-deny="${esc(a.id)}">Отклонить</button>
+      ${a.tool_id === "trust_rule_add" ? "" : `<span class="faint voice-hint">${ICON.mic} или скажите «да» / «нет»</span>`}
       <details style="flex-basis:100%"><summary class="faint" style="cursor:pointer;font-size:12px">Точные параметры</summary>
         <pre style="font-size:11.5px;color:var(--text-2);white-space:pre-wrap">${esc(JSON.stringify(a.args, null, 2))}</pre></details>
       ${s.session_grant_allowed ? `<label class="remember"><input type="checkbox" data-remember> Не спрашивать до перезапуска</label>` : ""}

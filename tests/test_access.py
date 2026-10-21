@@ -74,13 +74,62 @@ async def test_message_to_self_needs_no_question_but_others_do(core, hub):
     await wait_done(core, t)
 
 
-async def test_voice_yes_answers_any_confirmation_in_full_access(core):
-    core.director.set_access("full")
-    assert core.director.voice_approvable("claude_code_change")
-    assert not core.director.voice_approvable("trust_rule_add")    # durable permission changes: click only
+async def test_voice_answers_any_confirmation_except_durable_permissions(core):
+    for level in ("full", "standard"):
+        core.director.set_access(level)
+        assert core.director.voice_approvable("claude_code_change") and core.director.voice_approvable("create_note")
+        assert core.director.voice_approvable("message_send")
+        assert not core.director.voice_approvable("trust_rule_add")    # durable permission changes: click only
+
+
+async def _note_waiting(core, text="запиши заметку: купить молоко"):
+    from conftest import wait_for
+    tid = await core.director.submit(text)
+    await wait_for(lambda: any(a["task_id"] == tid for a in core.director.approvals.pending()))
+    return tid
+
+
+async def test_spoken_razreshayu_approves_the_waiting_action(core):
+    from conftest import wait_for
     core.director.set_access("standard")
-    assert not core.director.voice_approvable("claude_code_change")
-    assert core.director.voice_approvable("message_send")
+    tid = await _note_waiting(core)
+    assert await core.director.submit("Разрешаю.", "voice") == tid
+    await wait_for(lambda: core.tasks.get(tid)["state"] == "completed")
+    assert not [t for t in core.tasks.recent(10) if t["request"].startswith("Разрешаю")]   # not a new request
+
+
+async def test_spoken_ne_razreshayu_denies(core):
+    from conftest import wait_for
+    tid = await _note_waiting(core)
+    await core.director.submit("Нет, не разрешаю", "voice")
+    await wait_for(lambda: core.tasks.get(tid)["state"] in ("completed", "cancelled", "failed"))
+    assert not any(a["task_id"] == tid for a in core.director.approvals.pending())
+    assert core.db.one("SELECT status FROM approvals WHERE task_id=?", (tid,))["status"] == "denied"
+
+
+async def test_two_waiting_actions_are_never_picked_at_random(core):
+    t1 = await _note_waiting(core, "запиши заметку: первая")
+    t2 = await _note_waiting(core, "запиши заметку: вторая")
+    assert await core.director.submit("да", "voice") == ""
+    assert {a["task_id"] for a in core.director.approvals.pending()} == {t1, t2}
+    assert "несколько действий" in core.director.messages(core.director.conversation_id())[-1]["text"]
+
+
+async def test_bearer_api_cannot_answer_confirmations(core):
+    """The local API (scripts, `jarvis say`) can never pretend to be the window and say «да»."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from jarvis.server import Server
+    tid = await _note_waiting(core)
+    srv = Server(core)
+    tc = TestClient(TestServer(srv.app, port=core.config.port))
+    await tc.start_server()
+    try:
+        r = await tc.post("/api/submit", json={"text": "да", "source": "voice"},
+                          headers={"Host": f"127.0.0.1:{core.config.port}", "Authorization": f"Bearer {srv.token}"})
+        assert r.status == 200
+        assert any(a["task_id"] == tid for a in core.director.approvals.pending())      # still waiting
+    finally:
+        await tc.close()
 
 
 def _self_search(p):

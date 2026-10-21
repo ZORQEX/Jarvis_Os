@@ -72,6 +72,10 @@ class Config:
     claude_chat_model: str = "claude-sonnet-5-5"
     # Short structured jobs (reading a message command into JSON, planning): the fastest model.
     claude_fast_model: str = "claude-haiku-5-5"
+    # Spoken answers: the same conversation, switched to the fast model for voice turns. Measured 30 questions:
+    # Haiku 0.9–1.9 s to first words, never stalled; Sonnet ~1.0 s typical but 4–10 s stalls in 1–4 of 10 answers.
+    # Settings → Голос can switch voice back to the main model («подробнее, но иногда дольше»).
+    claude_voice_model: str = "claude-haiku-5-5"
     # Claude Code as the computer/code executor: empty model = the CLI's own default
     claude_model: str = ""
     claude_budget_usd: float = 2.0

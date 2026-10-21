@@ -94,6 +94,13 @@ MIGRATIONS: list[str] = [
         id TEXT PRIMARY KEY, channel TEXT NOT NULL, to_id TEXT NOT NULL, to_name TEXT NOT NULL,
         created_at REAL NOT NULL, revoked_at REAL);
     """,
+    # 7 — action history: only lasting changes on the computer (sites, code, files, programs, notes)
+    """
+    CREATE TABLE actions(
+        id TEXT PRIMARY KEY, task_id TEXT UNIQUE, created_at REAL NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('done','failed')), summary TEXT, folder TEXT, files TEXT, details TEXT);
+    CREATE INDEX actions_time ON actions(created_at DESC);
+    """,
 ]
 
 

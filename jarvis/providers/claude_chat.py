@@ -103,6 +103,8 @@ class ClaudeChatProvider(AIProvider):
         self.session_turns = 0
         self.conversation: str | None = None
         self.model = config.claude_chat_model
+        self.active_model = config.claude_chat_model    # the model the running process answers with now
+        self._ctl: dict[str, asyncio.Future] = {}       # control requests waiting for Claude's confirmation
         self.current_execute = None              # the active task's executor for MCP tool calls
         self.logged_in: bool | None = None
         self.last_error: str | None = None
@@ -142,6 +144,29 @@ class ClaudeChatProvider(AIProvider):
                 self.last_error, self.last_error_kind = str(e), e.kind
         return self.describe()
 
+    def voice_model(self) -> str:
+        """Model for spoken turns: fast by default; the user can choose the main model in Settings → Голос."""
+        pref = (self.db.get_kv("voice_ai_model") if self.db else None) or "fast"
+        return self.config.claude_chat_model if pref == "quality" else self.config.claude_voice_model
+
+    async def _set_model(self, model: str) -> bool:
+        """Switch the running conversation to another model; the context stays (Claude Code control request)."""
+        rid = f"model{time.time_ns()}"
+        fut = asyncio.get_running_loop().create_future()
+        self._ctl[rid] = fut
+        try:
+            req = {"type": "control_request", "request_id": rid, "request": {"subtype": "set_model", "model": model}}
+            self.proc.stdin.write((json.dumps(req) + "\n").encode())
+            await self.proc.stdin.drain()
+            resp = await asyncio.wait_for(fut, 5)
+        except (asyncio.TimeoutError, OSError, RuntimeError):
+            self._ctl.pop(rid, None)
+            return False
+        if resp.get("subtype") == "success":
+            self.active_model = model
+            return True
+        return False
+
     def model_for(self, cap: Cap) -> str:
         return self.config.claude_fast_model if cap == Cap.PLANNING else self.model
 
@@ -150,6 +175,7 @@ class ClaudeChatProvider(AIProvider):
                 "auth": "Вход Claude Code на этом компьютере (подписка Claude)", "logged_in": self.logged_in,
                 "last_error": self.last_error, "checked_at": self.checked_at,
                 "models": [{"id": self.config.claude_chat_model, "role": "беседа"},
+                           {"id": self.voice_model(), "role": "ответы голосом"},
                            {"id": self.config.claude_fast_model, "role": "разбор команд"}],
                 "session": {"running": bool(self.proc and self.proc.returncode is None), "turns": self.session_turns}}
 
@@ -194,6 +220,7 @@ class ClaudeChatProvider(AIProvider):
                                                          stderr=asyncio.subprocess.DEVNULL, start_new_session=True,
                                                          limit=16 * 1024 * 1024)
         self.session_turns = 0
+        self.active_model = self.model                # a fresh process answers with the main model
         self.reader = asyncio.create_task(self._read(self.proc), name="claude-chat-reader")
 
     async def _read(self, proc) -> None:
@@ -209,7 +236,13 @@ class ClaudeChatProvider(AIProvider):
                 ev["turn_cost_usd"] = round(max(0.0, ev["total_cost_usd"] - prev), 6)
                 proc.jarvis_cost = ev["total_cost_usd"]
             if t == "system" and ev.get("subtype") == "init":
-                self.model = ev.get("model") or self.model
+                self.active_model = ev.get("model") or self.active_model
+            if t == "control_response":
+                resp = ev.get("response") or {}
+                fut = self._ctl.pop(str(resp.get("request_id")), None)
+                if fut and not fut.done():
+                    fut.set_result(resp)
+                continue
             if turn is None or turn.proc is not proc:
                 continue          # output of an old (restarted) process never touches the current question
             if t == "stream_event":
@@ -256,13 +289,15 @@ class ClaudeChatProvider(AIProvider):
     async def stop(self) -> None:
         await self._stop()
 
-    async def _send(self, text: str, on_delta=None, on_tool=None, timeout: float = 600) -> _Turn:
+    async def _send(self, text: str, on_delta=None, on_tool=None, timeout: float = 600, model: str | None = None) -> _Turn:
         """One question at a time. On cancel («стоп»), the lock is handed to a cleanup task that releases it only when
         Claude has confirmed the interruption — so the next question never mixes with the old answer."""
         await self.lock.acquire()
         handed_off = False
         try:
             await self._start()
+            if model and model != self.active_model:
+                await self._set_model(model)          # voice ↔ text: same conversation, other model
             turn = self.turn = _Turn(on_delta, on_tool, self.proc)
             msg = {"type": "user", "message": {"role": "user", "content": text}}
             self.proc.stdin.write((json.dumps(msg, ensure_ascii=False) + "\n").encode())
@@ -309,6 +344,7 @@ class ClaudeChatProvider(AIProvider):
                 await self._stop()                     # a new conversation starts with a clean context
         self.conversation = conversation
         prefix = "[голос] " if role == "voice" else ""
+        want = self.voice_model() if role == "voice" else self.config.claude_chat_model
         text = prefix + user_text
         if self.session_turns == 0 and (history or "Ранее в этом разговоре:" in (system or "")):
             recent = "\n".join(f"{'Пользователь' if m['role'] == 'user' else 'JARVIS'}: {m['text'][:600]}"
@@ -326,12 +362,12 @@ class ClaudeChatProvider(AIProvider):
             if thinking:
                 thinking(True)
         try:
-            turn = await self._send(text, on_delta, on_tool)
+            turn = await self._send(text, on_delta, on_tool, model=want)
             res = turn.result or {}
             if res.get("result") == "Claude Code остановился" and not turn.text and not turn.tools:
                 # The process died before answering (crash, killed, update): start a fresh one and ask once more.
                 await self._stop()
-                turn = await self._send(text, on_delta, on_tool)
+                turn = await self._send(text, on_delta, on_tool, model=want)
         finally:
             self.current_execute = None
             if thinking:
@@ -346,7 +382,7 @@ class ClaudeChatProvider(AIProvider):
         self.status, self.last_error, self.last_error_kind = "ready", None, None
         usage = res.get("usage") or {}
         final = turn.text.strip() or str(res.get("result") or "").strip()
-        return GenResult(final, "claude", self.model, [], usage_of(usage),
+        return GenResult(final, "claude", self.active_model, [], usage_of(usage),
                          res.get("turn_cost_usd"), turn.first_ms, (time.perf_counter() - t0) * 1000,
                          {"rounds": len(turn.tools), "tools_used": turn.tools})
 

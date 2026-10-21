@@ -1,6 +1,6 @@
 # Test matrix — milestone 1 + Flora (2026-10-20)
 
-Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 227 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
+Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 241 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -129,4 +129,19 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Real sends after the audit | VERIFIED LIVE (to self) | Telegram №168012; e-mail found in «Отправленные»; WhatsApp «прочитано»; schedule + cancel by command |
 | Reminder fires on time; STRICT_OFFLINE blocks Claude, local commands work | VERIFIED LIVE (dev JARVIS) | «через 1 минуту» fired at the minute; offline: windows list answered locally |
 | UI scenarios | VERIFIED LOCAL | drive.mjs smoke, approval-deny, view, flora, comms, commsqr, two, voiceui, agency → 0 console errors |
+
+## Action history, voice confirmations, speed (2026-10-22)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Request history removed from the window («Задачи» view, «Недавно» list) | VERIFIED LOCAL | drive.mjs smoke: `#recentTasks` absent, 0 console errors |
+| «История действий»: only lasting changes (Claude Code changes — sites, code, files, installs; notes) with folder, files, result, time, cost; messages, volume, windows, questions are not kept | VERIFIED LOCAL + LIVE (dev JARVIS) | test_history.py (7); smoke: only the note listed; drive.mjs two: «…сохрани результаты в отдельный файл» listed with the new file |
+| Entry removal keeps files; existing tasks back-filled once | VERIFIED LOCAL | test_deleting_an_entry_keeps_the_files; backfill on start |
+| Any confirmation by voice («да», «разрешаю», «выполняй», «можно»… / «нет», «не разрешаю», «отклонить»…); trusted-send rules stay click-only | VERIFIED LOCAL | test_access.py; real STT of 10 synthetic answers → 10/10 understood |
+| Two waiting actions: a bare «да» picks none and says so | VERIFIED LOCAL | test_two_waiting_actions_are_never_picked_at_random |
+| Bearer API cannot pose as the window to answer confirmations | VERIFIED LOCAL | test_bearer_api_cannot_answer_confirmations (was possible via `source`) |
+| Single-phrase mic stays open while JARVIS waits for an answer (≤45 s) | IMPLEMENTED (browser logic) | voice.js `holdOpen` |
+| Spoken answers on the fast model in the same conversation (Settings → Голос → «Быстро / Подробнее») | VERIFIED LIVE | context kept across switch; Haiku 30 answers 0.9–1.9 s, no stalls; Sonnet stalls 4–10 s in 1–4 of 10 |
+| Early end of phrase: recognised after 0.6 s of silence, finished phrases answered at once, cut-off ones wait | VERIFIED LOCAL + browser | transcript ready 0.78 s after speech end (was ~1.6 s); test_voice.py probe tests; drive.mjs voiceui 0 errors |
+| Open window reloads itself when JARVIS restarts with a new interface | VERIFIED LOCAL | `ui_build` in snapshot |
 

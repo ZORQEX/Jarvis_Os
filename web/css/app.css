@@ -156,7 +156,7 @@ button.chip:hover { color: var(--text); }
 .icon-btn:disabled:hover { background: none; }
 
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.view-tasks, .view-settings, .view-flora, .view-comms { overflow-y: auto; }
+.view-history, .view-settings, .view-flora, .view-comms { overflow-y: auto; }
 
 /* ---------------------------------------------------------------- thread */
 .scroller { flex: 1; overflow-y: auto; scroll-behavior: smooth; overscroll-behavior: contain; }
@@ -300,6 +300,8 @@ button.row:hover { background: var(--surface-2); }
   border: 1px solid var(--line-2); background: var(--surface); resize: vertical; outline: 0;
 }
 .approval .actions { display: flex; gap: var(--s2); padding: 12px 14px 14px; align-items: center; flex-wrap: wrap; }
+.approval .voice-hint { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; }
+.approval .voice-hint svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .approval .remember { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--text-2); margin-left: auto; }
 .decision { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); padding: 0 2px; }
 .decision svg { width: 15px; height: 15px; }
@@ -394,6 +396,34 @@ button.row:hover { background: var(--surface-2); }
 .history-row:first-child { border-top: 0; }
 .history-row:hover { background: var(--surface-2); }
 .history-row .when { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* action history */
+.action-day { display: flex; flex-direction: column; gap: var(--s2); }
+.action-day h2 { font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; margin: var(--s2) 0 0; }
+.action { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--s4) var(--s5); display: flex; flex-direction: column; gap: var(--s2); }
+.action.failed { border-color: var(--err-soft); }
+.action-head { display: grid; grid-template-columns: auto 1fr auto; gap: var(--s3); align-items: start; }
+.action-icon { width: 32px; height: 32px; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.action.failed .action-icon { background: var(--err-soft); color: var(--err); }
+.action-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.action-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.action-title b { font-weight: 600; font-size: 14.5px; overflow-wrap: anywhere; }
+.action-title span { color: var(--text-3); font-size: 12px; }
+.action-del { opacity: .55; }
+.action-del:hover { opacity: 1; }
+.action-sum { margin: 0; color: var(--text-2); font-size: 13.5px; line-height: 1.5; }
+.action-err { margin: 0; color: var(--err); font-size: 13px; }
+.action-files { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.action-files code { font-family: var(--mono); font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); overflow-wrap: anywhere; }
+.action-files span { color: var(--text-3); font-size: 12px; }
+.action-foot { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.action-folder { display: inline-flex; align-items: flex-start; gap: 6px; max-width: 100%; text-align: left; padding: 4px 8px; margin-left: -8px;
+  border-radius: var(--r-sm); color: var(--text-2); font-size: 12.5px; }
+.action-folder:hover { background: var(--surface-2); color: var(--text); }
+.action-folder span { overflow-wrap: anywhere; }
+.action-folder svg { width: 15px; height: 15px; flex: none; margin-top: 1px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.action-files code.new { border-color: var(--ok-soft); }
+.action-files code.del { text-decoration: line-through; color: var(--text-3); }
+.action-meta { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; margin-left: auto; }
 .demo-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 
 /* ---------------------------------------------------------------- toasts */

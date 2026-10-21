@@ -17,7 +17,12 @@ export class Voice {
     this.speakReplies = localStorage.getItem("jarvis.speak") === "1";
     // Pause that ends a phrase. 0.65 s cut the user off mid-command («Отправь» / «в Телеграме» / …): now 1.3 s.
     this.silenceMs = +(localStorage.getItem("jarvis.silenceMs2") || 1300);
+    // Early end of phrase: after this pause the phrase is recognised already; a clearly finished one is answered
+    // at once, a cut-off one («Отправь маме в…») still waits the full pause (saves ~0.7 s per answer).
+    this.earlyMs = 600;
+    this.probe = null; this.voiceFrames = 0;
     this.closeWhenQuiet = false;  // mic button: stay open while JARVIS answers, so it can be interrupted
+    this.holdOpen = () => false;  // set by the app: JARVIS waits for the user's answer («да» / «нет», a question)
     this.lastAudioEnd = 0;
     this.supported = !!(navigator.mediaDevices?.getUserMedia && window.AudioWorkletNode);
     this.state = null;  // null | listening | recording | transcribing | synthesizing | speaking | interrupted | error
@@ -37,6 +42,7 @@ export class Voice {
 
   resetVad() {
     this.floor = 0.004; this.voiced = 0; this.silent = 0; this.seg = null; this.preroll = []; this.segStart = 0;
+    this.probe = null; this.voiceFrames = 0;
   }
 
   setMuted(m) {
@@ -102,7 +108,9 @@ export class Voice {
     const thr = Math.max(0.012, this.floor * 3.2) * (speaking ? 1.7 : 1);
     const need = speaking ? 10 : 4;          // frames of voice to start (200 ms / 80 ms)
     setLevel(Math.min(1, rms * 8));
-    if (!this.seg && this.closeWhenQuiet && !speaking && this.state !== "transcribing" && this.state !== "synthesizing"
+    // While JARVIS waits for an answer the single-phrase mic stays open (up to 45 s), so «да» is never too late.
+    const waiting = this.holdOpen() && now() - this.idleSince < 45000;
+    if (!this.seg && this.closeWhenQuiet && !speaking && !waiting && this.state !== "transcribing" && this.state !== "synthesizing"
         && now() - this.idleSince > 6000 && now() - this.lastAudioEnd > 2000) {
       this.closeWhenQuiet = false; this.closeMic(); return;   // answer finished: the single-phrase mic turns off
     }
@@ -117,9 +125,11 @@ export class Voice {
       return;
     }
     this.seg.push(pcm);
-    if (rms > thr * 0.7) this.silent = 0; else this.silent += 20;
+    if (rms > thr * 0.7) { this.silent = 0; this.voiceFrames++; } else this.silent += 20;
     const dur = this.seg.length * 20;
-    if ((this.silent >= this.silenceMs && dur > 300) || dur > 30000) this.endSegment();
+    if ((this.silent >= this.silenceMs && dur > 300) || dur > 30000) { this.endSegment(); return; }
+    const early = Math.min(this.earlyMs, this.silenceMs - 400);
+    if (!this.probe && early >= 300 && this.silent >= early && dur - this.silent >= 400) this.startProbe();
   }
 
   startSegment() {
@@ -132,19 +142,36 @@ export class Voice {
     this.link.request("voice.warm").catch(() => {});        // warm the cloud connection while the user speaks
   }
 
-  async endSegment() {
+  // Recognise the phrase during the pause. The user may go on talking: then the probe is simply dropped.
+  startProbe() {
+    const seg = this.seg, mark = this.voiceFrames;
+    const probe = this.probe = { seg, mark, id: null, complete: false, speechEnd: now() - this.silent };
+    b64(encodeWav(seg.slice(0))).then((audio) => this.link.request("voice.probe", { audio_b64: audio, mime: "audio/wav" }, 15000))
+      .then((r) => {
+        probe.id = r.probe_id; probe.complete = !!r.complete;
+        // Still the same phrase, nothing said since, and the phrase is finished: answer now.
+        if (this.seg === seg && this.voiceFrames === mark && probe.complete) this.endSegment(probe);
+      })
+      .catch(() => { probe.failed = true; });
+  }
+
+  async endSegment(viaProbe = null) {
     const frames = this.seg; this.seg = null; this.voiced = 0;
-    const speechEnd = now() - this.silent;
+    const probe = this.probe; this.probe = null;
+    const speechEnd = viaProbe ? viaProbe.speechEnd : now() - this.silent;
     const voicedMs = frames.length * 20 - this.silent;
-    if (voicedMs < 250) { this.set("listening"); return; }
-    const wav = encodeWav(frames);
+    if (!viaProbe && voicedMs < 250) { this.set("listening"); return; }
+    // The probe already recognised exactly this phrase (no voice since): reuse it instead of a second recognition.
+    const reuse = probe && probe.id && probe.seg === frames && probe.mark === this.voiceFrames ? probe.id : null;
+    this.voiceFrames = 0;
     this.idleSince = now();
     if (this.once && !this.conversation) { this.once = false; this.closeWhenQuiet = true; }
     this.set("transcribing");
+    const times = { speech_start: this.segStart / 1000, speech_end: speechEnd / 1000 };
     try {
-      const r = await this.link.request("voice.transcribe", {
-        audio_b64: await b64(wav), mime: "audio/wav", speech_start: this.segStart / 1000, speech_end: speechEnd / 1000,
-      }, 45000);
+      let r = null;
+      if (reuse) r = await this.link.request("voice.commit", { probe_id: reuse, ...times }, 45000).catch(() => null);
+      if (!r) r = await this.link.request("voice.transcribe", { audio_b64: await b64(encodeWav(frames)), mime: "audio/wav", ...times }, 45000);
       if (r.task_id && r.turn) this.turnOf.set(r.task_id, r.turn);
       if (r.turn) this.turnOf.set("notice-" + r.turn, r.turn);
       this.onTurn(r);

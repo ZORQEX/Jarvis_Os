@@ -18,9 +18,16 @@ PLATFORMS = {"telegram": r"телеграм\w*|телеграмм\w*|телег[
              "whatsapp": r"ват[сц]ап\w*|вотсап\w*|вацап\w*|whats ?app|ватс ап",
              "email": r"почт\w*|письм\w*|e-?mail|имейл\w*|емейл\w*|мейл\w*|электронк\w*"}
 ORD = {"перв": 1, "втор": 2, "трет": 3, "четв": 4, "пят": 5, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5}
-YES = r"(да|ага|угу|давай|конечно|верно|подтверждаю|отправляй|отправь|отправляем|запланируй|планируй|ок|окей|хорошо|yes|да,? отправляй|да,? давай)"
-NO = r"(нет|не надо|не отправляй|не нужно|отмена|отмени|отменить|стой|no)"
-VOICE_APPROVABLE = {"message_send"}
+# Spoken answers to «Нужно ваше решение…». A whole short phrase must match (never part of a longer command).
+_YES_W = (r"да|ага|угу|давай|конечно|верно|точно|подтверждаю|подтвердить|подтверди|отправляй|отправь|отправляем|"
+          r"запланируй|планируй|ок|окей|хорошо|ладно|разрешаю|разреши|разрешить|разрешено|одобряю|одобрить|одобри|"
+          r"выполняй|выполни|выполнить|делай|сделай|можно|запускай|запусти|поехали|вперед|согласен|согласна|"
+          r"принято|действуй|yes|okay|go")
+_NO_W = (r"нет|не надо|не отправляй|не нужно|не делай|не разрешаю|не разрешать|запрещаю|запретить|отклоняю|отклонить|"
+         r"отклони|отказ|отказываюсь|отбой|нельзя|отмена|отмени|отменить|стой|no")
+YES = rf"((да|ну|так)[, ]+)?({_YES_W})([, ]+({_YES_W}))?"
+NO = rf"((нет|ну)[, ]+)?({_NO_W})([, ]+({_NO_W}))?"
+CLICK_ONLY = {"trust_rule_add"}      # durable permission changes are confirmed by a click only, never by voice
 
 SCHEMA = {
     "type": "object",
@@ -185,10 +192,12 @@ def parse_platform(text: str) -> str | None:
 def yes_no(text: str) -> bool | None:
     from ..router import strip_wake
     t = re.sub(r"[^\w\s,]", "", strip_wake(text).lower().replace("ё", "е")).strip()
-    if re.fullmatch(YES + r"(,?\s*(пожалуйста|спасибо|джарвис))?", t):
-        return True
-    if re.fullmatch(NO + r"(,?\s*(пожалуйста|спасибо|джарвис))?", t):
+    t = re.sub(r"\s+", " ", t)
+    tail = r"(,?\s*(пожалуйста|спасибо|джарвис))?"
+    if re.fullmatch(NO + tail, t):           # «нет, не надо» / «не разрешаю» — checked first: «не …» is never a yes
         return False
+    if re.fullmatch(YES + tail, t):
+        return True
     return None
 
 

@@ -19,6 +19,20 @@ from .app import Core, build
 from .events import redact, spawn
 
 WEB = Path(__file__).resolve().parent.parent / "web"
+
+
+def _ui_build() -> str:
+    """Fingerprint of the window's files: an open window reloads itself when JARVIS restarts with a new interface."""
+    import hashlib
+    h = hashlib.sha256()
+    for f in sorted(WEB.rglob("*")):
+        if f.is_file():
+            st = f.stat()
+            h.update(f"{f.relative_to(WEB)}:{st.st_size}:{st.st_mtime_ns}".encode())
+    return h.hexdigest()[:12]
+
+
+UI_BUILD = _ui_build()
 COOKIE = "jarvis_session"
 UI_TOOLS = {"open_path", "open_url"}
 KEY_PROVIDERS: dict[str, str] = {}      # no API keys: the AI is Claude through the local Claude Code sign-in
@@ -163,10 +177,8 @@ class Server:
         except Exception:   # noqa: BLE001
             return False
 
-    async def _voice_turn(self, data: dict) -> dict:
-        """One spoken request: STT → Director (same path as typed text) → streamed speech."""
-        d = self.core.director
-        local = getattr(d, "stt", None)
+    def _voice_audio(self, data: dict) -> bytes:
+        local = getattr(self.core.director, "stt", None)
         if not (local and local.available()):
             raise ValueError("Распознавание речи не установлено (scripts/install.sh — GigaAM, на этом компьютере)")
         audio = base64.b64decode(data.get("audio_b64", ""), validate=True)
@@ -175,14 +187,20 @@ class Server:
         mime = str(data.get("mime", "audio/wav")).split(";")[0]
         if mime not in ("audio/webm", "audio/ogg", "audio/wav", "audio/mp4"):
             raise ValueError("Неподдерживаемый формат записи")
+        if mime != "audio/wav":
+            raise ValueError("Не удалось распознать речь: нужна запись WAV")
+        return audio
+
+    async def _voice_turn(self, data: dict) -> dict:
+        """One spoken request: STT → Director (same path as typed text) → streamed speech."""
+        d = self.core.director
+        local = d.stt
+        audio = self._voice_audio(data)
         sp = d.speech
         turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
         if sp:
             sp.mark(turn, "stt_start")
-        stt_model = local.name
         try:
-            if mime != "audio/wav":
-                raise ValueError("нужна запись WAV")
             text = await local.transcribe(audio)          # on this computer: no internet, no quota
         except Exception as e:   # noqa: BLE001
             if sp:
@@ -191,8 +209,40 @@ class Server:
             raise ValueError("Не удалось распознать речь: " + str(e)[:150]) from None
         if sp:
             sp.mark(turn, "stt_end")
-            sp.annotate(turn, stt_model=stt_model, transcript=text)
-        self.core.audit.write("voice.transcribed", bytes=len(audio), chars=len(text), turn=turn)
+        return await self._after_stt(text, turn, len(audio), data)
+
+    async def _voice_probe(self, data: dict) -> dict:
+        """Early end of phrase: transcribe after a short pause (0.6 s). If the phrase is clearly complete the window
+        commits it at once (saves the rest of the 1.3 s wait); a cut-off phrase («Отправь маме в…») keeps waiting."""
+        audio = self._voice_audio(data)
+        t0 = time.time()
+        text = await self.core.director.stt.transcribe(audio)
+        frag = getattr(self, "_fragment", None)
+        joined = (frag[0] + " " + text) if frag and time.time() - frag[1] < FRAGMENT_TTL_S else text
+        pid = pysecrets.token_hex(8)
+        now_ = time.time()
+        self._probes = {k: v for k, v in getattr(self, "_probes", {}).items() if now_ - v["at"] < 30}
+        self._probes[pid] = {"text": text, "stt_start": t0, "stt_end": now_, "at": now_, "bytes": len(audio)}
+        return {"probe_id": pid, "complete": phrase_complete(joined), "chars": len(text)}
+
+    async def _voice_commit(self, data: dict) -> dict:
+        """The window confirms a probe: the user stayed silent, so its transcript is the phrase (no second STT)."""
+        pr = getattr(self, "_probes", {}).pop(str(data.get("probe_id")), None)
+        if not pr:
+            raise ValueError("probe expired")
+        sp = self.core.director.speech
+        turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
+        if sp:
+            sp.mark(turn, "stt_start", pr["stt_start"])
+            sp.mark(turn, "stt_end", pr["stt_end"])
+        return await self._after_stt(pr["text"], turn, pr["bytes"], data)
+
+    async def _after_stt(self, text: str, turn: str | None, nbytes: int, data: dict) -> dict:
+        d = self.core.director
+        sp = d.speech
+        if sp:
+            sp.annotate(turn, stt_model=d.stt.name, transcript=text)
+        self.core.audit.write("voice.transcribed", bytes=nbytes, chars=len(text), turn=turn)
         if not text.strip():
             if sp:
                 from .voice.tts import NOT_HEARD
@@ -332,8 +382,9 @@ class Server:
 
     async def api_submit(self, req):
         body = await req.json()
-        tid = await self.core.director.submit(str(body.get("text", "")), source=body.get("source", "api"),
-                                              speak=bool(body.get("speak")))
+        # The bearer API can never act as the window («voice» / «text» answer confirmations): only api / cli.
+        src = body.get("source") if body.get("source") in ("api", "cli") else "api"
+        tid = await self.core.director.submit(str(body.get("text", "")), source=src, speak=bool(body.get("speak")))
         return web.json_response({"ok": True, "task_id": tid})
 
     # ------------------------------------------------------------------ websocket
@@ -341,7 +392,7 @@ class Server:
         ws = web.WebSocketResponse(heartbeat=20, max_msg_size=12 * 1024 * 1024)
         await ws.prepare(req)
         self.sockets.add(ws)
-        await ws.send_str(json.dumps({"type": "snapshot", "data": self.core.director.snapshot()},
+        await ws.send_str(json.dumps({"type": "snapshot", "data": {**self.core.director.snapshot(), "ui_build": UI_BUILD}},
                                      ensure_ascii=False, default=str))
         try:
             async for msg in ws:
@@ -362,7 +413,9 @@ class Server:
         ok = bool(getattr(eng, "silero", None) and eng.silero.available())
         return {"voices": [{**v, "available": ok} for v in VOICES], "current": getattr(eng, "voice_id", None),
                 "rate": getattr(eng, "rate", 1.0), "installed": ok,
-                "last_engine": getattr(eng, "last_engine", None), "last_fallback": getattr(eng, "last_fallback", None)}
+                "last_engine": getattr(eng, "last_engine", None), "last_fallback": getattr(eng, "last_fallback", None),
+                "ai_model": self.core.db.get_kv("voice_ai_model") or "fast",
+                "ai_models": {"fast": self.core.config.claude_voice_model, "quality": self.core.config.claude_chat_model}}
 
     async def _voice_preview(self, vid: str, tid: str) -> None:
         """Speak a sample in any voice without changing the chosen one."""
@@ -416,6 +469,10 @@ class Server:
                 res = {"session_grants": sorted(self.core.policy.session_grants)}
             elif typ == "voice.transcribe":
                 res = await self._voice_turn(data)
+            elif typ == "voice.probe":
+                res = await self._voice_probe(data)
+            elif typ == "voice.commit":
+                res = await self._voice_commit(data)
             elif typ == "voice.interrupt":
                 res = {"message": await d.control("interrupt")}
             elif typ == "voice.metric":
@@ -433,6 +490,12 @@ class Server:
                 res = {"task_id": tid}
             elif typ == "voice.voices":
                 res = self._voices()
+            elif typ == "voice.ai_model":         # which Claude model answers spoken questions
+                pref = data.get("pref")
+                if pref not in ("fast", "quality"):
+                    raise ValueError("Неизвестный режим")
+                self.core.db.set_kv("voice_ai_model", pref)
+                res = {"ai_model": pref}
             elif typ == "voice.set":
                 from .voice.tts import voice_info
                 eng = d.speech.engine if d.speech else None
@@ -462,6 +525,10 @@ class Server:
                 res = {"task_id": await d.run_ui_tool(data["tool"], dict(data.get("args") or {}))}
             elif typ == "tasks.list":
                 res = self.core.tasks.recent(min(200, int(data.get("limit", 50))))
+            elif typ == "history.list":          # action history: lasting changes only
+                res = d.history.list(int(data.get("limit", 100)))
+            elif typ == "history.delete":        # removes the entry only; files on disk stay as they are
+                res = {"deleted": d.history.delete(str(data.get("id", "")))}
             elif typ == "agency.state":
                 res = {"providers": d.providers.describe()}
             elif typ == "agency.settings":
@@ -512,7 +579,9 @@ class Server:
 FRAGMENT_TTL_S = 15.0
 _DANGLING = {"в", "во", "на", "и", "а", "но", "или", "что", "чтобы", "для", "к", "ко", "по", "с", "со", "у", "о", "об",
              "мне", "ему", "ей", "моей", "моему", "моим", "контакту", "сообщение", "письмо", "текст", "который", "которая",
-             "это", "этому", "этой", "про", "потом", "затем", "ещё", "еще", "также", "the", "to", "and"}
+             "это", "этому", "этой", "про", "потом", "затем", "ещё", "еще", "также", "через", "до", "после", "из", "от",
+             "за", "под", "над", "при", "без", "около", "как", "где", "когда", "если", "потому", "чем", "ли", "либо",
+             "нибудь", "мой", "моя", "мое", "моё", "мои", "мою", "моих", "свой", "свою", "свои", "the", "to", "and"}
 _VERB_ONLY = re.compile(r"(джарвис\s*)?(отправь|напиши|пошли|скажи|сообщи|передай|запланируй|напомни|открой|найди)"
                         r"(\s+(сообщение|письмо|мне|ему|ей|в|на))?")
 
@@ -528,6 +597,24 @@ def is_fragment(text: str) -> bool:
         return True
     words = t.split()
     return bool(words) and words[-1] in _DANGLING and len(words) < 25
+
+
+_SEND_VERB = re.compile(r"^(джарвис[\s,]*)?(отправь|напиши|пошли|скажи|сообщи|передай|черкни|ответь)\b", re.I)
+
+
+def phrase_complete(text: str) -> bool:
+    """Is a phrase clearly finished after a short pause? Only then the window answers without the full wait.
+    Conservative: cut-off phrases, a bare wake word and message commands without the text keep waiting."""
+    from .comms.agent import local_parse
+    from .router import strip_wake
+    t = (text or "").strip()
+    if not t or is_fragment(t) or not re.search(r"\w", strip_wake(t) or ""):
+        return False
+    if not t.endswith((".", "?", "!", "…")):
+        return False
+    if _SEND_VERB.match(t) and ":" not in t and not local_parse(t):
+        return False                       # «Отправь маме в Телеграм» — the message itself may follow
+    return True
 
 
 COMMS_UI = {"comms.state", "comms.telegram.begin", "comms.telegram.finish", "comms.telegram.logout",

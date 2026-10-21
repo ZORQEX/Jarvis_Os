@@ -48,9 +48,11 @@ if (scenario === "smoke") {
   await say("какие окна открыты", 1000);
   await say("расскажи о погоде", 1000);
   await shot("06-more");
-  await page.click('[data-nav="tasks"]');
+  await page.click('[data-nav="history"]');
   await page.waitForTimeout(600);
-  await shot("07-tasks");
+  timings.history = await page.$$eval(".action .action-title b", (els) => els.map((e) => e.textContent));
+  timings.recent_list_present = !!(await page.$("#recentTasks"));
+  await shot("07-history");
   await page.click('[data-nav="settings"]');
   await page.waitForTimeout(400);
   await shot("08-settings");

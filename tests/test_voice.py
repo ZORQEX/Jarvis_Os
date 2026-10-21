@@ -447,3 +447,56 @@ def test_piper_creates_no_temp_dir_until_used(tmp_path):
     before = set(Path(tempfile.gettempdir()).glob("jarvis-tts-*"))
     PiperTTS(home=tmp_path)
     assert set(Path(tempfile.gettempdir()).glob("jarvis-tts-*")) == before
+
+
+class _SeqSTT:
+    name = "gigaam-test"
+
+    def __init__(self, *texts):
+        self.texts, self.calls = list(texts), 0
+
+    def available(self):
+        return True
+
+    async def transcribe(self, wav):
+        self.calls += 1
+        return self.texts.pop(0)
+
+
+def _wav_b64():
+    import base64 as b64
+    return b64.b64encode(b"RIFF" + b"\0" * 4000).decode()
+
+
+async def test_finished_phrase_is_answered_after_a_short_pause_with_one_recognition(core):
+    from jarvis.server import Server
+    stt = core.director.stt = _SeqSTT("Сколько будет 2 плюс 2?")
+    srv = Server(core)
+    p = await srv._voice_probe({"audio_b64": _wav_b64(), "mime": "audio/wav"})
+    assert p["complete"] is True
+    r = await srv._voice_commit({"probe_id": p["probe_id"], "speech_start": 1.0, "speech_end": 2.0})
+    assert r["task_id"] and stt.calls == 1                     # the probe's transcript is reused, no second STT
+    await wait_done(core, r["task_id"])
+    t = core.director.speech.turns(1)[0] if core.director.speech else None
+    if t:
+        assert t["transcript"] == "Сколько будет 2 плюс 2?" and t["stt_end"]
+
+
+async def test_cut_off_phrase_waits_for_the_full_pause(core):
+    from jarvis.server import Server
+    stt = core.director.stt = _SeqSTT("Отправь маме в Telegram.", "Открой мою.")
+    srv = Server(core)
+    p = await srv._voice_probe({"audio_b64": _wav_b64(), "mime": "audio/wav"})
+    assert p["complete"] is False                  # the message itself may follow: the window keeps listening
+    # Nothing more was said during the full pause: the same transcript is used (no second recognition).
+    r = await srv._voice_commit({"probe_id": p["probe_id"], "submit": False})
+    assert r["text"] == "Отправь маме в Telegram." and stt.calls == 1
+    p2 = await srv._voice_probe({"audio_b64": _wav_b64(), "mime": "audio/wav"})
+    assert p2["complete"] is False                 # «…мою» is cut off
+
+
+async def test_expired_probe_is_refused(core):
+    from jarvis.server import Server
+    srv = Server(core)
+    with pytest.raises(ValueError):
+        await srv._voice_commit({"probe_id": "nope"})

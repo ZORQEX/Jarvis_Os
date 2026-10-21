@@ -84,6 +84,9 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     from .voice.stt import LocalSTT
     director.stt = LocalSTT()           # speech recognition on this computer (GigaAM) — the only one
     comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)
+    from .history import ActionHistory
+    director.history = ActionHistory(db, bus)       # lasting actions only (sites, code, files, programs, notes)
+    director.history.backfill(tasks)
     recovered = tasks.recover_after_restart()
     approvals.expire_old()
     audit.write("core.start", recovered_tasks=len(recovered))

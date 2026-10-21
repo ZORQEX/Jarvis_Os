@@ -44,6 +44,10 @@ const voice = new Voice({
     if (S.view === "settings") renderAudioOut();
   },
 });
+// JARVIS is waiting for the user's answer: a confirmation, or a question it just asked (the mic stays open for it).
+voice.holdOpen = () => Object.values(S.approvals).some((a) => a.status === "pending" && a.tool_id !== "trust_rule_add")
+  || (() => { const m = S.messages.at(-1); return !!m && m.role === "assistant" && /\?\s*$/.test(m.text || "")
+    && Date.now() / 1000 - m.created_at < 30; })();
 
 function outputProblem(r) {
   if (!r?.available) return "";
@@ -55,6 +59,11 @@ function outputProblem(r) {
 }
 
 function applySnapshot(d) {
+  // JARVIS restarted with a new interface: load it (never mid-recording).
+  if (d.ui_build && S.uiBuild && d.ui_build !== S.uiBuild && !["recording", "transcribing"].includes(S.voice)) {
+    location.reload(); return;
+  }
+  S.uiBuild = d.ui_build || S.uiBuild;
   S.convId = d.conversation_id;
   S.messages = d.messages;
   S.tasks = d.tasks;
@@ -63,7 +72,6 @@ function applySnapshot(d) {
   S.provider = d.provider;
   S.providers = d.providers || [];
   S.reminders = d.reminders;
-  S.recent = d.recent_tasks;
   S.tools = d.tools;
   S.grants = d.session_grants;
   S.streaming = {};
@@ -92,14 +100,10 @@ function onEvent(ev) {
     case "task.created": case "task.updated": {
       const t = ev.task;
       S.tasks[t.id] = t;
-      const i = S.recent.findIndex((r) => r.id === t.id);
-      const row = { id: t.id, request: t.request, state: t.state, created_at: t.created_at, route: t.route };
-      if (i >= 0) S.recent[i] = row; else S.recent.unshift(row);
-      S.recent = S.recent.slice(0, 12);
       renderThread(); renderSide();
-      if (S.view === "tasks") renderTasksView();
       break;
     }
+    case "action.recorded": case "action.deleted": if (S.view === "history") renderHistoryView(); break;
     case "step.updated": {
       const st = ev.step, t = S.tasks[tid];
       if (!t) return;
@@ -384,10 +388,6 @@ function renderSide() {
     .sort((a, b) => a.created_at - b.created_at);
   $("#activeTasks").innerHTML = active.length ? active.map(taskCard).join("")
     : `<div class="empty-note">Нет активных задач</div>`;
-  const recent = S.recent.filter((r) => ["completed", "failed", "cancelled"].includes(r.state)).slice(0, 6);
-  $("#recentTasks").innerHTML = recent.length ? recent.map((r) => `<div class="task"><div class="top">
-      <span class="req" title="${esc(r.request)}">${esc(r.request)}</span><span class="pill ${esc(r.state)}">${esc(STATE_RU[r.state] || r.state)}</span></div></div>`).join("")
-    : `<div class="empty-note">Пока пусто</div>`;
   const rem = S.reminders.filter((r) => r.status === "scheduled");
   $("#remindersSection").hidden = !rem.length;
   $("#reminders").innerHTML = rem.map((r) => `<div class="task"><div class="top">${ICON.clock}
@@ -483,6 +483,7 @@ document.addEventListener("click", async (e) => {
   if (t.id === "estopBtn") return estop();
   if (t.id === "sideToggle") return toggleSide();
   if (t.dataset.open) return link.request("tool.run", { tool: "open_path", args: { path: t.dataset.open } }).catch((er) => toast(er.message, "err"));
+  if (t.dataset.actionDel) return link.request("history.delete", { id: t.dataset.actionDel }).then(renderHistoryView).catch((er) => toast(er.message, "err"));
   if (t.dataset.url) return link.request("tool.run", { tool: "open_url", args: { url: t.dataset.url } }).catch((er) => toast(er.message, "err"));
   if (t.dataset.approve) {
     const card = t.closest("[data-approval]");
@@ -523,7 +524,7 @@ document.addEventListener("keydown", (e) => {
     if ($("#app").classList.contains("side-open")) { toggleSide(); return; }
   }
   if (e.ctrlKey && !e.shiftKey) {
-    const m = { Digit1: "chat", Digit2: "tasks", Digit3: "flora", Digit4: "comms", Comma: "settings" }[e.code];
+    const m = { Digit1: "chat", Digit2: "history", Digit3: "flora", Digit4: "comms", Comma: "settings" }[e.code];
     if (m) { e.preventDefault(); nav(m); return; }
     if (e.code === "KeyK") { e.preventDefault(); nav("chat"); input.focus(); }
   }
@@ -537,14 +538,14 @@ function toggleSide() {
 }
 
 // ------------------------------------------------------------------ views
-const VIEWS = { chat: "#viewChat", tasks: "#viewTasks", flora: "#viewFlora", comms: "#viewComms", settings: "#viewSettings" };
+const VIEWS = { chat: "#viewChat", history: "#viewHistory", flora: "#viewFlora", comms: "#viewComms", settings: "#viewSettings" };
 function nav(v) {
   S.view = v;
   $("#app").dataset.view = v;
   for (const [k, sel] of Object.entries(VIEWS)) $(sel).hidden = k !== v;
   $$(".rail-btn").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.nav === v)));
   if (v === "chat") { renderThread(); scrollToEnd(false); setTimeout(() => input.focus(), 0); }
-  if (v === "tasks") renderTasksView();
+  if (v === "history") renderHistoryView();
   if (v === "settings") renderSettings();
   if (v === "flora") renderFlora();
   if (v === "comms") renderComms();
@@ -561,25 +562,55 @@ async function renderComms() {
   }
 }
 
-async function renderTasksView() {
-  const el = $("#viewTasks");
+// Action history: only lasting changes on the computer (sites, code, files, programs, notes). Messages, volume,
+// windows and questions are not kept — the server records an entry only from verified step results.
+const KIND_RU = { change: "Изменения на компьютере", note: "Заметка" };
+function dayLabel(ts) {
+  const d = new Date(ts * 1000), t = new Date(), y = new Date(Date.now() - 864e5);
+  if (d.toDateString() === t.toDateString()) return "Сегодня";
+  if (d.toDateString() === y.toDateString()) return "Вчера";
+  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: d.getFullYear() === t.getFullYear() ? undefined : "numeric" });
+}
+function actionCard(a) {
+  const det = a.details || {};
+  const files = a.files || [];
+  const more = (a.files_total || files.length) - Math.min(files.length, 6);
+  const meta = [fmtTime(a.created_at)];
+  if (det.duration_ms >= 1000) meta.push(fmtMs(det.duration_ms));
+  if (det.tests) meta.push(det.tests.ok ? "тесты прошли" : det.tests.ran ? "тесты не прошли" : "");
+  if (typeof det.cost_usd === "number") meta.push(`$${det.cost_usd.toFixed(det.cost_usd < 0.1 ? 3 : 2)}`);
+  return `<article class="action ${a.status === "failed" ? "failed" : ""}">
+    <div class="action-head">
+      <span class="action-icon">${a.kind === "note" ? ICON.note : ICON.spark}</span>
+      <div class="action-title"><b>${esc(a.title)}</b><span>${esc(KIND_RU[a.kind] || "Действие")}${a.status === "failed" ? " · не удалось" : ""}</span></div>
+      <button class="icon-btn action-del" data-action-del="${esc(a.id)}" aria-label="Убрать из истории" title="Убрать из истории (файлы останутся)">${ICON.x}</button>
+    </div>
+    ${a.summary ? `<p class="action-sum">${esc(a.summary)}</p>` : ""}
+    ${det.error ? `<p class="action-err">${esc(det.error)}</p>` : ""}
+    ${files.length ? `<div class="action-files">${files.slice(0, 6).map((f) => typeof f === "string" ? `<code>${esc(f)}</code>`
+      : `<code class="${esc(f.op)}" title="${{ new: "новый файл", edit: "изменён", del: "удалён" }[f.op] || ""}">${esc(f.p)}</code>`).join("")}${more > 0 ? `<span>ещё ${more}</span>` : ""}</div>` : ""}
+    <div class="action-foot">
+      ${a.folder ? `<button class="action-folder" data-open="${esc(a.folder)}" title="Открыть папку: ${esc(a.folder)}">${ICON.folder}<span>${esc(shortPath(a.folder_short || a.folder))}</span></button>` : ""}
+      <span class="action-meta">${meta.filter(Boolean).map(esc).join(" · ")}</span>
+    </div>
+  </article>`;
+}
+async function renderHistoryView() {
+  const el = $("#viewHistory");
   let list = [];
-  try { list = await link.request("tasks.list", { limit: 80 }); } catch { list = Object.values(S.tasks); }
-  const open = el.dataset.open;
-  el.innerHTML = `<div class="page"><h1>Задачи</h1><p class="lead">Журнал того, что JARVIS делал: какие шаги, сколько заняло, что проверено.</p>
-    <div class="panel" style="padding:0">${list.length ? list.map((t) => `
-      <button class="history-row" data-task-open="${esc(t.id)}">
-        <span>${esc(t.request)}</span><span class="pill ${esc(t.state)}">${esc(STATE_RU[t.state] || t.state)}</span>
-        <span class="when">${fmtWhen(t.created_at)}</span></button>
-      ${open === t.id ? `<div style="padding:4px 14px 14px" class="task-detail">
-        <div class="meta">маршрут: ${esc(t.route || "—")}${t.provider ? " · " + esc(t.provider) : ""}${t.finished_at ? " · " + fmtMs((t.finished_at - t.created_at) * 1000) : ""}${t.error ? " · " + esc(t.error) : ""}</div>
-        ${t.decision ? decisionCard(t.decision, true) : ""}
-        <div class="steps">${(t.steps || []).map((s) => stepRow(s)).join("") || '<div class="empty-note">Без шагов с инструментами</div>'}</div></div>` : ""}`).join("")
-      : '<div class="empty-note" style="padding:16px">Задач ещё не было</div>'}</div></div>`;
-  $$("[data-task-open]", el).forEach((b) => b.addEventListener("click", () => {
-    el.dataset.open = el.dataset.open === b.dataset.taskOpen ? "" : b.dataset.taskOpen;
-    renderTasksView();
-  }));
+  try { list = await link.request("history.list", { limit: 150 }); } catch (e) { toast(e.message, "err"); }
+  const groups = [];
+  for (const a of list) {
+    const label = dayLabel(a.created_at);
+    if (!groups.length || groups.at(-1).label !== label) groups.push({ label, items: [] });
+    groups.at(-1).items.push(a);
+  }
+  el.innerHTML = `<div class="page"><h1>История действий</h1>
+    <p class="lead">Только то, что JARVIS действительно сделал на компьютере: сайты, программы, код, файлы, заметки.
+    Сообщения, громкость, окна и вопросы сюда не попадают.</p>
+    ${groups.length ? groups.map((g) => `<section class="action-day"><h2>${esc(g.label)}</h2>${g.items.map(actionCard).join("")}</section>`).join("")
+      : `<div class="panel empty-note">Пока пусто. Попросите, например: «Создай сайт-визитку в папке Projects/site» — после выполнения действие появится здесь.</div>`}
+  </div>`;
 }
 
 async function renderFlora() {
@@ -713,7 +744,18 @@ async function renderVoicePicker() {
         ${v.id === d.current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`;
   box.innerHTML = `${d.installed ? "" : `<div class="cerr" style="margin:6px 0">Голос Silero не установлен — запустите scripts/install.sh. Пока звучит запасной голос.</div>`}
     <div class="vgrid" style="margin-top:8px">${d.voices.map(card).join("")}</div>
-    ${d.last_fallback ? `<div class="cerr" style="margin-top:6px">Последний ответ прозвучал запасным голосом: Silero не сработал (${esc(d.last_fallback)})</div>` : ""}`;
+    ${d.last_fallback ? `<div class="cerr" style="margin-top:6px">Последний ответ прозвучал запасным голосом: Silero не сработал (${esc(d.last_fallback)})</div>` : ""}
+    <h2 style="font-size:13.5px;margin:16px 0 0">Кто отвечает голосом</h2>
+    <div class="choices" role="radiogroup" aria-label="Модель для ответов голосом">
+      <button class="choice" role="radio" aria-checked="${d.ai_model !== "quality"}" data-vai="fast"><b>Быстро</b>
+        <span>${esc(d.ai_models?.fast || "")}: первые слова через ~1–1,5 с, без долгих пауз. Подходит для разговора.</span></button>
+      <button class="choice" role="radio" aria-checked="${d.ai_model === "quality"}" data-vai="quality"><b>Подробнее</b>
+        <span>${esc(d.ai_models?.quality || "")}: обычно ~1 с, но иногда задумывается на 4–10 с.</span></button>
+    </div>
+    <div class="faint" style="font-size:12px;margin-top:4px">Написанные текстом запросы всегда обрабатывает ${esc(d.ai_models?.quality || "основная модель")}. Беседа общая — контекст не теряется.</div>`;
+  $$("[data-vai]", box).forEach((b) => b.addEventListener("click", async () => {
+    try { await link.request("voice.ai_model", { pref: b.dataset.vai }); renderVoicePicker(); } catch (er) { toast(er.message, "err"); }
+  }));
   $$("[data-vprev]", box).forEach((b) => b.addEventListener("click", () => {
     voice.stopSpeaking();
     link.request("voice.preview", { voice: b.dataset.vprev }).catch((er) => toast(er.message, "err"));
