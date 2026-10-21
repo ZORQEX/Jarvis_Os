@@ -156,7 +156,7 @@ button.chip:hover { color: var(--text); }
 .icon-btn:disabled:hover { background: none; }
 
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.view-tasks, .view-settings, .view-flora { overflow-y: auto; }
+.view-tasks, .view-settings, .view-flora, .view-comms { overflow-y: auto; }
 
 /* ---------------------------------------------------------------- thread */
 .scroller { flex: 1; overflow-y: auto; scroll-behavior: smooth; overscroll-behavior: contain; }
