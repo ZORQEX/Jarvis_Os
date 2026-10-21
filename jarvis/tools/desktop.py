@@ -31,6 +31,10 @@ DEFAULT_APPS: dict[str, tuple[list[str], str, str]] = {
     "monitor": (["xdg-terminal-exec", "btop"], r"kitty|alacritty|btop", "Монитор ресурсов"),
     "localsend": (["localsend"], r"localsend", "LocalSend"),
     "xournal": (["xournalpp"], r"xournal", "Xournal++"),
+    # Messaging opens as Omarchy web apps (the user's own browser session; JARVIS does not touch it).
+    "whatsapp": (["omarchy-launch-webapp", "https://web.whatsapp.com/"], r"whatsapp", "WhatsApp"),
+    "telegram": (["omarchy-launch-webapp", "https://web.telegram.org/a/"], r"telegram", "Telegram"),
+    "mail": (["omarchy-launch-webapp", "https://mail.google.com/"], r"mail\.google|gmail", "Почта (Gmail)"),
 }
 
 APP_ALIASES: dict[str, str] = {
@@ -50,6 +54,9 @@ APP_ALIASES: dict[str, str] = {
     "монитор ресурсов": "monitor", "диспетчер задач": "monitor", "btop": "monitor",
     "localsend": "localsend", "локалсенд": "localsend",
     "xournal": "xournal", "ксорнал": "xournal",
+    "ватсап": "whatsapp", "вотсап": "whatsapp", "вацап": "whatsapp", "whatsapp": "whatsapp", "whats app": "whatsapp",
+    "телеграм": "telegram", "телеграмм": "telegram", "телегу": "telegram", "telegram": "telegram", "тг": "telegram",
+    "почту": "mail", "почта": "mail", "gmail": "mail", "джимейл": "mail", "почтовый ящик": "mail",
 }
 
 
