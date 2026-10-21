@@ -32,6 +32,11 @@ SEL_HEADER_TITLE = ["#main header span[dir='auto'][title]", "#main header span[d
 SEL_INVALID_PHONE = ["div[data-animate-modal-popup='true']", "[role='dialog']"]
 
 
+def _visible(s: str) -> str:
+    """WhatsApp wraps some names in invisible direction marks (U+202A…U+202E, U+2066…U+2069, U+200E/F)."""
+    return re.sub(r"[‎‏‪-‮⁦-⁩]", "", s or "").strip()
+
+
 def chromium() -> str | None:
     for n in ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome"):
         p = shutil.which(n)
@@ -308,9 +313,19 @@ class WhatsAppProvider(Provider):
                 await self.page.keyboard.press("Backspace")
                 await self.page.keyboard.insert_text(name)
                 await asyncio.sleep(1.5)
-                titles = await self.page.eval_on_selector_all(
-                    "#pane-side span[title], [aria-label] [role='listitem'] span[title]",
-                    "els => [...new Set(els.map(e => e.getAttribute('title')).filter(Boolean))].slice(0, 30)")
+                # One entry per result row: the chat name (first title) and the last message (second title), so that
+                # three «Рома» can be told apart. Taking every span[title] mixed message previews in as «contacts».
+                rows = await self.page.evaluate("""() => {
+                  const rows = [...document.querySelectorAll('#pane-side [role="listitem"], #pane-side [role="row"]')];
+                  const seen = new Set(), out = [];
+                  for (const r of rows) {
+                    const t = [...r.querySelectorAll('span[title]')].map((s) => s.getAttribute('title')).filter(Boolean);
+                    if (!t.length || seen.has(t[0])) continue;
+                    seen.add(t[0]); out.push({ title: t[0], last: t[1] || '' });
+                    if (out.length >= 30) break;
+                  }
+                  return out;
+                }""")
                 await self.page.keyboard.press("Escape")
             except CommsError:
                 raise
@@ -318,10 +333,13 @@ class WhatsAppProvider(Provider):
                 raise CommsError("WhatsApp Web не дал найти контакт (страница не отвечает) — попробуйте ещё раз",
                                  "network", f"{e.__class__.__name__}: {str(e)[:200]}; dialog={getattr(self, 'last_dialog', '')!r}",
                                  retryable=True) from None
-        for t in titles:
-            sc = match_score(name, t)
-            if sc and not re.fullmatch(r"[\d\s:.,]+", t):
-                out.append(Contact("whatsapp", "chat:" + t, t, "чат WhatsApp", "WhatsApp", sc))
+        for r in rows:
+            t, shown = r["title"], _visible(r["title"])
+            sc = match_score(name, shown)
+            if sc and not re.fullmatch(r"[\d\s:.,]+", shown):
+                last = _visible(r.get("last") or "")
+                hint = f"последнее: «{last[:30]}{'…' if len(last) > 30 else ''}»" if last else "чат WhatsApp"
+                out.append(Contact("whatsapp", "chat:" + t, shown, hint, "WhatsApp", sc))
         return out
 
     # ---------------------------------------------------------------- send / verify
