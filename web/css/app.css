@@ -396,6 +396,8 @@ button.row:hover { background: var(--surface-2); }
 .history-row:first-child { border-top: 0; }
 .history-row:hover { background: var(--surface-2); }
 .history-row .when { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.gh-code { font-family: var(--mono); font-size: 26px; letter-spacing: .12em; font-weight: 600; margin: 8px 0; user-select: all; }
+
 /* action history */
 .action-day { display: flex; flex-direction: column; gap: var(--s2); }
 .action-day h2 { font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; margin: var(--s2) 0 0; }

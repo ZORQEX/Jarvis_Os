@@ -69,6 +69,7 @@ class Director:
         self.stt = None              # LocalSTT (speech recognition on this computer)
         self.comms = None            # CommsAgent
         self.history = None          # ActionHistory (lasting actions only), set by the composition root
+        self.github = None           # GitHub account for site publishing (publish.GitHub)
         self.hub = None              # CommsHub
         self.rt: dict[str, Runtime] = {}
         self._last_finish: tuple[float, str] | None = None

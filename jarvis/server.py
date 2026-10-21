@@ -158,6 +158,8 @@ class Server:
         if getattr(self.core.director, "stt", None):
             await self.core.director.stt.stop()
         await self.core.claude.stop()
+        if getattr(self.core.director, "github", None):
+            await self.core.director.github.cancel()     # an unfinished GitHub login does not outlive JARVIS
         await self.core.scheduler.stop()
         if self.core.comms:
             await self.core.comms.stop()
@@ -525,6 +527,15 @@ class Server:
                 res = {"task_id": await d.run_ui_tool(data["tool"], dict(data.get("args") or {}))}
             elif typ == "tasks.list":
                 res = self.core.tasks.recent(min(200, int(data.get("limit", 50))))
+            elif typ == "publish.state":          # GitHub for site publishing (window only, user-driven)
+                res = await d.github.state()
+            elif typ == "publish.github.begin":
+                res = await d.github.begin()
+                self.core.audit.write("github.login_started")
+            elif typ == "publish.github.logout":
+                await d.github.logout()
+                self.core.audit.write("github.logout")
+                res = await d.github.state()
             elif typ == "history.list":          # action history: lasting changes only
                 res = d.history.list(int(data.get("limit", 100)))
             elif typ == "history.delete":        # removes the entry only; files on disk stay as they are

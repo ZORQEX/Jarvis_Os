@@ -49,6 +49,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     scheduler = Scheduler(db, bus, audit)
     tools = [SystemInfo(), SearchFiles(), ReadFile(), OpenPath(), CreateNote(), AppOpen(config.apps), WindowList(),
              WorkspaceSwitch(), VolumeSet(), Screenshot(), Notify(), ReminderCreate(scheduler), CloudConsent()]
+    from .tools.install import SystemInstall
+    tools.append(SystemInstall())               # system programs: the user types the password in the system dialog
     tools += extra_tools or []
     registry = Registry(tools)
     gateway = Gateway(registry, policy, approvals, tasks, bus, audit, config)
@@ -58,8 +60,10 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     from .providers.claude_code import ClaudeCodeProvider
     from .providers.registry import ProviderManager
     manager = ProviderManager(db, config, [ClaudeCodeProvider(config, db), claude])
+    from .publish import GitHub, SitePublish
+    github = GitHub()                            # site publishing through the user's own GitHub account
     for t in (AgentGenerate(manager), ClaudeInspect(manager, config), ClaudeChange(manager, config),
-              ComputerTask(manager, config), OpenUrl()):
+              ComputerTask(manager, config), OpenUrl(), SitePublish(github, config)):
         registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
     flora = None
@@ -87,6 +91,7 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)
     from .history import ActionHistory
     director.history = ActionHistory(db, bus)       # lasting actions only (sites, code, files, programs, notes)
+    director.github = github
     director.history.backfill(tasks)
     recovered = tasks.recover_after_restart()
     approvals.expire_old()

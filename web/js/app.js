@@ -564,7 +564,7 @@ async function renderComms() {
 
 // Action history: only lasting changes on the computer (sites, code, files, programs, notes). Messages, volume,
 // windows and questions are not kept — the server records an entry only from verified step results.
-const KIND_RU = { change: "Изменения на компьютере", note: "Заметка" };
+const KIND_RU = { change: "Изменения на компьютере", note: "Заметка", install: "Установка программ", publish: "Публикация в интернете" };
 function dayLabel(ts) {
   const d = new Date(ts * 1000), t = new Date(), y = new Date(Date.now() - 864e5);
   if (d.toDateString() === t.toDateString()) return "Сегодня";
@@ -581,7 +581,7 @@ function actionCard(a) {
   if (typeof det.cost_usd === "number") meta.push(`$${det.cost_usd.toFixed(det.cost_usd < 0.1 ? 3 : 2)}`);
   return `<article class="action ${a.status === "failed" ? "failed" : ""}">
     <div class="action-head">
-      <span class="action-icon">${a.kind === "note" ? ICON.note : ICON.spark}</span>
+      <span class="action-icon">${a.kind === "note" ? ICON.note : a.kind === "publish" ? ICON.globe : ICON.spark}</span>
       <div class="action-title"><b>${esc(a.title)}</b><span>${esc(KIND_RU[a.kind] || "Действие")}${a.status === "failed" ? " · не удалось" : ""}</span></div>
       <button class="icon-btn action-del" data-action-del="${esc(a.id)}" aria-label="Убрать из истории" title="Убрать из истории (файлы останутся)">${ICON.x}</button>
     </div>
@@ -591,6 +591,7 @@ function actionCard(a) {
       : `<code class="${esc(f.op)}" title="${{ new: "новый файл", edit: "изменён", del: "удалён" }[f.op] || ""}">${esc(f.p)}</code>`).join("")}${more > 0 ? `<span>ещё ${more}</span>` : ""}</div>` : ""}
     <div class="action-foot">
       ${a.folder ? `<button class="action-folder" data-open="${esc(a.folder)}" title="Открыть папку: ${esc(a.folder)}">${ICON.folder}<span>${esc(shortPath(a.folder_short || a.folder))}</span></button>` : ""}
+      ${det.url ? `<button class="action-folder" data-url="${esc(det.url)}" title="Открыть сайт">${ICON.globe}<span>${esc(det.url)}</span></button>` : ""}
       <span class="action-meta">${meta.filter(Boolean).map(esc).join(" · ")}</span>
     </div>
   </article>`;
@@ -668,6 +669,12 @@ function renderSettings() {
       <div id="voiceTurns" style="margin-top:12px"></div>
     </div>
     <div class="panel">
+      <h2>Публикация сайтов</h2>
+      <div class="muted" style="font-size:13.5px">Готовые сайты JARVIS может выложить в интернет по ссылке (GitHub Pages, бесплатно) —
+        через ваш аккаунт GitHub. Вход подтверждаете вы в своём браузере одноразовым кодом; пароль и токен JARVIS не видит.</div>
+      <div id="publishBox" style="margin-top:10px"><span class="faint">Проверяю…</span></div>
+    </div>
+    <div class="panel">
       <h2>Разрешения</h2>
       <div class="muted" style="font-size:13.5px">Каждое действие проходит через единую политику. Средний и высокий риск требуют вашего решения.</div>
       <label class="toggle"><input type="checkbox" id="fullAccess" ${S.core.access === "full" ? "checked" : ""}> <span><b>Полный доступ к ноутбуку</b> —
@@ -692,6 +699,7 @@ function renderSettings() {
     </div>
   </div>`;
   wireAgency(el, { link, S, toast, rerender: () => { renderSettings(); renderStatus(); renderComposer(); } });
+  renderPublish();
   $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {
     try { await link.request("privacy.set", { profile: b.dataset.privacy }); S.core.privacy = b.dataset.privacy; } catch (er) { toast(er.message, "err"); }
     renderSettings(); renderStatus(); renderPrivacy(); renderComposer();
@@ -730,6 +738,37 @@ function renderSettings() {
     localStorage.setItem("jarvis.reduceMotion", e.target.checked ? "1" : "0");
     document.documentElement.classList.toggle("anim-off", e.target.checked);
   });
+}
+
+async function renderPublish(poll = 0) {
+  const box = $("#publishBox");
+  if (!box) return;
+  let st;
+  try { st = await link.request("publish.state"); } catch (e) { box.innerHTML = `<span class="faint">${esc(e.message)}</span>`; return; }
+  if (!st.available) { box.innerHTML = `<span class="faint">Нужен GitHub CLI (gh) — установите: «Установи gh в систему».</span>`; return; }
+  if (st.connected) {
+    box.innerHTML = `<div class="field" style="margin-top:0"><span class="cpill ok">GitHub подключён</span> <b>${esc(st.login)}</b>
+      <button class="btn ghost" id="ghLogout">Отключить</button></div>
+      <div class="faint" style="font-size:12.5px;margin-top:6px">Скажите, например: «Опубликуй сайт кафе» — JARVIS спросит подтверждение и даст ссылку.</div>`;
+    $("#ghLogout").onclick = async () => { try { await link.request("publish.github.logout"); } catch (e) { toast(e.message, "err"); } renderPublish(); };
+    return;
+  }
+  if (st.stage === "code") {
+    box.innerHTML = `<div style="font-size:13.5px">Откройте <b>github.com/login/device</b> и введите код:</div>
+      <div class="gh-code">${esc(st.code)}</div>
+      <div class="field" style="margin-top:6px"><button class="btn primary" id="ghOpen">Открыть GitHub</button>
+        <span class="faint" style="font-size:12.5px">После подтверждения в браузере здесь появится «подключён».</span></div>`;
+    $("#ghOpen").onclick = () => link.request("tool.run", { tool: "open_url", args: { url: st.url } }).catch((e) => toast(e.message, "err"));
+    if (S.view === "settings" && poll < 300) setTimeout(() => renderPublish(poll + 1), 3000);
+    return;
+  }
+  box.innerHTML = `${st.error ? `<div class="cerr" style="margin-bottom:6px">${esc(st.error)}</div>` : ""}
+    <div class="field" style="margin-top:0"><span class="cpill">не подключён</span><button class="btn primary" id="ghBegin">Подключить GitHub</button></div>`;
+  $("#ghBegin").onclick = async (e) => {
+    e.target.disabled = true;
+    try { await link.request("publish.github.begin", {}, 30000); } catch (er) { toast(er.message, "err"); }
+    renderPublish();
+  };
 }
 
 async function renderVoicePicker() {

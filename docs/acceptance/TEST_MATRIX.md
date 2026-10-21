@@ -1,6 +1,6 @@
 # Test matrix — milestone 1 + Flora (2026-10-20)
 
-Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 244 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
+Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 253 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -153,4 +153,14 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | `computer_task`: the conversation hands any make/build/fix/install job to Claude Code (new folder in ~/Projects or an existing project), high-risk approval (voice «да» works), changed-files check, tests, history entry | VERIFIED LIVE (dev JARVIS) | «мне нужен сайт для кафешки…» → card in 6.9 s → «Да, разрешаю» → 252 s → `cafe-site/` index.html + style.css + script.js, opened in the browser, 0 JS errors; test_site_request_goes_to_claude_code_after_a_spoken_yes |
 | Executor may look things up (WebSearch/WebFetch), installs user-level tools only when the task allows, never sudo/pacman | VERIFIED LOCAL | test_executor_can_look_things_up_but_never_escalates |
 | New project folders never reuse a folder with files; tracked by a local git from the start | VERIFIED LOCAL | test_new_project_folder_never_reuses_a_folder_with_files |
+
+## Extra abilities chosen by the user (2026-10-22)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Claude Code may work in any home folder; keys, passwords, sessions, browser profiles, Claude/JARVIS data stay closed (workdir refused; Read/Edit/Write denied) | VERIFIED LOCAL | test_home_wide_workdirs_but_secret_folders_stay_closed, test_claude_code_flags |
+| System programs (`system_install`): official Arch packages only (checked with `pacman -Si`), already installed skipped, `pkexec` → the system's own password dialog; JARVIS never sees the password; verified with `pacman -Q` | VERIFIED LOCAL + LIVE up to the card | test_capabilities.py; dev JARVIS «Установи в систему программу cowsay» → card in 2.2 s → «Нет» → nothing installed (password dialog not shown to keep the user's session undisturbed) |
+| Browser control for Claude Code tasks the user allows: Microsoft Playwright MCP 0.0.83 (pinned), headless, in-memory profile (no user logins/cookies) | VERIFIED LIVE | example.com read, summary + screenshot saved in 17 s ($0.17) |
+| Site publishing (`site_publish`): GitHub Pages via the user's account; device-code login from Settings (no password/token seen); secret-looking files refuse publishing; push with a per-command credential helper; checks the public link | VERIFIED LOCAL + LIVE (login code shown) | test_capabilities.py; Settings → «Подключить GitHub» → code XXXX-XXXX shown, login cancelled cleanly; real publishing needs the user's GitHub login |
+| «Установи программу X» goes to the conversation (picks packages → system_install), project dependencies still to Claude Code | VERIFIED LOCAL + LIVE | planner check; dev JARVIS run |
 

@@ -55,6 +55,8 @@ def compact_history(msgs: list[dict], keep: int = 6, per_msg: int = 600) -> tupl
 
 
 CONVERSATIONAL = {"chat", "write", "translate"}
+BROWSER_RE = re.compile(r"(зайди|открой|перейди|загляни)\w*\s+(на\s+)?(сайт|страниц)|в браузере|через браузер|"
+                        r"заполни\w*\s+(\w+\s+)?форм|нажми\w*\s+(на\s+)?кнопк|https?://|\b[\w-]+\.(ru|com|org|net|io|kz|su|рф)\b")
 WRITE_GUIDE = ("\nПодготовь только черновик (ничего не отправляется). Пиши естественно и готово к отправке. "
                "Не выдумывай факты: цифр, дат и условий, которых нет в данных, не пиши. Если не хватает "
                "чего-то действительно важного (имя получателя, цена, срок), поставь не больше 2–3 пометок "
@@ -116,6 +118,8 @@ class Agency:
                     perms.append("install")
                 if re.search(r"скача|загрузи\w* из интернета|download", low):
                     perms.append("download")
+                if BROWSER_RE.search(low):
+                    perms.append("browser")             # a separate browser without the user's logins
                 s.args["permissions"] = perms
                 wd = find_workdir(s.instruction + " " + text, roots, last_dir, s.action,
                                   str(Path(os.path.expanduser(self.config.write_dir)).resolve())

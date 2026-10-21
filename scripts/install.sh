@@ -55,6 +55,9 @@ if [[ ! -x "$STT/.venv/bin/python" ]]; then
 fi
 HF_HOME="$STT/hf" "$STT/.venv/bin/python" -c "import onnx_asr; onnx_asr.load_model('gigaam-v3-e2e-rnnt', quantization='int8')"
 
+# Browser control for Claude Code tasks the user allows (Microsoft Playwright MCP, pinned; uses /usr/bin/chromium).
+command -v npx >/dev/null && npx -y @playwright/mcp@0.0.83 --help >/dev/null 2>&1 || true
+
 # Emergency fallback voice only (used if Silero cannot start): Piper (GPL-3.0, separate process), voice "denis" (CC0).
 PIPER="$HOME/.local/share/jarvis/piper"
 if [[ ! -x "$PIPER/.venv/bin/python" ]]; then

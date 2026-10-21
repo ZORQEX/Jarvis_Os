@@ -18,7 +18,8 @@ from ..tools.base import (Risk, Tool, ToolContext, ToolInputError, ToolResult, T
 from .verifier import verify_step
 
 PROVIDER_NAMES = {"claude": "Claude", "claude_code": "Claude Code"}
-PERM_RU = {"install": "установка зависимостей проекта", "download": "скачивание файлов из интернета"}
+PERM_RU = {"install": "установка зависимостей и инструментов", "download": "скачивание файлов из интернета",
+           "browser": "управление браузером (сайты, кнопки, формы)"}
 
 
 def _in_workspaces(path: str, config) -> Path:
@@ -29,6 +30,9 @@ def _in_workspaces(path: str, config) -> Path:
         raise ToolInputError(f"Папка не найдена: {p}")
     if not any(p == r or p.is_relative_to(r) for r in roots):
         raise ToolInputError("Папка вне разрешённых рабочих областей: " + str(p))
+    from ..tools.base import is_secret_path
+    if is_secret_path(p):
+        raise ToolInputError("Эта папка закрыта: ключи, пароли, сессии и профили браузеров не трогаем")
     return p
 
 
@@ -221,8 +225,10 @@ class ComputerTask(ClaudeChange):
                 "whenever the user asks to make, build, create, write (code), fix, install, convert or set up "
                 "something — never answer that there is no tool for it. Give a complete, detailed instruction in the "
                 "user's language (what to build, style, content, technology). For a new thing set new_folder to a "
-                "short latin name (it is created in ~/Projects); for an existing project set folder. Put 'install' "
-                "in allow if packages/tools must be installed, 'download' if files must be fetched. The user "
+                "short latin name (it is created in ~/Projects); for an existing folder set folder (any folder in "
+                "the home directory). Put 'install' in allow if packages/tools must be installed, 'download' if "
+                "files must be fetched, 'browser' if websites must be opened, clicked, filled or read like a "
+                "person would (a separate browser without the user's logins). The user "
                 "confirms first; work may take several minutes; the result lists changed files."),
             params={"type": "object", "required": ["instruction"], "properties": {
                 "instruction": {"type": "string", "maxLength": 4000},

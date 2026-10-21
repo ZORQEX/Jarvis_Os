@@ -81,6 +81,9 @@ class Config:
     claude_budget_usd: float = 5.0          # per Claude Code job: a whole site or app needs more than an edit
     claude_timeout_s: float = 1800.0        # a whole site or app can take a while
     code_workspaces: list[str] = field(default_factory=lambda: ["~/Projects"])
+    # Claude Code may work in any folder of the home directory (the user asked for it), never in keys, passwords,
+    # browser profiles, sessions or JARVIS's own data (SECRET_PATHS) — those are also denied to its file tools.
+    claude_home_wide: bool = True
     max_tool_rounds: int = 12          # tool calls Claude may make for one request
     ai_timeout_s: float = 120.0
     piper_voice: str = "ru_RU-denis-medium"   # emergency fallback voice if Silero cannot speak

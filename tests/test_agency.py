@@ -325,7 +325,8 @@ def test_source_outranks_ai_opinion():
 def test_claude_code_flags():
     a = build_argv("x", "inspect")
     assert "--restricted" in a and "--strict-mcp-config" in a and "--no-session-persistence" in a
-    assert a[a.index("--tools") + 1] == "Read,Glob,Grep" and "--disallowedTools" not in a
+    assert a[a.index("--tools") + 1] == "Read,Glob,Grep"
+    assert "Read(~/.ssh/**)" in a and "Read(~/.claude/**)" in a and "Bash(sudo:*)" not in a   # secrets closed even for reading
     c = build_argv("x", "change")
     assert all(x in c for x in DENY) and all(x in c for x in GATED["install"] + GATED["download"])
     i = build_argv("x", "change", allow={"install"})
@@ -431,3 +432,21 @@ def test_executor_can_look_things_up_but_never_escalates():
     assert "Bash(npm install:*)" in deny                               # installing only when the task allows it
     allowed = build_argv("x", "change", allow={"install"})
     assert "Bash(npm install:*)" not in allowed and "Bash(sudo:*)" in allowed
+
+
+def test_home_wide_workdirs_but_secret_folders_stay_closed(core, home, monkeypatch):
+    from jarvis.agency.tools import _in_workspaces
+    from jarvis.tools.base import ToolInputError
+    monkeypatch.setenv("HOME", str(home))
+    import pathlib
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: home))
+    core.config.claude_home_wide = True
+    (home / "Games" / "mygame").mkdir(parents=True)
+    (home / ".ssh").mkdir()
+    assert _in_workspaces(str(home / "Games" / "mygame"), core.config) == (home / "Games" / "mygame").resolve()
+    with pytest.raises(ToolInputError):
+        _in_workspaces(str(home / ".ssh"), core.config)
+    core.config.claude_home_wide = False
+    with pytest.raises(ToolInputError):
+        _in_workspaces(str(home / "Games" / "mygame"), core.config)
+

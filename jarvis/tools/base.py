@@ -198,7 +198,10 @@ def _secretish(name: str) -> bool:
 # Never readable, whatever the access level: keys, passwords, browser profiles (cookies), JARVIS's own sessions.
 SECRET_PATHS = [".ssh", ".gnupg", ".password-store", ".local/share/keyrings", ".config/chromium", ".config/google-chrome",
                 ".config/BraveSoftware", ".mozilla", ".local/share/jarvis", ".local/state/jarvis", ".aws", ".kube",
-                ".docker", ".netrc", ".git-credentials", ".config/gh", ".pki", ".config/Signal"]
+                ".docker", ".netrc", ".git-credentials", ".config/gh", ".pki", ".config/Signal", ".claude", ".claude.json",
+                ".local/share/TelegramDesktop", ".thunderbird", ".var", ".config/discord", ".config/1Password",
+                ".config/Bitwarden", ".cargo/credentials", ".cargo/credentials.toml", ".npmrc", ".pypirc",
+                ".config/rclone", ".local/share/fish/fish_history", ".bash_history", ".zsh_history"]
 
 
 def is_secret_path(p: Path) -> bool:

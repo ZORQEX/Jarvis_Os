@@ -42,6 +42,10 @@ R = {
                         r"|\bсохрани\s+(?:это|результат\w*|их|ответ|всё|все)\b|\bскачай\w*\b"),
     "install": re.compile(r"\b(установи|поставь|доустанови|обнови|удали|подключи)\w*\s+.{0,30}"
                           r"(зависимост\w*|пакет\w*|библиотек\w*|модул\w*|программ\w*|приложени\w*|утилит\w*)"),
+    # «установи в систему программу X», «поставь Telegram» — not a project's dependencies
+    "sys_install": re.compile(r"\b(установи|поставь|доустанови|инсталлируй)\w*\b"),
+    "project_deps": re.compile(r"зависимост|библиотек|модул|в проект|для проекта|npm|pip\b|uv\b|requirements|"
+                               r"package\.json|в папк|в код"),
     "system": re.compile(r"\b(hyprland|waybar|omarchy|wayland|quickshell|systemd|journalctl|терминал\w*|консол\w*|"
                          r"shell|bash|git\b|коммит\w*|ветк\w* git|репозитор\w*|лог\w*|конфиг\w*)"),
     "code_change": re.compile(r"\b(исправь|почини|поправь|пофикси|измени|добавь|создай|отрефактор\w*|"
@@ -109,6 +113,8 @@ def classify_clause(c: str, prev: str | None) -> tuple[str, float]:
     explicit_web = re.search(r"в интернете|в сети\b|онлайн|погугли|загугли", t)
     if explicit_web and not R["files"].search(t):
         return "research", 0.9
+    if R["sys_install"].search(t) and not R["project_deps"].search(t):
+        return "chat", 0.9                  # a program for the system: Claude picks the packages → system_install
     if R["install"].search(t):
         return "change_code", 0.9
     if R["files"].search(t) and not R["write"].search(t):
@@ -308,6 +314,8 @@ SYSTEM_DIRS = {"hyprland": "~/.config/hypr", "hypr": "~/.config/hypr", "waybar":
 def claude_roots(config) -> list[Path]:
     """Folders Claude Code may work in: projects, the user's own folders, and desktop config folders."""
     raw = [*config.code_workspaces, *config.read_scopes, config.write_dir, *SYSTEM_DIRS.values()]
+    if getattr(config, "claude_home_wide", False):
+        raw.append("~")
     out = []
     for r in raw:
         p = Path(os.path.expanduser(r)).resolve()

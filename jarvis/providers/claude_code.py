@@ -43,7 +43,10 @@ SYSTEM = ("Ты работаешь как исполнитель внутри а
           "скачивать файлы можно, только если это явно разрешено для задачи; иначе сделай без них (например, сайт на "
           "чистом HTML/CSS/JS) или остановись и напиши, что именно требуется. Проверь результат (запусти, открой, "
           "прогони тесты, если они есть). В конце дай краткий отчёт по-русски: что сделано, какие файлы созданы или "
-          "изменены, как открыть или запустить результат, какие проверки запускались и с каким результатом.")
+          "изменены, как открыть или запустить результат, какие проверки запускались и с каким результатом. "
+          "Если для задачи разрешён браузер (инструменты mcp__browser__…), работай с сайтами через него. Никогда не "
+          "входи в аккаунты, не вводи пароли и платёжные данные, ничего не покупай и не отправляй формы от имени "
+          "пользователя, если это прямо не сказано в задании.")
 
 
 def _clean_env() -> dict:
@@ -57,19 +60,50 @@ def _clean_env() -> dict:
     return out
 
 
+def secret_rules() -> list[str]:
+    """Keys, passwords, sessions, browser profiles, JARVIS data: never read or written by Claude Code's file tools."""
+    from ..tools.base import SECRET_PATHS
+    out = []
+    for s in SECRET_PATHS:
+        for tool in ("Read", "Edit", "Write"):
+            out += [f"{tool}(~/{s})", f"{tool}(~/{s}/**)"]
+    return out + ["Read(**/.env)", "Read(**/*.pem)", "Read(**/*.key)", "Read(**/*.kdbx)",
+                  "Bash(cat ~/.ssh:*)", "Bash(cat ~/.claude:*)", "Bash(cat ~/.config/gh:*)"]
+
+
+# Browser control for tasks that need websites (open, click, fill, download): Microsoft's Playwright MCP server, a
+# separate headless Chromium with an in-memory profile — none of the user's logins or cookies. Pinned version.
+PLAYWRIGHT_MCP = "@playwright/mcp@0.0.83"
+
+
+def browser_mcp(workdir: str | None) -> str:
+    args = ["-y", PLAYWRIGHT_MCP, "--headless", "--isolated"]
+    if os.path.exists("/usr/bin/chromium"):
+        args += ["--executable-path", "/usr/bin/chromium"]
+    if workdir:
+        args += ["--output-dir", workdir]
+    return json.dumps({"mcpServers": {"browser": {"command": "npx", "args": args}}})
+
+
 def build_argv(prompt: str, mode: str, model: str = "", budget: float = 2.0, max_turns: int = 80,
-               allow: set[str] | None = None) -> list[str]:
+               allow: set[str] | None = None, workdir: str | None = None) -> list[str]:
     tools = CHANGE_TOOLS if mode == "change" else INSPECT_TOOLS
     argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--restricted",
             "--strict-mcp-config", "--no-session-persistence", "--permission-mode", "dontAsk",
             "--tools", ",".join(tools), "--allowedTools", *tools, "--max-turns", str(max_turns),
             "--max-budget-usd", f"{budget:.2f}", "--append-system-prompt", SYSTEM]
+    if mode == "change" and "browser" in (allow or set()):
+        i = argv.index("--strict-mcp-config")
+        argv[i + 1:i + 1] = ["--mcp-config", browser_mcp(workdir)]
+        j = argv.index("--allowedTools")
+        argv[j + 1:j + 1] = ["mcp__browser"]
+    deny = secret_rules()
     if mode == "change":
-        deny = list(DENY)
+        deny += DENY
         for perm, rules in GATED.items():
             if perm not in (allow or set()):
                 deny += rules
-        argv += ["--disallowedTools", *deny]
+    argv += ["--disallowedTools", *deny]
     if model:
         argv += ["--model", model]
     return argv
@@ -161,7 +195,7 @@ class ClaudeCodeProvider(AIProvider):
         from .claude_chat import context_block
         prompt = (context_block(req.context) + "\n\n" if req.context else "") + req.instruction
         argv = build_argv(prompt, req.mode, self.config.claude_model, self.config.claude_budget_usd,
-                          allow=set(getattr(req, "permissions", []) or []))
+                          allow=set(getattr(req, "permissions", []) or []), workdir=req.workdir)
         t0 = time.perf_counter()
         proc = await asyncio.create_subprocess_exec(*argv, cwd=req.workdir, env=_clean_env(),
                                                     stdin=asyncio.subprocess.DEVNULL,

@@ -12,7 +12,8 @@ from .db import Database, dumps, loads, new_id, now
 from .events import EventBus
 
 # tool -> kind of lasting change
-LASTING = {"claude_code_change": "change", "computer_task": "change", "create_note": "note"}
+LASTING = {"claude_code_change": "change", "computer_task": "change", "create_note": "note",
+           "system_install": "install", "site_publish": "publish"}
 TERMINAL = {"completed", "failed", "cancelled", "blocked"}
 _WAKE = re.compile(r"^\s*(джарвис|jarvis)[\s,!.:—-]*", re.I)
 
@@ -80,6 +81,11 @@ class ActionHistory:
             for s in steps:
                 files += (((s.get("result") or {}).get("data") or {}).get("git") or {}).get("changed") or []
             summary = _summary(data.get("text", "")) or (main.get("error") or "")
+        elif kind == "install":
+            summary = "Установлено в систему: " + ", ".join((main.get("args") or {}).get("packages") or [])
+        elif kind == "publish":
+            folder = (main.get("args") or {}).get("folder", "")
+            summary = ("Опубликовано: " + data["url"]) if data.get("url") else (main.get("error") or "")
         else:
             path = data.get("path", "")
             folder, files = os.path.dirname(path), [os.path.basename(path)] if path else []
@@ -93,6 +99,7 @@ class ActionHistory:
             "model": data.get("model"), "cost_usd": data.get("cost_usd"),
             "duration_ms": round(sum(s.get("duration_ms") or 0 for s in steps)) or None,
             "error": main.get("error") if main["state"] == "failed" else None,
+            "url": data.get("url"),
         }
         return {"task_id": task["id"], "kind": kind, "title": _title(task.get("request", "")),
                 "status": "done" if ok else "failed", "summary": summary, "folder": folder,
