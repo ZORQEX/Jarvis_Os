@@ -73,9 +73,10 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
                         gateway=gateway, gemini=gemini, scheduler=scheduler, config=config, flora=flora,
                         providers=manager, agency=agency)
     from .voice.speech import SpeechManager
-    from .voice.tts import GeminiTTS, PiperTTS
+    from .voice.tts import FallbackTTS, GeminiTTS, PiperTTS
     piper = PiperTTS(config.piper_voice)
-    engine = piper if config.tts_engine == "piper" and piper.available() else GeminiTTS(gemini)
+    engine = FallbackTTS(piper, GeminiTTS(gemini)) if config.tts_engine == "piper" and piper.available() \
+        else GeminiTTS(gemini)
     director.speech = SpeechManager(db, bus, engine)
     recovered = tasks.recover_after_restart()
     approvals.expire_old()

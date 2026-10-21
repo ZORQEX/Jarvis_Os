@@ -217,3 +217,39 @@ async def test_piper_synthesizes_fast():
         assert (time.perf_counter() - t0) < 1.5
     finally:
         await p.stop()
+
+
+async def test_tts_falls_back_and_reports_failure():
+    from jarvis.voice.tts import FallbackTTS
+
+    class Broken(FakeTTS):
+        name = "broken"
+
+        async def synth(self, text):
+            raise RuntimeError("engine died")
+
+        def available(self):
+            return True
+    Broken.cache = {}
+    good = FakeTTS(); good.available = lambda: True
+    fb = FallbackTTS(Broken(), good)
+    assert (await fb.synth("Привет.")).startswith(b"RIFF") and fb.last_engine == "fake"
+    fb2 = FallbackTTS(Broken(), None)
+    with pytest.raises(RuntimeError):
+        await fb2.synth("Привет.")
+
+
+async def test_speech_failure_is_reported_and_text_stays(core):
+    class Dead(FakeTTS):
+        async def synth(self, text):
+            raise RuntimeError("нет звука")
+    sp = SpeechManager(core.db, core.bus, Dead())
+    core.director.speech = sp
+    install(core, gemini=ScriptedGemini(core.config, [["Ответ есть. Второе предложение."]]))
+    drain = audio_events(core)
+    tid = await core.director.submit("Что такое API?", "voice")
+    await wait_done(core, tid)
+    await wait_for(lambda: any(e["kind"] == "speech.end" for e in drain()))
+    kinds = [e["kind"] for e in drain()]
+    assert "speech.error" in kinds and "speech.audio" not in kinds and "speech.synth" in kinds
+    assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("Ответ есть")

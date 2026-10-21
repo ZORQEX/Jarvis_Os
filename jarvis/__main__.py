@@ -117,15 +117,18 @@ def open_window(cfg: Config, paths: Paths, toggle: bool = False) -> None:
     profile = paths.data / "browser-profile"
     argv = [b, f"--app={url}", f"--class={WINDOW_CLASS}", f"--user-data-dir={profile}", "--no-first-run",
             "--no-default-browser-check", "--disable-features=Translate,MediaRouter", "--disable-sync",
-            "--password-store=basic", "--ozone-platform=wayland"]
+            "--password-store=basic", "--ozone-platform=wayland", "--autoplay-policy=no-user-gesture-required"]
+    # Own audio identity: PipeWire restores volume per application.id, so JARVIS speech does not inherit the
+    # volume the user set for other Chromium windows (measured: 4 % → inaudible).
+    env_prefix = ["env", "PULSE_PROP=application.id=jarvis-workos application.name=JARVIS media.role=assistant"]
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
         # One-shot exec rules: floating, sized and centred — no change to the user's Hyprland config.
         w, h = _window_size()
         rules = f"[float; size {w} {h}; center]"
-        cmd = " ".join(_q(a) for a in argv)
+        cmd = " ".join(_q(a) for a in env_prefix + argv)
         subprocess.run(["hyprctl", "dispatch", "exec", f"{rules} {cmd}"], capture_output=True)
     else:
-        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.Popen(env_prefix + argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 def _window_size() -> tuple[int, int]:

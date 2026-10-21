@@ -49,7 +49,7 @@ class AuditLog:
 
 class EventBus:
     # Event kinds that are UI-only noise and need not be stored.
-    TRANSIENT = {"assistant.delta", "step.progress", "core.state", "voice.level", "speech.audio", "speech.end",
+    TRANSIENT = {"assistant.delta", "step.progress", "core.state", "voice.level", "speech.audio", "speech.synth", "speech.end",
                  "speech.cancelled", "speech.error"}
 
     def __init__(self, db: Database):

@@ -6,8 +6,10 @@ import { setLevel } from "./companion.js";
 const now = () => performance.timeOrigin + performance.now();   // epoch ms, same clock as the core
 
 export class Voice {
-  constructor({ link, onState, onError, onTurn }) {
+  constructor({ link, onState, onError, onTurn, onOutput }) {
     this.link = link;
+    this.onOutput = onOutput || (() => {});
+    this.outputChecked = 0;
     this.onState = onState;
     this.onError = onError;
     this.onTurn = onTurn || (() => {});
@@ -15,7 +17,7 @@ export class Voice {
     this.speakReplies = localStorage.getItem("jarvis.speak") === "1";
     this.silenceMs = +(localStorage.getItem("jarvis.silenceMs") || 650);
     this.supported = !!(navigator.mediaDevices?.getUserMedia && window.AudioWorkletNode);
-    this.state = null;            // null | listening | recording | transcribing | speaking | interrupted
+    this.state = null;  // null | listening | recording | transcribing | synthesizing | speaking | interrupted | error
     this.conversation = false;    // hands-free: keep listening after each answer
     this.once = false;            // single utterance (mic button)
     this.stream = null; this.ctx = null; this.node = null;
@@ -147,12 +149,20 @@ export class Voice {
   async enqueue(ev) {
     if (this.dropped.has(ev.task_id)) return;
     if (!this.out) this.out = new AudioContext();
-    if (this.out.state === "suspended") await this.out.resume();
+    if (this.out.state === "suspended") await this.out.resume().catch(() => {});
+    if (this.out.state !== "running") {        // never claim we are speaking when the browser blocks audio
+      this.set("error"); this.onError("Окно не может воспроизвести звук (аудио заблокировано). Нажмите в окне JARVIS и повторите.");
+      return;
+    }
     let buf;
     try {
       const bytes = Uint8Array.from(atob(ev.audio_b64), (c) => c.charCodeAt(0));
       buf = await this.out.decodeAudioData(bytes.buffer);
-    } catch { return; }
+    } catch {
+      this.onError("Не удалось воспроизвести звук ответа — текст показан на экране");
+      if (this.state === "synthesizing") this.set(this.listening ? "listening" : null);
+      return;
+    }
     if (this.dropped.has(ev.task_id)) return;
     const src = this.out.createBufferSource();
     src.buffer = buf;
@@ -166,13 +176,24 @@ export class Voice {
       this.playing = this.playing.filter((x) => x !== item);
       if (!this.playing.length && this.state === "speaking") this.set(this.listening ? "listening" : null);
     };
-    if (this.state !== "recording" && this.state !== "transcribing") this.set("speaking");
-    const turn = this.turnOf.get(ev.task_id);
-    if (turn && ev.seq === 1) {
-      const delay = Math.max(0, (at - this.out.currentTime) * 1000);
-      setTimeout(() => this.link.request("voice.metric", { turn, field: "first_audio_played", ts: (now()) / 1000 })
-        .catch(() => {}), delay);
-    }
+    const delay = Math.max(0, (at - this.out.currentTime) * 1000);
+    setTimeout(() => {                         // SPEAKING only once the sound really starts
+      if (!this.playing.includes(item)) return;
+      if (this.state !== "recording" && this.state !== "transcribing") this.set("speaking");
+      const turn = this.turnOf.get(ev.task_id);
+      if (turn && ev.seq === 1) this.link.request("voice.metric", { turn, field: "first_audio_played", ts: now() / 1000 }).catch(() => {});
+      this.checkOutput();
+    }, delay);
+  }
+
+  // Is JARVIS's own playback stream audible? (PipeWire per-application volume; checked while sound plays)
+  async checkOutput(force = false) {
+    if (!force && now() - this.outputChecked < 60000) return null;
+    this.outputChecked = now();
+    let r;
+    try { r = await this.link.request("voice.output"); } catch { return null; }
+    this.onOutput(r);
+    return r;
   }
 
   stopSpeaking(taskId) {

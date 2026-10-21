@@ -34,7 +34,22 @@ const voice = new Voice({
   },
   onTurn: () => { if (S.view !== "chat") nav("chat"); },
   onError: (m) => toast(m, "warn"),
+  onOutput: (r) => {
+    S.audioOut = r;
+    const w = outputProblem(r);
+    if (w) toast(w + " — откройте Настройки → Голос, там есть кнопка «Сделать громче».", "warn");
+    if (S.view === "settings") renderAudioOut();
+  },
 });
+
+function outputProblem(r) {
+  if (!r?.available) return "";
+  if (r.sink_muted) return "Звук компьютера выключен";
+  if (r.stream_found && r.muted) return "Звук JARVIS выключен в системном микшере";
+  if (r.stream_found && r.volume_pct != null && r.volume_pct < 20) return `Громкость JARVIS в системе всего ${r.volume_pct} %`;
+  if (r.sink_volume_pct != null && r.sink_volume_pct < 10) return `Общая громкость компьютера всего ${r.sink_volume_pct} %`;
+  return "";
+}
 
 function applySnapshot(d) {
   S.convId = d.conversation_id;
@@ -113,9 +128,15 @@ function onEvent(ev) {
     }
     case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : ""); break;
     case "speech.stop": voice.stopSpeaking(); break;
+    case "speech.synth": if (!voice.audio && !["recording", "transcribing"].includes(S.voice)) voice.set("synthesizing"); break;
     case "speech.audio": voice.enqueue(ev); break;
-    case "speech.cancelled": voice.stopSpeaking(tid); break;
-    case "speech.error": toast("Озвучивание не удалось: " + ev.error + " (текст ответа показан)", "warn"); break;
+    case "speech.end": if (!voice.audio && ["synthesizing", "error"].includes(S.voice)) voice.set(voice.listening ? "listening" : null); break;
+    case "speech.cancelled": voice.stopSpeaking(tid); if (S.voice === "synthesizing") voice.set(voice.listening ? "listening" : null); break;
+    case "speech.error":
+      toast("Ответ не удалось озвучить — он показан текстом. Причина: " + ev.error, "warn");
+      if (!voice.audio) voice.set("error");
+      setTimeout(() => { if (S.voice === "error") voice.set(voice.listening ? "listening" : null); }, 2500);
+      break;
     case "conversation.new": link.request("snapshot").then(applySnapshot).catch(() => {}); break;
     case "ui.navigate": pendingFlora = { tab: ev.tab }; nav(ev.view); break;
     case "providers": S.providers = ev.providers; S.provider = ev.provider; renderStatus(); renderComposer();
@@ -135,7 +156,7 @@ function notifyAttention() {
 }
 
 // ------------------------------------------------------------------ rendering: status
-const STATUS_RU = { INTERRUPTED: "Перебито — слушаю", IDLE: "Готов", STANDBY: "Экстренная остановка — действия заблокированы", LISTENING: "Слушаю…",
+const STATUS_RU = { SYNTHESIZING: "Готовлю голос…", INTERRUPTED: "Перебито — слушаю", IDLE: "Готов", STANDBY: "Экстренная остановка — действия заблокированы", LISTENING: "Слушаю…",
   PROCESSING: "Работаю…", THINKING: "Думаю…", EXECUTING: "Выполняю…", SPEAKING: "Говорю…",
   WAITING_APPROVAL: "Нужно ваше решение", PAUSED: "Пауза", MUTED: "Готов · микрофон выключен", COMPLETED: "Готово",
   ERROR: "Не получилось", OFFLINE: "Нет связи с ядром" };
@@ -144,8 +165,10 @@ function uiState() {
   if (!S.connected) return "OFFLINE";
   if (S.voice === "recording") return "LISTENING";
   if (S.voice === "interrupted") return "INTERRUPTED";
-  if (S.voice === "transcribing") return "THINKING";
+  if (S.voice === "transcribing") return "PROCESSING";
   if (S.voice === "speaking") return "SPEAKING";
+  if (S.voice === "synthesizing") return "SYNTHESIZING";
+  if (S.voice === "error") return "ERROR";
   if (S.voice === "listening" && ["IDLE", "COMPLETED"].includes(S.core.state)) return "LISTENING";
   const st = S.core.state;
   if (st === "IDLE" && voice.muted) return "MUTED";
@@ -154,13 +177,14 @@ function uiState() {
 
 function renderStatus() {
   const st = uiState();
-  companion.setState(st, { muted: voice.muted });
+  companion.setState(st === "SYNTHESIZING" ? "PROCESSING" : st, { muted: voice.muted });
   const el = $("#status");
   el.dataset.state = st;
   let label = STATUS_RU[st] || st;
   if (st === "LISTENING") label = S.voice === "recording" ? "Слушаю…" : "Жду вашу фразу";
   if (S.voice === "transcribing") label = "Распознаю речь…";
   if (S.core.working && ["EXECUTING", "THINKING", "PROCESSING"].includes(st)) label = `${S.core.working} работает…`;
+  if (st === "ERROR" && S.voice === "error") label = "Звук ответа не получился — текст на экране";
   if (st === "WAITING_APPROVAL" && S.core.pending_approvals > 1) label += ` (${S.core.pending_approvals})`;
   $(".status-label", el).textContent = label;
   $("#app").dataset.estop = S.core.estop ? "1" : "0";
@@ -429,7 +453,7 @@ $("#convBtn").addEventListener("click", () => voice.toggleConversation());
 async function submit(text, source) {
   if (S.view !== "chat") nav("chat");
   try {
-    await link.request("submit", { text, source, speak: voice.speakReplies }, 15000);
+    await link.request("submit", { text, source, speak: voice.speakReplies || voice.conversation }, 15000);
   } catch (e) {
     toast(e.message, "err");
     if (source === "text" && !input.value) { input.value = text; autosize(); }
@@ -572,6 +596,10 @@ function renderSettings() {
       <div class="field"><span style="font-size:13.5px">Пауза, после которой фраза считается законченной:</span>
         <input type="range" id="silenceRange" min="400" max="1500" step="50" value="${voice.silenceMs}" style="flex:1;min-width:160px">
         <span class="faint" id="silenceVal">${(voice.silenceMs / 1000).toFixed(2).replace(".", ",")} с</span></div>
+      <div class="field" style="margin-top:10px">
+        <button class="btn" id="soundTest">Проверить звук</button>
+        <span id="audioOut" class="faint" style="font-size:13px"></span>
+      </div>
       <div id="voiceTurns" style="margin-top:12px"></div>
     </div>
     <div class="panel">
@@ -615,12 +643,34 @@ function renderSettings() {
     $("#silenceVal", el).textContent = (voice.silenceMs / 1000).toFixed(2).replace(".", ",") + " с";
   });
   renderVoiceTurns($("#voiceTurns", el));
+  renderAudioOut();
+  $("#soundTest", el).addEventListener("click", async () => {
+    try { await link.request("voice.test"); } catch (er) { toast(er.message, "err"); return; }
+    setTimeout(() => voice.checkOutput(true), 900);
+  });
   $("#devToggle", el).addEventListener("change", (e) => {
     S.dev = e.target.checked; localStorage.setItem("jarvis.dev", S.dev ? "1" : "0"); turnCache.clear(); $("#thread").innerHTML = "";
   });
   $("#motionToggle", el).addEventListener("change", (e) => {
     localStorage.setItem("jarvis.reduceMotion", e.target.checked ? "1" : "0");
     document.documentElement.classList.toggle("anim-off", e.target.checked);
+  });
+}
+
+function renderAudioOut() {
+  const box = $("#audioOut");
+  if (!box) return;
+  const r = S.audioOut;
+  if (!r) { box.textContent = "Нажмите — JARVIS скажет тестовую фразу и проверит громкость своего звука."; return; }
+  if (!r.available) { box.textContent = "Системный микшер недоступен — проверьте громкость вручную."; return; }
+  const w = outputProblem(r);
+  box.innerHTML = `${esc(r.sink || "Устройство вывода")}: общая громкость ${r.sink_volume_pct ?? "?"} %${r.sink_muted ? " (выключен)" : ""}`
+    + (r.stream_found ? ` · JARVIS ${r.volume_pct ?? "?"} %${r.muted ? " (выключен)" : ""}` : " · поток JARVIS сейчас не играет")
+    + (w ? ` <b style="color:var(--warn)">— ${esc(w)}</b> <button class="btn primary" id="audioFix" style="height:28px">Сделать громче</button>` : " ✓");
+  $("#audioFix")?.addEventListener("click", async () => {
+    try { await link.request("voice.test"); await new Promise((r) => setTimeout(r, 700)); S.audioOut = await link.request("voice.output", { fix: true }); }
+    catch (er) { toast(er.message, "err"); }
+    renderAudioOut();
   });
 }
 

@@ -115,3 +115,31 @@ class GeminiTTS:
 
     async def stop(self) -> None:
         return None
+
+
+class FallbackTTS:
+    """Primary engine (local Piper) with a cloud fallback (Gemini TTS). Failures are reported, never hidden."""
+
+    def __init__(self, primary, fallback=None):
+        self.primary, self.fallback = primary, fallback
+        self.name = primary.name + (f"+{fallback.name}" if fallback else "")
+        self.cache = primary.cache
+        self.last_engine = primary.name
+
+    async def synth(self, text: str) -> bytes:
+        try:
+            out = await self.primary.synth(text)
+            self.last_engine = self.primary.name
+            return out
+        except Exception as e:   # noqa: BLE001
+            if not self.fallback or not self.fallback.available():
+                raise RuntimeError(f"{self.primary.name}: {e}") from None
+            out = await self.fallback.synth(text)
+            self.last_engine = self.fallback.name
+            return out
+
+    async def prewarm(self) -> None:
+        await self.primary.prewarm()
+
+    async def stop(self) -> None:
+        await self.primary.stop()

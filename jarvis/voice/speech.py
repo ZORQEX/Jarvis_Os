@@ -124,6 +124,8 @@ class SpeechStream:
                 if text is None:
                     break
                 self.mgr.mark(self.turn_id, "tts_start")
+                if self.seq == 0:
+                    self.mgr.bus.publish("speech.synth", {}, self.task_id)    # real state: synthesizing speech
                 try:
                     audio = await self.mgr.engine.synth(text)
                 except Exception as e:   # noqa: BLE001 — speech failure must never hide the text answer

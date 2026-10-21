@@ -274,7 +274,8 @@ class Server:
 
     async def api_submit(self, req):
         body = await req.json()
-        tid = await self.core.director.submit(str(body.get("text", "")), source=body.get("source", "api"))
+        tid = await self.core.director.submit(str(body.get("text", "")), source=body.get("source", "api"),
+                                              speak=bool(body.get("speak")))
         return web.json_response({"ok": True, "task_id": tid})
 
     # ------------------------------------------------------------------ websocket
@@ -339,6 +340,17 @@ class Server:
                 res = {}
             elif typ == "voice.warm":
                 res = {"warmed": await self._warm()}
+            elif typ == "voice.test":
+                sp = getattr(self.core.director, "speech", None)
+                if not sp:
+                    raise ValueError("Озвучивание не настроено")
+                tid = "test_" + pysecrets.token_hex(4)
+                sp.say(tid, "Проверка звука. Если вы меня слышите, всё в порядке.")
+                res = {"task_id": tid}
+            elif typ == "voice.output":
+                res = await audio_output(fix=bool(data.get("fix")))
+                if data.get("fix"):
+                    self.core.audit.write("voice.output_fixed", volume=res.get("volume_pct"))
             elif typ == "voice.turns":
                 res = d.speech.turns(int(data.get("limit", 20))) if d.speech else []
             elif typ == "tool.run":
@@ -391,6 +403,43 @@ class Server:
                                              ensure_ascii=False))
             except (ConnectionResetError, RuntimeError):
                 pass
+
+
+async def audio_output(fix: bool = False) -> dict:
+    """State of JARVIS's own playback stream in PipeWire (application.id=jarvis-workos) and the default sink.
+    With fix=True raises only JARVIS's stream to 100 % and unmutes it — other applications are not touched."""
+    import json as _json
+    import shutil as _sh
+    if not _sh.which("pactl"):
+        return {"available": False}
+    async def run(*a):
+        p = await asyncio.create_subprocess_exec("pactl", *a, stdout=asyncio.subprocess.PIPE,
+                                                 stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(p.communicate(), 5)
+        return out.decode("utf-8", "replace")
+    try:
+        inputs = _json.loads(await run("-f", "json", "list", "sink-inputs") or "[]")
+        sinks = _json.loads(await run("-f", "json", "list", "sinks") or "[]")
+        default = (await run("get-default-sink")).strip()
+    except (OSError, ValueError, asyncio.TimeoutError):
+        return {"available": False}
+    mine = [i for i in inputs if (i.get("properties") or {}).get("application.id") == "jarvis-workos"]
+    def pct(vol):
+        try:
+            return round(max(int(str(v.get("value_percent", "0")).rstrip("%")) for v in (vol or {}).values()))
+        except ValueError:
+            return None
+    sink = next((s for s in sinks if s.get("name") == default), None)
+    res = {"available": True, "stream_found": bool(mine),
+           "volume_pct": pct(mine[0].get("volume")) if mine else None, "muted": bool(mine and mine[0].get("mute")),
+           "sink": (sink or {}).get("description"), "sink_volume_pct": pct((sink or {}).get("volume")),
+           "sink_muted": bool(sink and sink.get("mute"))}
+    if fix and mine:
+        for i in mine:
+            await run("set-sink-input-volume", str(i["index"]), "100%")
+            await run("set-sink-input-mute", str(i["index"]), "0")
+        res.update(volume_pct=100, muted=False, fixed=True)
+    return res
 
 
 UNAUTH_PAGE = """<!doctype html><meta charset=utf-8><title>JARVIS</title>
