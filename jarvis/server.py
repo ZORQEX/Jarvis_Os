@@ -116,11 +116,19 @@ class Server:
             await self.core.director.speech.engine.prewarm()
         except Exception as e:   # noqa: BLE001 — speech is optional; text keeps working
             self.core.audit.write("speech.prewarm_failed", error=repr(e)[:200])
+        stt = getattr(self.core.director, "stt", None)
+        if stt and stt.available():
+            try:
+                await stt.start()                 # load the recognition model before the first phrase
+            except Exception as e:   # noqa: BLE001
+                self.core.audit.write("stt.prewarm_failed", error=repr(e)[:200])
 
     async def on_cleanup(self, app):
         self._fwd.cancel()
         if self.core.director.speech:
             await self.core.director.speech.engine.stop()
+        if getattr(self.core.director, "stt", None):
+            await self.core.director.stt.stop()
         await self.core.scheduler.stop()
         if self.core.comms:
             await self.core.comms.stop()
@@ -145,8 +153,11 @@ class Server:
     async def _voice_turn(self, data: dict) -> dict:
         """One spoken request: STT → Director (same path as typed text) → streamed speech."""
         d = self.core.director
-        if d.privacy_profile() != "AUTHORIZED_CLOUD":
-            raise ValueError("Распознавание голоса идёт через Gemini — в текущем режиме приватности оно выключено")
+        local = getattr(d, "stt", None)
+        local_ok = bool(local and local.available())
+        cloud_ok = d.privacy_profile() == "AUTHORIZED_CLOUD"
+        if not (local_ok or cloud_ok):
+            raise ValueError("Локальное распознавание не установлено, а облако выключено режимом приватности")
         audio = base64.b64decode(data.get("audio_b64", ""), validate=True)
         if not 1000 < len(audio) < 10 * 1024 * 1024:
             raise ValueError("Запись слишком короткая или слишком длинная")
@@ -157,10 +168,22 @@ class Server:
         turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
         if sp:
             sp.mark(turn, "stt_start")
+        stt_model = None
         try:
-            names = self.core.comms.vocabulary() if self.core.comms else None
-            confirming = any(d.voice_approvable(a["tool_id"]) for a in d.approvals.pending())
-            text = await self.core.gemini.transcribe(audio, mime, names=names, expect="confirm" if confirming else None)
+            text = None
+            if local_ok and mime == "audio/wav":
+                try:
+                    text, stt_model = await local.transcribe(audio), local.name     # on this computer, no quota
+                except Exception as e:   # noqa: BLE001
+                    self.core.audit.write("voice.local_stt_failed", error=repr(e)[:200])
+                    if not cloud_ok:
+                        raise
+            if text is None:
+                names = self.core.comms.vocabulary() if self.core.comms else None
+                confirming = any(d.voice_approvable(a["tool_id"]) for a in d.approvals.pending())
+                text = await self.core.gemini.transcribe(audio, mime, names=names,
+                                                         expect="confirm" if confirming else None)
+                stt_model = getattr(self.core.gemini, "last_transcribe_model", None)
         except Exception as e:   # noqa: BLE001
             if sp:
                 sp.annotate(turn, error=str(e)[:200])
@@ -168,7 +191,7 @@ class Server:
             raise ValueError("Не удалось распознать речь: " + str(e)[:150])
         if sp:
             sp.mark(turn, "stt_end")
-            sp.annotate(turn, stt_model=getattr(self.core.gemini, "last_transcribe_model", None), transcript=text)
+            sp.annotate(turn, stt_model=stt_model, transcript=text)
         self.core.audit.write("voice.transcribed", bytes=len(audio), chars=len(text), turn=turn)
         if not text.strip():
             if sp:

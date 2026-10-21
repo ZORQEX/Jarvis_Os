@@ -112,7 +112,8 @@ _PRONOUN = {"ей", "ему", "им", "её", "его"}
 def local_parse(text: str) -> dict | None:
     """Fallback when Gemini is unavailable: «отправь <кому> в <сервис> [через N минут | в HH:MM]: <текст>» and
     «… что <текст>», plus the status question. Anything less clear returns None (the user hears that Gemini is down)."""
-    raw = re.sub(r"^\s*(джарвис|jarvis)[\s,.!]*", "", text.strip(), flags=re.I)
+    from ..router import strip_wake
+    raw = strip_wake(text)
     t = raw.lower().replace("ё", "е")
     if re.search(r"(какие|что).*(запланир)", t):
         return {"action": "list_scheduled", "recipients": [], "message": "", "subject": "", "when": ""}
@@ -168,8 +169,8 @@ def parse_platform(text: str) -> str | None:
 
 
 def yes_no(text: str) -> bool | None:
-    t = re.sub(r"[^\w\s,]", "", text.lower().replace("ё", "е")).strip()
-    t = re.sub(r"^(джарвис|jarvis)[\s,]*", "", t)
+    from ..router import strip_wake
+    t = re.sub(r"[^\w\s,]", "", strip_wake(text).lower().replace("ё", "е")).strip()
     if re.fullmatch(YES + r"(,?\s*(пожалуйста|спасибо|джарвис))?", t):
         return True
     if re.fullmatch(NO + r"(,?\s*(пожалуйста|спасибо|джарвис))?", t):

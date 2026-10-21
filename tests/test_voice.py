@@ -302,3 +302,62 @@ async def test_silero_speaks_fast_with_numbers_and_latin():
         assert other[:4] == b"RIFF"
     finally:
         await s.stop()
+
+
+# ---------------------------------------------------------------- local speech recognition (real GigaAM if installed)
+from jarvis.voice.stt import LocalSTT  # noqa: E402
+
+
+@pytest.mark.skipif(not LocalSTT().available(), reason="local recognition is not installed")
+async def test_local_recognition_is_fast_and_russian():
+    import io
+    import wave as _wave
+    tts = SileroTTS(speaker="aidar")
+    stt = LocalSTT()
+    try:
+        raw = await tts.synth("Отправь Ивану в Telegram: привет.")
+        with _wave.open(io.BytesIO(raw)) as w:                     # 24 kHz from Silero → the worker resamples
+            assert w.getframerate() == 24000
+        await stt.start()
+        t0 = time.perf_counter()
+        text = await stt.transcribe(raw)
+        took = time.perf_counter() - t0
+        assert "ивану" in text.lower() and "привет" in text.lower() and took < 3.0
+        assert await stt.transcribe(_silence()) == ""
+    finally:
+        await tts.stop()
+        await stt.stop()
+
+
+def _silence() -> bytes:
+    import io
+    import wave as _wave
+    buf = io.BytesIO()
+    with _wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b"\0\0" * 800)
+    return buf.getvalue()
+
+
+async def test_voice_uses_local_recognition_and_never_the_cloud_when_it_works(core, monkeypatch):
+    import base64 as b64
+    from jarvis.server import Server
+
+    class FakeLocal:
+        name = "gigaam-test"
+
+        def available(self):
+            return True
+
+        async def transcribe(self, wav):
+            return "Сколько будет 2 плюс 2?"
+    core.director.stt = FakeLocal()
+
+    async def cloud(*a, **k):
+        raise AssertionError("Gemini must not be called")
+    monkeypatch.setattr(core.gemini, "transcribe", cloud)
+    core.db.set_kv("privacy_profile", "STRICT_OFFLINE")           # local recognition works even fully offline
+    srv = Server(core)
+    r = await srv._voice_turn({"audio_b64": b64.b64encode(b"RIFF" + b"\0" * 4000).decode(), "mime": "audio/wav"})
+    assert r["text"] == "Сколько будет 2 плюс 2?" and r["task_id"]
+    await wait_done(core, r["task_id"])
+    assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("4")

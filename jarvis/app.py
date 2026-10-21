@@ -81,6 +81,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
         chosen = DEFAULT_VOICE                      # older choices (Gemini / Piper voices) no longer exist
     engine = VoiceEngine(SileroTTS(), PiperTTS(config.piper_voice), chosen, float(db.get_kv("tts_rate") or 1.0))
     director.speech = SpeechManager(db, bus, engine)
+    from .voice.stt import LocalSTT
+    director.stt = LocalSTT()           # speech recognition on this computer (GigaAM); Gemini only as a fallback
     comms = build_comms(paths, config, db, bus, audit, registry, policy, gemini, director)
     recovered = tasks.recover_after_restart()
     approvals.expire_old()

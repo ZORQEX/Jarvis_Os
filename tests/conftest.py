@@ -36,6 +36,11 @@ def core(home, cfg, monkeypatch):
     # Keep tests independent of a real keyring entry.
     from jarvis import scheduler, secrets
     monkeypatch.setattr(secrets, "get", lambda account: None)
+    # The real voice and recognition models (~1 GB, seconds to load) are exercised by their own tests only.
+    from jarvis.voice.stt import LocalSTT
+    from jarvis.voice.tts import PiperTTS, SileroTTS
+    for cls in (LocalSTT, SileroTTS, PiperTTS):
+        monkeypatch.setattr(cls, "available", lambda self: False)
 
     async def no_desktop(*a, **k):        # tests must never show real notifications
         from jarvis.tools.base import CmdResult

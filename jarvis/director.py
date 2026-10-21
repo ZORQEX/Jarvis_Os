@@ -66,6 +66,7 @@ class Director:
         self.scheduler, self.config, self.flora = scheduler, config, flora
         self.providers, self.agency = providers, agency
         self.speech = None           # SpeechManager, set by the composition root
+        self.stt = None              # LocalSTT (speech recognition on this computer)
         self.comms = None            # CommsAgent
         self.hub = None              # CommsHub
         self.rt: dict[str, Runtime] = {}
