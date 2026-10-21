@@ -85,9 +85,9 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 |---|---|---|
 | One provider contract, capabilities, honest CONNECTED / NOT CONNECTED / ERROR | VERIFIED LOCAL | Messages view, drive.mjs comms |
 | Voice → Gemini intent → confirmation spoken → «да» → provider → result spoken | VERIFIED (real STT, Gemini, Piper; provider = test double) | scratch voice_e2e.py |
-| Telegram real send / schedule | IMPLEMENTED, NOT VERIFIED — needs the user's Telegram login | — |
-| WhatsApp real send | IMPLEMENTED, NOT VERIFIED — needs QR scan; QR display VERIFIED LOCAL | drive.mjs commsqr |
-| E-mail real send | IMPLEMENTED, NOT VERIFIED — needs an app password | — |
+| Telegram real send / schedule | VERIFIED LIVE (2026-10-21, to Saved Messages) | immediate №167986; scheduled «через 1 минуту» sent 17:01:11 exactly, re-read by id; schedule + cancel by command |
+| WhatsApp real send | VERIFIED LIVE (2026-10-21, to own number) | delivered ✓✓; status now read from our bubble's ticks (old `.message-out` markup gone — first two sends were delivered but reported «unknown», fixed) |
+| E-mail real send | VERIFIED LIVE (2026-10-21, Gmail to self) | found in «Отправленные» by Message-ID |
 | Persistent schedule, atomic claim (no double send), crash → unknown, missed, bounded retry | VERIFIED MOCK | test_comms.py |
 | Cancel / edit (new confirmation) / status by voice | VERIFIED MOCK | test_comms.py |
 | Ambiguous recipient or platform asked before anything is sent | VERIFIED MOCK | test_comms.py |
