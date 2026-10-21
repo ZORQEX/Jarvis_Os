@@ -271,10 +271,13 @@ async def test_cloud_voice_falls_back_to_local_and_reports_it():
 
         def client(self):
             raise RuntimeError("429 quota")
+    from jarvis.voice.tts import GeminiVoiceTTS
+    GeminiVoiceTTS.blocked.clear()
     p = FakePiper()
     eng = VoiceEngine(p, DeadGemini(), "gemini:Charon")
     out = [c async for c in eng.synth_stream("Привет.")]
-    assert out == [b"RIFF" + "Привет.".encode()] and eng.last_engine == "piper" and "429" in eng.last_fallback
+    assert out == [b"RIFF" + "Привет.".encode()] and eng.last_engine == "piper" and "Gemini" in eng.last_fallback
+    GeminiVoiceTTS.blocked.clear()
     await eng.set_voice("piper:ruslan", 1.2)
     assert p.voice == "ru_RU-ruslan-medium" and p.rate == 1.2 and eng.cloud is None
 
@@ -294,3 +297,36 @@ async def test_streamed_voice_chunks_are_played_in_order(core):
     audio = [e for e in drain() if e["kind"] == "speech.audio"]
     assert [base64.b64decode(e["audio_b64"]) for e in audio] == [b"RIFF0", b"RIFF1", b"RIFF2"]
     assert [e["seq"] for e in audio] == [1, 2, 3]
+
+
+async def test_cloud_voice_answer_uses_two_requests_and_reports_fallback(core):
+    class Cloudy(FakeTTS):
+        prefers_batch = True
+        cloud = object()
+        last_engine, last_fallback, voice_id = "piper", "дневной лимит", "gemini:Charon"
+
+        async def synth_stream(self, text):
+            self.calls.append(text)
+            yield b"RIFF" + text.encode()
+    eng = Cloudy()
+    sp = SpeechManager(core.db, core.bus, eng)
+    core.director.speech = sp
+    install(core, gemini=ScriptedGemini(core.config, [["Первое предложение. ", "Второе предложение. ", "Третье."]]))
+    drain = audio_events(core)
+    tid = await core.director.submit("Расскажи", "voice")
+    await wait_done(core, tid)
+    await wait_for(lambda: any(e["kind"] == "speech.end" for e in drain()))
+    assert eng.calls == ["Первое предложение.", "Второе предложение. Третье."]
+    assert [e for e in drain() if e["kind"] == "speech.fallback"][0]["reason"] == "дневной лимит"
+
+
+def test_quota_blocks_one_tts_model_and_moves_to_the_next():
+    from jarvis.voice.tts import GeminiVoiceTTS
+    GeminiVoiceTTS.blocked.clear()
+    g = GeminiVoiceTTS(type("G", (), {"configured": lambda self: True})(), "Charon")
+    g._block("gemini-3.8-flash-tts", RuntimeError("429 ... 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' retryDelay': '600s'"))
+    assert g.available() and "дневной лимит" in g.blocked["gemini-3.8-flash-tts"][1]
+    for m in g.models:
+        g._block(m, RuntimeError("429 PerDay retryDelay': '600s'"))
+    assert not g.available() and "дневной лимит" in g.why_unavailable()
+    GeminiVoiceTTS.blocked.clear()

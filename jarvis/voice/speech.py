@@ -75,6 +75,8 @@ class SpeechStream:
         self.cancelled = False
         self.got_delta = False
         self.finished = False
+        self.nseg, self.batch = 0, []
+        self.fallback_told = False
         self.worker = asyncio.create_task(self._work(), name=f"speech-{task_id}")
 
     def say(self, text: str) -> None:
@@ -98,6 +100,10 @@ class SpeechStream:
             return
         self.spoken += len(seg)
         self.mgr.mark(self.turn_id, "first_sentence")
+        if self.nseg and getattr(self.mgr.engine, "prefers_batch", False):
+            self.batch.append(seg)         # cloud voice: everything after the first sentence goes as one request
+            return
+        self.nseg += 1
         self.queue.put_nowait(seg)
 
     def finish(self, final_text: str | None = None) -> None:
@@ -109,6 +115,9 @@ class SpeechStream:
             self.feed(final_text)
         for seg in self.buffer.flush():
             self._queue(seg)
+        if self.batch:
+            self.queue.put_nowait(" ".join(self.batch))
+            self.batch = []
         if self.truncated:
             self.queue.put_nowait("Остальное — на экране.")
         self.queue.put_nowait(None)
@@ -136,6 +145,11 @@ class SpeechStream:
                 except Exception as e:   # noqa: BLE001 — speech failure must never hide the text answer
                     self.mgr.bus.publish("speech.error", {"error": str(e)[:200]}, self.task_id)
                     continue
+                if getattr(eng, "cloud", None) and getattr(eng, "last_engine", "") == "piper" and not self.fallback_told:
+                    self.fallback_told = True      # the chosen live voice did not speak: say so, never hide it
+                    self.mgr.bus.publish("speech.fallback", {"voice": getattr(eng, "voice_id", ""),
+                                                             "reason": getattr(eng, "last_fallback", "") or ""},
+                                         self.task_id)
             self.mgr.bus.publish("speech.end", {"segments": self.seq}, self.task_id)
             self.mgr.mark(self.turn_id, "speech_done")
         except asyncio.CancelledError:

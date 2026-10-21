@@ -151,26 +151,78 @@ class GeminiVoiceTTS:
     """Natural cloud voice (Gemini TTS), streamed: the first piece of sound arrives before the phrase is finished."""
     name = "gemini-voice"
 
-    def __init__(self, gemini, voice: str = "Kore", model: str = "gemini-3.8-flash-tts"):
-        self.gemini, self.voice, self.model = gemini, voice, model
+    # Each TTS model has its own free-tier quota (measured: 10 requests per day per model), so they are tried in turn.
+    # gemini-3.1-flash-tts-preview is left out: 14 s to answer in the measurement.
+    MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-2.5-flash-preview-tts"]
+    blocked: dict[str, tuple[float, str]] = {}      # model → (until, reason); shared by all voices
+    CACHE_DIR = Path(os.path.expanduser("~/.local/share/jarvis/tts-cache"))
+
+    def __init__(self, gemini, voice: str = "Kore", model: str | None = None):
+        self.gemini, self.voice = gemini, voice
+        self.models = [model] if model else list(self.MODELS)
         self.cache: dict[str, bytes] = {}
 
     def available(self) -> bool:
-        return self.gemini.configured()
+        return self.gemini.configured() and any(time.time() >= self.blocked.get(m, (0, ""))[0] for m in self.models)
+
+    def why_unavailable(self) -> str:
+        if not self.gemini.configured():
+            return "ключ Gemini не подключён"
+        reasons = {r for m in self.models for until, r in [self.blocked.get(m, (0, ""))] if time.time() < until}
+        return "; ".join(sorted(reasons)) or ""
+
+    def _disk(self, text: str) -> Path:
+        import hashlib
+        return self.CACHE_DIR / self.voice / (hashlib.sha256(text.encode()).hexdigest()[:24] + ".wav")
 
     async def synth_stream(self, text: str):
         """Yields WAV chunks (24 kHz mono PCM, each a complete little WAV) as Gemini produces them."""
-        from google.genai import types
         text = clean_for_speech(text)
         if not text:
             return
         if text in self.cache:
             yield self.cache[text]
             return
+        if len(text) < 80 and self._disk(text).exists():       # short repeated phrases never spend quota twice
+            self.cache[text] = self._disk(text).read_bytes()
+            yield self.cache[text]
+            return
+        last: Exception | None = None
+        for model in self.models:
+            until, _ = self.blocked.get(model, (0, ""))
+            if time.time() < until:
+                continue
+            sent = False
+            try:
+                async for chunk in self._stream(model, text):
+                    sent = True
+                    yield chunk
+                return
+            except Exception as e:   # noqa: BLE001
+                if sent:
+                    raise
+                last = e
+                self._block(model, e)
+        raise RuntimeError(self.why_unavailable() or f"Gemini не озвучил фразу: {last}")
+
+    def _block(self, model: str, e: Exception) -> None:
+        s = str(e)
+        if "429" in s or "RESOURCE_EXHAUSTED" in s or "quota" in s.lower():
+            m = re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+)s", s)
+            delay = min(int(m.group(1)), 86400) if m else 3600
+            per_day = "PerDay" in s
+            reason = ("дневной лимит бесплатного ключа Gemini на живые голоса исчерпан" if per_day
+                      else "Gemini временно ограничил частоту запросов")
+            self.blocked[model] = (time.time() + delay, reason)
+        else:
+            self.blocked[model] = (time.time() + 120, "модель синтеза Gemini не ответила")
+
+    async def _stream(self, model: str, text: str):
+        from google.genai import types
         cfg = types.GenerateContentConfig(response_modalities=["AUDIO"], speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.voice))))
         client = self.gemini.client()
-        it = await asyncio.wait_for(client.aio.models.generate_content_stream(model=self.model, contents=text,
+        it = await asyncio.wait_for(client.aio.models.generate_content_stream(model=model, contents=text,
                                                                               config=cfg), 8)
         # Gemini streams tiny pieces (measured: 239 for two sentences). Send the first ~0.25 s at once (fast start),
         # then ~1 s blocks, so the window schedules a handful of buffers instead of hundreds.
@@ -191,7 +243,13 @@ class GeminiVoiceTTS:
         if not got:
             raise RuntimeError("Gemini не вернул звук")
         if len(text) < 80:
-            self.cache[text] = _wav(pcm_all, 24000)
+            self.cache[text] = _wav(pcm_all, rate)
+            try:
+                p = self._disk(text)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(self.cache[text])
+            except OSError:
+                pass
 
     async def synth(self, text: str) -> bytes:
         chunks = [c async for c in self.synth_stream(text)]
@@ -273,20 +331,28 @@ class VoiceEngine:
             await self.piper.configure(self.piper.voice, rate)     # local fallback keeps its own voice
         return v
 
+    @property
+    def prefers_batch(self) -> bool:
+        """A cloud voice is billed per request: speak the first sentence at once, the rest of the answer in one go."""
+        return self.cloud is not None
+
     async def synth_stream(self, text: str):
         await self.apply()
-        if self.cloud and self.cloud.available():
-            sent = False
-            try:
-                async for chunk in self.cloud.synth_stream(text):
-                    sent = True
-                    yield chunk
-                self.last_engine, self.last_fallback = "gemini", None
-                return
-            except Exception as e:   # noqa: BLE001
-                if sent:
-                    raise RuntimeError(f"Голос Gemini оборвался: {e}") from None
-                self.last_fallback = f"{e.__class__.__name__}: {str(e)[:120]}"
+        if self.cloud:
+            if self.cloud.available():
+                sent = False
+                try:
+                    async for chunk in self.cloud.synth_stream(text):
+                        sent = True
+                        yield chunk
+                    self.last_engine, self.last_fallback = "gemini", None
+                    return
+                except Exception as e:   # noqa: BLE001
+                    if sent:
+                        raise RuntimeError(f"Голос Gemini оборвался: {e}") from None
+                    self.last_fallback = str(e)[:200]
+            else:
+                self.last_fallback = self.cloud.why_unavailable() or "живой голос недоступен"
         yield await self.piper.synth(text)
         self.last_engine = "piper"
 

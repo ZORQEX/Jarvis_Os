@@ -133,6 +133,12 @@ function onEvent(ev) {
     case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : ""); break;
     case "speech.stop": voice.stopSpeaking(); break;
     case "speech.synth": if (!voice.audio && !["recording", "transcribing"].includes(S.voice)) voice.set("synthesizing"); break;
+    case "speech.fallback":
+      if (Date.now() - (S.fallbackToldAt || 0) > 10 * 60000) {
+        S.fallbackToldAt = Date.now();
+        toast(`Выбранный живой голос сейчас недоступен (${ev.reason || "Gemini"}) — отвечаю локальным голосом. Подробности: Настройки → Голос.`, "warn");
+      }
+      break;
     case "speech.audio": voice.enqueue(ev); break;
     case "speech.end": if (!voice.audio && ["synthesizing", "error"].includes(S.voice)) voice.set(voice.listening ? "listening" : null); break;
     case "speech.cancelled": voice.stopSpeaking(tid); if (S.voice === "synthesizing") voice.set(voice.listening ? "listening" : null); break;
