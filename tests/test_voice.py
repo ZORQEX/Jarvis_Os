@@ -7,7 +7,7 @@ import pytest
 
 from jarvis.calc import answer
 from jarvis.voice.speech import SentenceBuffer, SpeechManager
-from jarvis.voice.tts import PiperTTS, clean_for_speech
+from jarvis.voice.tts import PiperTTS, SileroTTS, clean_for_speech
 
 from conftest import ScriptedGemini, install, wait_done, wait_for
 
@@ -219,26 +219,6 @@ async def test_piper_synthesizes_fast():
         await p.stop()
 
 
-async def test_tts_falls_back_and_reports_failure():
-    from jarvis.voice.tts import FallbackTTS
-
-    class Broken(FakeTTS):
-        name = "broken"
-
-        async def synth(self, text):
-            raise RuntimeError("engine died")
-
-        def available(self):
-            return True
-    Broken.cache = {}
-    good = FakeTTS(); good.available = lambda: True
-    fb = FallbackTTS(Broken(), good)
-    assert (await fb.synth("Привет.")).startswith(b"RIFF") and fb.last_engine == "fake"
-    fb2 = FallbackTTS(Broken(), None)
-    with pytest.raises(RuntimeError):
-        await fb2.synth("Привет.")
-
-
 async def test_speech_failure_is_reported_and_text_stays(core):
     class Dead(FakeTTS):
         async def synth(self, text):
@@ -255,31 +235,35 @@ async def test_speech_failure_is_reported_and_text_stays(core):
     assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("Ответ есть")
 
 
-async def test_cloud_voice_falls_back_to_local_and_reports_it():
+async def test_silero_failure_falls_back_to_piper_and_is_reported():
     from jarvis.voice.tts import VoiceEngine
 
-    class FakePiper(FakeTTS):
-        voice, rate = "ru_RU-denis-medium", 1.0
-        cache = {}
+    class DeadSilero(FakeTTS):
+        speaker, rate, cache = "aidar", 1.0, {}
 
-        async def configure(self, voice, rate):
-            self.voice, self.rate = voice, rate
-
-    class DeadGemini:
-        def configured(self):
+        def available(self):
             return True
 
-        def client(self):
-            raise RuntimeError("429 quota")
-    from jarvis.voice.tts import GeminiVoiceTTS
-    GeminiVoiceTTS.blocked.clear()
-    p = FakePiper()
-    eng = VoiceEngine(p, DeadGemini(), "gemini:Charon")
-    out = [c async for c in eng.synth_stream("Привет.")]
-    assert out == [b"RIFF" + "Привет.".encode()] and eng.last_engine == "piper" and "Gemini" in eng.last_fallback
-    GeminiVoiceTTS.blocked.clear()
-    await eng.set_voice("piper:ruslan", 1.2)
-    assert p.voice == "ru_RU-ruslan-medium" and p.rate == 1.2 and eng.cloud is None
+        async def synth(self, text, speaker=None, rate=None):
+            raise RuntimeError("Silero остановился")
+
+        async def configure(self, speaker, rate):
+            self.speaker, self.rate = speaker, rate
+
+    class OkPiper(FakeTTS):
+        def available(self):
+            return True
+    eng = VoiceEngine(DeadSilero(), OkPiper(), "silero:xenia")
+    assert (await eng.synth("Привет.")).startswith(b"RIFF") and eng.last_engine == "piper"
+    assert "Silero" in eng.last_fallback
+    await eng.set_voice("silero:eugene", 1.2)
+    assert eng.silero.speaker == "eugene" and eng.silero.rate == 1.2
+
+
+def test_old_cloud_or_piper_choice_becomes_a_silero_voice(core):
+    from jarvis.voice.tts import VOICES
+    assert all(v["id"].startswith("silero:") for v in VOICES)
+    assert core.director.speech.engine.voice_id.startswith("silero:")
 
 
 async def test_streamed_voice_chunks_are_played_in_order(core):
@@ -299,34 +283,22 @@ async def test_streamed_voice_chunks_are_played_in_order(core):
     assert [e["seq"] for e in audio] == [1, 2, 3]
 
 
-async def test_cloud_voice_answer_uses_two_requests_and_reports_fallback(core):
-    class Cloudy(FakeTTS):
-        prefers_batch = True
-        cloud = object()
-        last_engine, last_fallback, voice_id = "piper", "дневной лимит", "gemini:Charon"
-
-        async def synth_stream(self, text):
-            self.calls.append(text)
-            yield b"RIFF" + text.encode()
-    eng = Cloudy()
-    sp = SpeechManager(core.db, core.bus, eng)
-    core.director.speech = sp
-    install(core, gemini=ScriptedGemini(core.config, [["Первое предложение. ", "Второе предложение. ", "Третье."]]))
-    drain = audio_events(core)
-    tid = await core.director.submit("Расскажи", "voice")
-    await wait_done(core, tid)
-    await wait_for(lambda: any(e["kind"] == "speech.end" for e in drain()))
-    assert eng.calls == ["Первое предложение.", "Второе предложение. Третье."]
-    assert [e for e in drain() if e["kind"] == "speech.fallback"][0]["reason"] == "дневной лимит"
-
-
-def test_quota_blocks_one_tts_model_and_moves_to_the_next():
-    from jarvis.voice.tts import GeminiVoiceTTS
-    GeminiVoiceTTS.blocked.clear()
-    g = GeminiVoiceTTS(type("G", (), {"configured": lambda self: True})(), "Charon")
-    g._block("gemini-3.8-flash-tts", RuntimeError("429 ... 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' retryDelay': '600s'"))
-    assert g.available() and "дневной лимит" in g.blocked["gemini-3.8-flash-tts"][1]
-    for m in g.models:
-        g._block(m, RuntimeError("429 PerDay retryDelay': '600s'"))
-    assert not g.available() and "дневной лимит" in g.why_unavailable()
-    GeminiVoiceTTS.blocked.clear()
+# ---------------------------------------------------------------- real Silero (if installed)
+@pytest.mark.skipif(not SileroTTS().available(), reason="Silero is not installed")
+async def test_silero_speaks_fast_with_numbers_and_latin():
+    s = SileroTTS(speaker="aidar")
+    try:
+        await s.start()
+        await s.synth("Прогрев.")
+        t0 = time.perf_counter()
+        wav = await s.synth("Готово. Отправил 25 процентов от 800 в Telegram.")
+        took = time.perf_counter() - t0
+        import io
+        import wave
+        with wave.open(io.BytesIO(wav)) as w:
+            dur = w.getnframes() / w.getframerate()
+        assert dur > 2.0 and took < 2.0          # numbers and «Telegram» are spoken, not skipped
+        other = await s.synth("Привет.", speaker="xenia")
+        assert other[:4] == b"RIFF"
+    finally:
+        await s.stop()

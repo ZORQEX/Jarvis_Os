@@ -37,7 +37,17 @@ Categories=Utility;Office;
 StartupWMClass=jarvis-workos
 DESK
 
-# Local speech (Piper, GPL-3.0) in its own virtualenv, used as a separate process. Voice "denis" (CC0 dataset).
+# Voice of JARVIS: Silero (Russian, local, no quota) in its own virtualenv, run as a separate process
+# (jarvis/voice/silero_worker.py). Silero models: non-commercial licence. ~0.9 GB with CPU-only PyTorch.
+SILERO="$HOME/.local/share/jarvis/silero"
+if [[ ! -x "$SILERO/.venv/bin/python" ]]; then
+  mkdir -p "$SILERO/models" && (cd "$SILERO" && uv venv -q --python 3.12 .venv \
+    && uv pip install -q --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1" \
+    && uv pip install -q --python .venv/bin/python "numpy<2.3" "num2words==0.5.14")
+fi
+[[ -s "$SILERO/models/v5_2_ru.pt" ]] || curl -fsSL -o "$SILERO/models/v5_2_ru.pt" "https://models.silero.ai/models/tts/ru/v5_2_ru.pt"
+
+# Emergency fallback voice only (used if Silero cannot start): Piper (GPL-3.0, separate process), voice "denis" (CC0).
 PIPER="$HOME/.local/share/jarvis/piper"
 if [[ ! -x "$PIPER/.venv/bin/python" ]]; then
   mkdir -p "$PIPER/voices" && (cd "$PIPER" && uv venv -q --python 3.12 .venv && uv pip install -q --python .venv/bin/python "piper-tts==1.8.0")

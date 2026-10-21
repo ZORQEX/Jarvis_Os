@@ -15,8 +15,13 @@ Date: 2026-10-21 · Status: accepted
   dedicated short spoken-style instruction; compact history (6 recent turns + a digest of earlier questions).
 - **Streaming speech** (`jarvis/voice/speech.py`): text deltas → sentence buffer (first segment early) → TTS → ordered
   audio chunks to the window while the model still writes. Long answers are capped in speech («Остальное — на экране»).
-- **Local TTS**: Piper (separate GPL process, voice «denis», CC0 data): 0.07–0.3 s per sentence, no quota, offline.
-  Voice «dmitri» was rejected: much lower intelligibility (measured by STT round-trip).
+- **Local TTS (updated 2026-10-21)**: Silero v5.2 Russian (5 voices: Айдар, Евгений, Ксения ×2, Бая), separate
+  process from its own venv, ~0.25 s per sentence on the i5-1235U, no quota, offline; numbers and Latin words are
+  spelled out in the worker. Licence: Silero models are non-commercial. Piper «denis» is kept only as an emergency
+  fallback (reported in the UI when used).
+  Rejected: Gemini TTS voices — natural, but the free key allows 10 requests/day per TTS model (measured), so the
+  chosen voice fell back after a few answers; removed at the user's request (no paid tier). Piper «dmitri»/«ruslan»
+  removed (lower intelligibility / NC licence).
 - **Acknowledgements** for long tasks are pre-synthesized at startup (no AI call).
 - **Window**: local VAD in an AudioWorklet (16 kHz, 400 ms pre-roll, end-of-phrase pause 0.65 s configurable),
   hands-free conversation mode, Web Audio playback queue, barge-in (higher threshold while JARVIS talks), Esc.

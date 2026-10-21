@@ -7,9 +7,7 @@ calling in the SDK is disabled so nothing can bypass that path.
 from __future__ import annotations
 
 import asyncio
-import io
 import time
-import wave
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
@@ -99,7 +97,7 @@ class GeminiProvider(AIProvider):
     def _init_models(self):
         c = self.config
         self.models = {m: ModelInfo(m, r) for r, m in
-                       (("fast", c.model_fast), ("main", c.model_main), ("deep", c.model_deep), ("tts", c.model_tts))}
+                       (("fast", c.model_fast), ("main", c.model_main), ("deep", c.model_deep))}
 
     # -- configuration ---------------------------------------------------------
     def configured(self) -> bool:
@@ -561,43 +559,6 @@ class GeminiProvider(AIProvider):
             self.last_transcribe_model = model
             return (r.text or "").strip()
         raise last or ProviderFailure("server", "Gemini не смог распознать речь")
-
-    async def speak(self, text: str) -> bytes:
-        """Return WAV bytes for text using the configured Gemini TTS model."""
-        from google.genai import types
-        self._guard()
-        client = self.client()
-        model = self.config.model_tts
-        cfg = types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.config.tts_voice))))
-        try:
-            r = await asyncio.wait_for(client.aio.models.generate_content(model=model, contents=text[:1500],
-                                                                          config=cfg), 30)
-        except Exception as e:   # noqa: BLE001
-            self._record(False, model)
-            raise classify(e) from None
-        part = next((p for p in (r.candidates[0].content.parts or []) if p.inline_data), None)
-        if not part:
-            raise ProviderError("invalid", "TTS не вернул аудио")
-        self._record(True, model)
-        data, mime = part.inline_data.data, part.inline_data.mime_type or ""
-        if "wav" in mime:
-            return data
-        rate = 24000
-        if "rate=" in mime:
-            try:
-                rate = int(mime.split("rate=")[1].split(";")[0])
-            except ValueError:
-                pass
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(rate)
-            w.writeframes(data)
-        return buf.getvalue()
 
 
 async def _hedged(make, after: float):

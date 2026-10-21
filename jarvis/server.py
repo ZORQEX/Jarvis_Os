@@ -317,42 +317,25 @@ class Server:
         return ws
 
     def _voices(self) -> dict:
-        from .voice.tts import PIPER_HOME, VOICES
+        from .voice.tts import VOICES
         eng = self.core.director.speech.engine if self.core.director.speech else None
-        out = []
-        for v in VOICES:
-            ok = (PIPER_HOME / "voices" / f"{v['model']}.onnx").exists() if v["engine"] == "piper" \
-                else self.core.gemini.configured()
-            out.append({**v, "available": ok})
-        return {"voices": out, "current": getattr(eng, "voice_id", None), "rate": getattr(eng, "rate", 1.0),
+        ok = bool(getattr(eng, "silero", None) and eng.silero.available())
+        return {"voices": [{**v, "available": ok} for v in VOICES], "current": getattr(eng, "voice_id", None),
+                "rate": getattr(eng, "rate", 1.0), "installed": ok,
                 "last_engine": getattr(eng, "last_engine", None), "last_fallback": getattr(eng, "last_fallback", None)}
 
     async def _voice_preview(self, vid: str, tid: str) -> None:
         """Speak a sample in any voice without changing the chosen one."""
-        from .voice.tts import PREVIEW, GeminiVoiceTTS, PiperTTS, voice_info
+        from .voice.tts import PREVIEW, voice_info
         bus, v = self.core.bus, voice_info(vid)
         eng = self.core.director.speech.engine if self.core.director.speech else None
-        tmp = None
         try:
-            if v["engine"] == "gemini":
-                src = GeminiVoiceTTS(self.core.gemini, v["model"]).synth_stream(PREVIEW)
-            else:
-                tmp = PiperTTS(v["model"], rate=getattr(eng, "rate", 1.0))
-
-                async def one():
-                    yield await tmp.synth(PREVIEW)
-                src = one()
-            seq = 0
-            async for chunk in src:
-                seq += 1
-                bus.publish("speech.audio", {"seq": seq, "text": PREVIEW, "mime": "audio/wav",
-                                             "audio_b64": base64.b64encode(chunk).decode()}, tid)
-            bus.publish("speech.end", {"segments": seq}, tid)
+            audio = await eng.preview(v["id"])
+            bus.publish("speech.audio", {"seq": 1, "text": PREVIEW, "mime": "audio/wav",
+                                         "audio_b64": base64.b64encode(audio).decode()}, tid)
+            bus.publish("speech.end", {"segments": 1}, tid)
         except Exception as e:   # noqa: BLE001
             bus.publish("speech.error", {"error": f"Голос «{v['name']}»: {str(e)[:150]}"}, tid)
-        finally:
-            if tmp:
-                await tmp.stop()
 
     async def _comms(self, typ, data):
         return await _comms_action(self, typ, data)
@@ -413,12 +396,10 @@ class Server:
             elif typ == "voice.set":
                 from .voice.tts import voice_info
                 eng = d.speech.engine if d.speech else None
-                if not hasattr(eng, "set_voice"):
-                    raise ValueError("Выбор голоса недоступен: не установлен локальный синтез Piper")
+                if not (hasattr(eng, "set_voice") and eng.silero.available()):
+                    raise ValueError("Голос Silero не установлен — запустите scripts/install.sh")
                 v = voice_info(str(data.get("voice")))
                 rate = min(1.4, max(0.7, float(data.get("rate", self.core.db.get_kv("tts_rate") or 1.0))))
-                if v["engine"] == "gemini" and not self.core.gemini.configured():
-                    raise ValueError("Живые голоса работают через Gemini — сначала подключите ключ Gemini")
                 await eng.set_voice(v["id"], rate)
                 self.core.db.set_kv("tts_voice", v["id"])
                 self.core.db.set_kv("tts_rate", rate)

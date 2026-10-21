@@ -137,7 +137,7 @@ class SpeechStream:
                     self.mgr.bus.publish("speech.synth", {}, self.task_id)    # real state: synthesizing speech
                 eng = self.mgr.engine
                 try:
-                    if hasattr(eng, "synth_stream"):          # cloud voices: play pieces as they arrive
+                    if hasattr(eng, "synth_stream"):          # engines that stream: play pieces as they arrive
                         async for audio in eng.synth_stream(text):
                             self._emit(text, audio)
                     else:
@@ -145,8 +145,8 @@ class SpeechStream:
                 except Exception as e:   # noqa: BLE001 — speech failure must never hide the text answer
                     self.mgr.bus.publish("speech.error", {"error": str(e)[:200]}, self.task_id)
                     continue
-                if getattr(eng, "cloud", None) and getattr(eng, "last_engine", "") == "piper" and not self.fallback_told:
-                    self.fallback_told = True      # the chosen live voice did not speak: say so, never hide it
+                if getattr(eng, "silero", None) and getattr(eng, "last_engine", "") == "piper" and not self.fallback_told:
+                    self.fallback_told = True      # the chosen voice did not speak: say so, never hide it
                     self.mgr.bus.publish("speech.fallback", {"voice": getattr(eng, "voice_id", ""),
                                                              "reason": getattr(eng, "last_fallback", "") or ""},
                                          self.task_id)

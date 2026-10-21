@@ -74,11 +74,12 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
                         gateway=gateway, gemini=gemini, scheduler=scheduler, config=config, flora=flora,
                         providers=manager, agency=agency)
     from .voice.speech import SpeechManager
-    from .voice.tts import GeminiTTS, PiperTTS, VoiceEngine
-    piper = PiperTTS(config.piper_voice)
-    # The voice the user chose in Settings → Голос (local Piper voices or natural Gemini voices).
-    engine = VoiceEngine(piper, gemini, db.get_kv("tts_voice") or "piper:denis", float(db.get_kv("tts_rate") or 1.0)) \
-        if piper.available() else GeminiTTS(gemini)
+    from .voice.tts import DEFAULT_VOICE, PiperTTS, SileroTTS, VoiceEngine
+    # Local voice only (Silero; Piper «Денис» as emergency fallback). The user's choice from Settings → Голос.
+    chosen = db.get_kv("tts_voice") or DEFAULT_VOICE
+    if not str(chosen).startswith("silero:"):
+        chosen = DEFAULT_VOICE                      # older choices (Gemini / Piper voices) no longer exist
+    engine = VoiceEngine(SileroTTS(), PiperTTS(config.piper_voice), chosen, float(db.get_kv("tts_rate") or 1.0))
     director.speech = SpeechManager(db, bus, engine)
     comms = build_comms(paths, config, db, bus, audit, registry, policy, gemini, director)
     recovered = tasks.recover_after_restart()

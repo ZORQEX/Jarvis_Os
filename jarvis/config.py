@@ -70,7 +70,6 @@ class Config:
     model_fast: str = "gemini-3.5-flash-lite"
     model_main: str = "gemini-3.8-flash"
     model_deep: str = "gemini-4-argon"
-    model_tts: str = "gemini-3.8-flash-tts"
     # When a Gemini model is overloaded (503), rate-limited or unavailable, the next one in this chain is tried.
     gemini_fallbacks: list[str] = field(default_factory=lambda: ["gemini-3.6-flash", "gemini-3.5-flash",
                                                                  "gemini-3.5-flash-lite"])
@@ -79,7 +78,6 @@ class Config:
     claude_budget_usd: float = 2.0
     claude_timeout_s: float = 900.0
     code_workspaces: list[str] = field(default_factory=lambda: ["~/Projects"])
-    tts_voice: str = "Kore"
     max_tool_rounds: int = 6
     ai_timeout_s: float = 60.0
     ai_first_token_timeout_s: float = 12.0
@@ -87,8 +85,7 @@ class Config:
     model_voice: str = "gemini-3.5-flash-lite"
     voice_first_token_timeout_s: float = 6.0
     stt_hedge_after_s: float = 2.0       # slow transcription → send a duplicate request, use the first answer
-    tts_engine: str = "piper"            # piper (local, fast) | gemini (cloud)
-    piper_voice: str = "ru_RU-denis-medium"   # a model that is silent this long is skipped for the next in the chain
+    piper_voice: str = "ru_RU-denis-medium"   # emergency fallback voice if Silero cannot speak
     history_turns: int = 12
     privacy_profile: str = "AUTHORIZED_CLOUD"
     approval_ttl_s: int = 900

@@ -34,7 +34,6 @@ def model_registry(config) -> list[ModelEntry]:
                      g, True, priority=6 + i) for i, m in enumerate(config.gemini_fallbacks)],
         ModelEntry("gemini", config.model_fast, "fast", ["planning", "voice", "general"], g, True),
         ModelEntry("gemini", config.model_deep, "deep", ["document_analysis", "general"], g, True),
-        ModelEntry("gemini", config.model_tts, "tts", ["voice"], ["audio"], False),
         ModelEntry("claude_code", config.claude_model or "default", "code", ["code", "terminal", "filesystem"],
                    ["text"], True),
     ]
