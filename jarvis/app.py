@@ -106,6 +106,7 @@ def build_comms(paths, config, db, bus, audit, registry, policy, gemini, directo
     for t in (MessageSend(hub), MessageDeliver(hub), MessageCancel(hub), TrustRuleAdd(hub), ContactSave(hub)):
         registry.tools[t.spec.id] = t
     policy.hooks.append(hub.policy_hook)
+    hub.full_access = lambda: policy.full_access
     director.comms = CommsAgent(hub, gemini, config)
     director.hub = hub
     hub.outbox.deliver = director.deliver_job

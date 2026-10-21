@@ -16,6 +16,11 @@ class CommsHub:
         self.providers = {p.id: p for p in providers}
         self.outbox = Outbox(db, bus, audit)
         self.book = AddressBook(db)
+        self.full_access = lambda: False     # replaced by the composition root
+
+    def is_self(self, d: dict) -> bool:
+        own = ((self.db.get_kv("email_account") or {}).get("address") or "").lower()
+        return d["to_id"] == "self" or bool(own and d["to_id"] == own)
 
     def provider(self, channel: str) -> Provider:
         p = self.providers.get(channel)
@@ -81,6 +86,9 @@ class CommsHub:
         from ..policy import Decision
         if spec.id != "message_send" or args.get("replaces"):
             return None
+        ds = args.get("deliveries") or []
+        if ds and self.full_access() and all(self.is_self(d) for d in ds):
+            return Decision("allow", "Полный доступ: сообщение самому себе")
         rules = [self.rule_for(d["channel"], d["to_id"]) for d in args.get("deliveries") or []]
         if rules and all(rules):
             names = ", ".join(f"{r['to_name']} {CHANNEL_TO[r['channel']]}" for r in rules)
@@ -89,6 +97,8 @@ class CommsHub:
 
     def auth_valid(self, job: dict) -> bool:
         kind, _, ref = (job.get("auth") or "").partition(":")
+        if kind == "full":     # a message to yourself under «Полный доступ»: valid while the mode stays on
+            return self.full_access() and self.is_self(job)
         if kind == "approval":
             r = self.db.one("SELECT status FROM approvals WHERE id=?", (ref,))
             return bool(r and r["status"] == "approved")

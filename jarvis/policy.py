@@ -26,6 +26,7 @@ class PolicyEngine:
         self.estop = False
         self.session_grants: set[str] = set()   # tool ids the user allowed for this run
         self.hooks: list = []    # explicit user rules (e.g. trusted messaging) that may answer "ask" — never "deny"
+        self.full_access = False  # «Полный доступ», включается пользователем только в окне JARVIS
 
     def evaluate(self, spec: ToolSpec, args: dict) -> Decision:
         if spec.risk == Risk.FORBIDDEN:
@@ -39,6 +40,8 @@ class PolicyEngine:
         if spec.risk == Risk.HIGH:
             return Decision("ask", "Высокий риск: нужно явное подтверждение")
         if spec.risk == Risk.MODERATE:
+            if self.full_access and spec.side_effects != "external":
+                return Decision("allow", "Полный доступ (включён вами)")
             if spec.id in self.session_grants:
                 return Decision("allow", "Разрешено вами до конца сеанса")
             return Decision("ask", "Действие меняет данные на компьютере или касается приватности")

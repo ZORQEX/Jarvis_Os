@@ -625,6 +625,10 @@ function renderSettings() {
     <div class="panel">
       <h2>Разрешения</h2>
       <div class="muted" style="font-size:13.5px">Каждое действие проходит через единую политику. Средний и высокий риск требуют вашего решения.</div>
+      <label class="toggle"><input type="checkbox" id="fullAccess" ${S.core.access === "full" ? "checked" : ""}> <span><b>Полный доступ к ноутбуку</b> —
+        чтение и поиск по всей домашней папке, обычные действия без вопросов, «да» голосом на любое подтверждение, сообщения себе без вопроса.
+        По-прежнему спрашиваю один раз: сообщения другим людям, изменения кода, правила «без подтверждения».
+        Никогда не открываю ключи, пароли и данные браузеров.</span></label>
       <table class="tbl"><thead><tr><th>Действие</th><th>Риск</th><th>Проверка результата</th></tr></thead><tbody>
         ${S.tools.filter((t) => t.id !== "cloud_send").map((t) => `<tr><td>${esc(t.title)}${S.grants.includes(t.id) ? ` <button class="btn ghost" data-revoke="${esc(t.id)}" style="height:24px;font-size:12px">отозвать разрешение</button>` : ""}</td>
           <td><span class="risk ${esc(t.risk)}">${esc({ low: "низкий", moderate: "средний", high: "высокий" }[t.risk] || t.risk)}</span></td>
@@ -647,6 +651,11 @@ function renderSettings() {
     try { await link.request("privacy.set", { profile: b.dataset.privacy }); S.core.privacy = b.dataset.privacy; } catch (er) { toast(er.message, "err"); }
     renderSettings(); renderStatus(); renderPrivacy(); renderComposer();
   }));
+  $("#fullAccess", el).addEventListener("change", async (e) => {
+    try { const r = await link.request("access.set", { level: e.target.checked ? "full" : "standard" }); S.core.access = r.access;
+      toast(r.access === "full" ? "Полный доступ включён" : "Обычный доступ: снова спрашиваю перед изменениями"); }
+    catch (er) { toast(er.message, "err"); e.target.checked = !e.target.checked; }
+  });
   $$("[data-revoke]", el).forEach((b) => b.addEventListener("click", async () => {
     const r = await link.request("grant.revoke", { tool_id: b.dataset.revoke }); S.grants = r.session_grants; renderSettings();
   }));

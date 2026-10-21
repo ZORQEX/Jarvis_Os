@@ -74,8 +74,11 @@ class Director:
         self._flash_handle = None
         self.started_at = time.time()
         self.policy.estop = bool(db.get_kv("estop", False))
+        self._base_scopes = (list(config.read_scopes), list(config.code_workspaces))
+        self.set_access(db.get_kv("access_level") or "standard", quiet=True)
         scheduler.on_fire = self._on_reminder
         bus.listeners.append(lambda kind, ev=None: self._touch() if kind in _STATE_KINDS else None)
+        bus.listeners.append(self._speak_approval)
 
     # ------------------------------------------------------------------ conversations
     def conversation_id(self) -> str:
@@ -131,9 +134,9 @@ class Director:
         cid = self.conversation_id()
         # "Да" / "Нет" to the message JARVIS just asked to confirm (voice or typed in the window; never via the API).
         if self.comms and source in ("voice", "text"):
-            from .comms.agent import VOICE_APPROVABLE, yes_no
+            from .comms.agent import yes_no
             yn = yes_no(text)
-            pend = [a for a in self.approvals.pending() if a["tool_id"] in VOICE_APPROVABLE] if yn is not None else []
+            pend = [a for a in self.approvals.pending() if self.voice_approvable(a["tool_id"])] if yn is not None else []
             if len(pend) == 1:
                 self.add_message(cid, "user", text, pend[0]["task_id"], meta={"source": source, "decision": yn})
                 if self.speech and turn:
@@ -508,6 +511,39 @@ class Director:
                 self._touch()
         runtime.task = asyncio.create_task(go())
 
+    # ------------------------------------------------------------------ access level
+    def set_access(self, level: str, quiet: bool = False) -> str:
+        """standard: chosen folders, questions for changes. full (chosen by the user in the window): the whole home
+        folder (never keys/passwords/browser profiles), ordinary actions without questions, «да» by voice for any
+        confirmation. Irreversible actions (messages to other people, code changes) still ask once."""
+        if level not in ("standard", "full"):
+            raise ValueError("Неизвестный уровень доступа")
+        scopes, work = self._base_scopes
+        self.config.read_scopes = list(scopes) + (["~"] if level == "full" else [])
+        self.config.code_workspaces = list(work) + (["~"] if level == "full" else [])
+        self.policy.full_access = level == "full"
+        if not quiet:
+            self.db.set_kv("access_level", level)
+            self.audit.write("access.changed", level=level)
+            self._touch()
+        return level
+
+    def voice_approvable(self, tool_id: str) -> bool:
+        from .comms.agent import VOICE_APPROVABLE
+        return tool_id in VOICE_APPROVABLE or (self.policy.full_access and tool_id != "trust_rule_add")
+
+    def _speak_approval(self, kind: str, ev: dict | None = None) -> None:
+        """In a voice task a confirmation is also asked aloud (message sends phrase their own question)."""
+        if kind != "approval.created" or not ev or not self.speech:
+            return
+        a = ev["approval"]
+        r = self.rt.get(a["task_id"])
+        if not r or not r.voice or a["tool_id"] in ("message_send", "cloud_send"):
+            return
+        how = "Скажите «да» или «нет»." if self.voice_approvable(a["tool_id"]) else "Подтвердите кнопкой на экране."
+        self.speech.speak_now(a["task_id"], f"Нужно ваше решение: {(a['summary'] or {}).get('action', '')[:160]}. {how}",
+                              r.turn)
+
     # ------------------------------------------------------------------ scheduled messages
     async def deliver_job(self, job: dict) -> None:
         """Outbox executor callback: a scheduled message is due. Runs as a visible task through the Gateway."""
@@ -596,7 +632,7 @@ class Director:
             state = "IDLE"
         return {"state": state, "active_tasks": len(active), "pending_approvals": len(pending), "working": working,
                 "estop": self.policy.estop, "ai": self._ai_summary(),
-                "privacy": self.privacy_profile()}
+                "privacy": self.privacy_profile(), "access": "full" if self.policy.full_access else "standard"}
 
     def _ai_summary(self) -> str:
         if not self.providers:

@@ -97,6 +97,8 @@ class MessageSend(_CommsTool):
         rules = [self.hub.rule_for(d["channel"], d["to_id"]) for d in args["deliveries"]]
         if all(rules):
             return "rule:" + ",".join(r["id"] for r in rules)
+        if self.hub.full_access() and all(self.hub.is_self(d) for d in args["deliveries"]):
+            return "full:self"
         raise ToolError("Нет подтверждения на эту отправку")
 
     async def run(self, args, ctx):

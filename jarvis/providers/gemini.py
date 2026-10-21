@@ -527,7 +527,7 @@ class GeminiProvider(AIProvider):
         if expect == "confirm":
             # Measured: with the assistant's name in the context a short «Да.» came back as «Джарвис».
             prompt = ("Transcribe this short Russian answer verbatim. The assistant has just asked the user to confirm "
-                      "sending a message, so expect answers like «Да», «Да, отправляй», «Нет», «Не надо», «Измени текст …». "
+                      "an action, so expect answers like «Да», «Да, отправляй», «Нет», «Не надо», «Измени текст …». "
                       "Output only the transcript; empty string if there is no speech.")
         elif names:
             prompt += " Names the user often messages: " + ", ".join(names[:15]) + "."

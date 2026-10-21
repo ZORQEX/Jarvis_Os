@@ -158,8 +158,7 @@ class Server:
             sp.mark(turn, "stt_start")
         try:
             names = self.core.comms.vocabulary() if self.core.comms else None
-            from .comms.agent import VOICE_APPROVABLE
-            confirming = any(a["tool_id"] in VOICE_APPROVABLE for a in d.approvals.pending())
+            confirming = any(d.voice_approvable(a["tool_id"]) for a in d.approvals.pending())
             text = await self.core.gemini.transcribe(audio, mime, names=names, expect="confirm" if confirming else None)
         except Exception as e:   # noqa: BLE001
             if sp:
@@ -337,6 +336,8 @@ class Server:
                 self.core.audit.write("privacy.changed", profile=data["profile"])
                 d._touch()
                 res = {"profile": data["profile"]}
+            elif typ == "access.set":         # window only (cookie-authenticated UI), never the bearer API
+                res = {"access": d.set_access(str(data.get("level")))}
             elif typ == "grant.revoke":
                 self.core.policy.session_grants.discard(str(data.get("tool_id")))
                 res = {"session_grants": sorted(self.core.policy.session_grants)}
