@@ -61,6 +61,7 @@ async def test_message_to_self_needs_no_question_but_others_do(core, hub):
     core.director.set_access("full")
     hub.providers["telegram"].people = PEOPLE["telegram"]
     hub.providers["telegram"].search = _self_search(hub.providers["telegram"])
+    core.director.comms.local_first = False
     core.director.comms.gemini = Intents(
         {"action": "send", "recipients": [{"name": "себе", "platform": "telegram"}], "message": "тест"},
         {"action": "send", "recipients": [{"name": "Иван Петров", "platform": "telegram"}], "message": "Привет"})

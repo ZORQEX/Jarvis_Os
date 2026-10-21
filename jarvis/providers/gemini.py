@@ -486,8 +486,10 @@ class GeminiProvider(AIProvider):
                "first_token_ms": round(first_ms or 0), "total_ms": round((time.perf_counter() - t0) * 1000)}
 
     async def structured(self, system: str, user: str, schema: dict, first_model: str | None = None,
-                         timeout: float = 6.0, max_tokens: int = 1024) -> dict:
-        """One JSON answer that must match `schema` (structured output). Fast model first, same fallback chain."""
+                         timeout: float = 6.0, max_tokens: int = 1024, budget: float | None = None) -> dict:
+        """One JSON answer that must match `schema` (structured output). Fast model first, same fallback chain.
+        `budget` caps the total time over all models (measured: 26 s lost walking a chain of overloaded models)."""
+        deadline = time.time() + budget if budget else None
         import json as _json
         from google.genai import types
         self._guard()
@@ -495,6 +497,11 @@ class GeminiProvider(AIProvider):
         last: ProviderError | None = None
         for i, model in enumerate(self.chain(first_model or self.config.model_voice)):
             tmo = timeout if i == 0 else max(timeout, 10.0)     # the fast model gets a short leash
+            if deadline:
+                tmo = min(tmo, deadline - time.time())
+                if tmo < 1.0:
+                    last = last or ProviderError("network", "Gemini не ответил вовремя")
+                    break
             cfg = dict(system_instruction=system, response_mime_type="application/json",
                        response_json_schema=schema, max_output_tokens=max_tokens, temperature=0.0)
             if "lite" in model:

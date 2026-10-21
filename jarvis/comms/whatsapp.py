@@ -51,7 +51,7 @@ class WhatsAppProvider(Provider):
     caps = {"can_send_text": True, "can_schedule": True, "can_search_contacts": True, "can_open_app": True,
             "can_send_file": False, "can_send_image": False, "can_reply": False}
 
-    def __init__(self, db, profile: Path, idle_close_s: float = 600):
+    def __init__(self, db, profile: Path, idle_close_s: float = 3600):
         self.db, self.profile, self.idle_close_s = db, profile, idle_close_s
         self.book = AddressBook(db)
         self.pw = self.ctx = self.page = None
@@ -160,8 +160,24 @@ class WhatsAppProvider(Provider):
                 await self._close()
                 return
 
+    async def start(self) -> None:
+        """Load WhatsApp Web in the background at JARVIS start, so the first message does not wait for it
+        (measured: up to 1–2 min of chat sync after a restart)."""
+        if self._linked_before() and chromium():
+            self._warm_task = asyncio.create_task(self.warm())
+
+    async def warm(self) -> None:
+        if self.page and not self.page.is_closed():
+            self._touch()
+            return
+        try:
+            async with self._lock:
+                await self._ensure()
+        except Exception:   # noqa: BLE001 — warming is best effort; a real send reports any problem
+            pass
+
     async def stop(self) -> None:
-        for t in (self._login_task, self._idle_task):
+        for t in (self._login_task, self._idle_task, getattr(self, "_warm_task", None)):
             if t:
                 t.cancel()
         await self._close()

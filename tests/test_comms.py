@@ -93,7 +93,9 @@ def iso(minutes=60):
 
 
 def intents(core, *items):
+    """Scripted Gemini intents: these tests exercise the Gemini path, so the instant local reading is switched off."""
     core.director.comms.gemini = Intents(*items)
+    core.director.comms.local_first = False
     return core.director.comms.gemini
 
 
@@ -559,3 +561,32 @@ async def test_provider_crash_during_search_is_a_clear_message(core, hub):
     await wait_done(core, tid)
     assert "не получилось найти контакт" in last_text(core) and "Ничего не отправлено" in last_text(core)
     assert not hub.providers["whatsapp"].sent
+
+
+async def test_clear_commands_are_read_locally_without_gemini(core, hub):
+    class NoGemini:
+        last_structured_model = ""
+        calls = 0
+
+        async def structured(self, *a, **k):
+            NoGemini.calls += 1
+            raise AssertionError("Gemini must not be needed for a clear command")
+    hub.providers["whatsapp"].people = [("chat:Мама ❤️", "Мама ❤️", "чат WhatsApp")]
+    core.director.comms.gemini = NoGemini()
+    t0 = time.perf_counter()
+    tid = await core.director.submit("Отправь сообщение контакту мама в WhatsApp привет.")
+    a = await pending_send(core)
+    assert time.perf_counter() - t0 < 1.0 and NoGemini.calls == 0
+    assert a["args"]["deliveries"][0]["to_id"] == "chat:Мама ❤️" and a["args"]["body"] == "Привет."
+    core.director.decide(a["id"], False)
+    await wait_done(core, tid)
+
+
+def test_local_reading_leaves_unclear_commands_to_gemini():
+    from jarvis.comms.agent import CommsAgent, local_parse
+    for q in ["Отправь Сергею и Ивану в Telegram: Встреча переносится.", "Напиши маме в вотсап, что я задержусь",
+              "Отправь ей теперь, что я её люблю", "Отправь сообщение в WhatsApp"]:
+        d = local_parse(q)
+        assert not (d and CommsAgent._confident(d)), q
+    d = local_parse("Отправь маме в WhatsApp завтра вечером: привет")
+    assert d["time_unclear"] and d["recipients"][0]["name"] == "маме"      # «завтра вечером» is never sent right away

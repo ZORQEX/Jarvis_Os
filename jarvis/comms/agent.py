@@ -3,6 +3,7 @@ or confirmation → Gateway tool. Gemini only reads the command (never credentia
 the providers perform the real action; the agent never says "sent" unless a provider confirmed it."""
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import re
 import time
@@ -105,7 +106,8 @@ _FILLER = {"джарвис", "jarvis", "говорю", "пожалуйста", "
             "мой", "моя", "контакту", "контакт", "контакта", "в", "во", "на", "через", "по", "почту", "почте", "а", "ну",
             "э", "ээ", "эм", "давай", "срочно", "отправь", "отправить", "напиши", "написать", "пошли", "скажи", "передай",
             "черкни", "сейчас", "с", "сердечком", "смайликом", "это", "этому", "человеку", "теперь", "ещё", "еще", "тоже",
-            "у", "для"}
+            "у", "для", "что", "чтобы", "сегодня", "завтра", "послезавтра", "вечером", "утром", "днем", "днём", "ночью",
+            "позже", "попозже", "потом", "текст", "а", "и"}
 _PRONOUN = {"ей", "ему", "им", "её", "его"}
 
 
@@ -119,14 +121,19 @@ def local_parse(text: str) -> dict | None:
         return {"action": "list_scheduled", "recipients": [], "message": "", "subject": "", "when": ""}
     if not re.search(r"\b(отправь|напиши|пошли|скажи|передай|черкни)\b", t):
         return None
+    chan = "|".join(PLATFORMS.values())
+    retold = False
     m = (re.search(r"[:—](?!\d)\s*(.+)$", raw)
-         or re.search(r"\b(?:а|и)\s+(?:сообщение|текст)\s*[:,]?\s+(.+)$", raw, re.I)          # «…а сообщение привет»
-         or re.search(r"\b(?:что|чтобы)\s+(.+)$", raw, re.I)
-         or re.search(r"(?<=[.!?])\s+(\S.+)$", raw))                                  # «…в ватсапе. Привет.»
+         or re.search(r"\b(?:а|и)\s+(?:сообщение|текст)\s*[:,]?\s+(.+)$", raw, re.I))          # «…а сообщение привет»
+    if not m:
+        m = re.search(r"\b(?:что|чтобы)\s+(.+)$", raw, re.I)
+        retold = bool(m)                     # «напиши маме, что я задержусь»: Gemini rephrases this better
+    m = (m or re.search(r"(?<=[.!?])\s+(\S.+)$", raw)                                       # «…в ватсапе. Привет.»
+         or re.search(rf"\b(?:в|на|по)\s+(?:{chan})\s*,?\s+(?!(?:в|на|через|завтра)\b)(\S.+)$", raw, re.I))  # «…в WhatsApp привет»
     if not m:
         return None
     msg = re.sub(r"[«»\"“”]", "", m.group(1)).strip()
-    head = raw[:m.start()]
+    head = raw[:m.start(1)]                  # everything before the text itself (keeps «в WhatsApp» for the service)
     verb = re.search(r"\b(отправь|напиши|пошли|скажи|передай|черкни)\b", head, re.I)
     if verb:
         head = head[verb.start():]          # «Ещё раз повторяю, отправь …»: only what follows the command counts
@@ -149,7 +156,7 @@ def local_parse(text: str) -> dict | None:
         hl = re.sub(rf"\b({rx})\b", " ", hl)
     tok = r"[\w.+-]+@[\w.-]+|\+?\d[\d -]{8,}\d|\w+(?:-\w+)?"
     words = [w for w in re.findall(tok, hl) if w not in _FILLER and w not in ("то", "вот", "так") and
-             not re.fullmatch(r"(э|м|а)+(-(э|м|а)+)*", w)]
+             not re.fullmatch(r"(э+|м+|а+|эм+)(-(э+|м+|а+))*", w)]       # «э», «мм», «э-э» — but not «мама»
     if not words:
         return None
     named = [w for w in words if w not in _PRONOUN]
@@ -159,6 +166,13 @@ def local_parse(text: str) -> dict | None:
         orig = {w.lower().replace("ё", "е"): w for w in re.findall(tok, head)}
         name = " ".join(orig.get(w, w) for w in named)
     out["recipients"] = [{"name": name, "platform": p} for p in plats]
+    out["_retold"] = retold or bool(re.search(r"\b(и|или)\b|,", re.sub(rf"\b({chan})\b", " ", head.lower())
+                                                                  .split(verb.group(0).lower(), 1)[-1] if verb else ""))
+    # «Сергею и Ивану», «маме или папе»: several people — left to Gemini, never guessed locally
+    vague = re.search(r"\b(вечером|утром|днем|днём|ночью|позже|попозже|потом|послезавтра|завтра|в понедельник|"
+                      r"во вторник|в среду|в четверг|в пятницу|в субботу|в воскресенье|на выходных)\b", t)
+    if vague and not out.get("when") and not out.get("in_minutes"):
+        out["time_unclear"] = True           # never send «завтра» right now: JARVIS asks «во сколько?»
     return out
 
 
@@ -194,6 +208,7 @@ class CommsAgent:
         self.hub, self.gemini, self.config = hub, gemini, config
         self.revisions: dict[str, dict] = {}       # task id → revised args (edit while a confirmation is open)
         self.superseded: set[str] = set()           # tasks whose open question was replaced by a newer command
+        self.local_first = True                     # clear commands are read without Gemini (instant, no quota)
 
     # ---------------------------------------------------------------- entry points
     def pending(self, ctx: dict) -> dict | None:
@@ -232,10 +247,14 @@ class CommsAgent:
 
     async def parse(self, text: str) -> dict:
         t0 = time.perf_counter()
+        local = local_parse(text)
+        if local and self.local_first and self._confident(local):
+            # A clear «кому / куда / что» command needs no AI: instant, no quota (measured: Gemini took 13–26 s).
+            local["_ms"], local["_model"] = round((time.perf_counter() - t0) * 1000), "local"
+            return local
         try:
-            d = await self.gemini.structured(system_prompt(dt.datetime.now()), text, SCHEMA)
+            d = await self.gemini.structured(system_prompt(dt.datetime.now()), text, SCHEMA, budget=8.0)
         except Exception:   # noqa: BLE001 — quota / network: simple commands still work without Gemini
-            local = local_parse(text)
             if local is None:
                 raise
             local["_ms"], local["_model"] = round((time.perf_counter() - t0) * 1000), "local"
@@ -247,6 +266,18 @@ class CommsAgent:
         d["_ms"] = round((time.perf_counter() - t0) * 1000)
         d["_model"] = getattr(self.gemini, "last_structured_model", "")
         return d
+
+    @staticmethod
+    def _confident(d: dict) -> bool:
+        """The local reading is unambiguous: one service, a short recipient, a text — and nothing that needs judgement
+        (relative words like «завтра вечером» with no hour, pronouns, retold text with «что»)."""
+        if d.get("action") == "list_scheduled":
+            return True
+        rc = d.get("recipients") or []
+        msg = (d.get("message") or "").strip()
+        return (d.get("action") == "send" and len(rc) == 1 and rc[0]["platform"] != "unknown"
+                and rc[0]["name"] != "__last__" and 0 < len(rc[0]["name"].split()) <= 3 and 0 < len(msg) <= 500
+                and not d.get("_retold"))
 
     @staticmethod
     def _plausible(d: dict, text: str) -> bool:
@@ -326,6 +357,8 @@ class CommsAgent:
                     return self._ask(director, tid, cid, intent, "platform",
                                      f"Куда отправить {self._dative(name)}: в Telegram, WhatsApp или на почту?", resolved)
             p = self.hub.provider(plat)
+            if hasattr(p, "warm") and p.connected():
+                asyncio.ensure_future(p.warm())     # get WhatsApp Web ready while the user hears the question
             if not p.connected():
                 st = p.status()
                 return director._finish(tid, cid, f"{p.title} не подключён — отправить не могу. {st.requirement} "
