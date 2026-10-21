@@ -590,3 +590,11 @@ def test_local_reading_leaves_unclear_commands_to_gemini():
         assert not (d and CommsAgent._confident(d)), q
     d = local_parse("Отправь маме в WhatsApp завтра вечером: привет")
     assert d["time_unclear"] and d["recipients"][0]["name"] == "маме"      # «завтра вечером» is never sent right away
+
+
+def test_chat_header_with_emoji_is_the_same_chat_but_another_name_is_not():
+    from jarvis.comms.whatsapp import _same_name
+    assert _same_name("Мама ❤️", "Мама ❤️") and _same_name("Мама ❤", "Мама ❤️")      # alt without variation selector
+    assert _same_name("‪Мама ❤️‬", "Мама ❤️")                              # invisible direction marks
+    assert not _same_name("Мама ", "Мама ❤️")        # the emoji-less header is a DIFFERENT chat «Мама»
+    assert not _same_name("Рома", "Мама ❤️")

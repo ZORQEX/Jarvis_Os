@@ -37,6 +37,14 @@ def _visible(s: str) -> str:
     return re.sub(r"[‎‏‪-‮⁦-⁩]", "", s or "").strip()
 
 
+def _same_name(header: str, key: str) -> bool:
+    """Is the open chat the one we chose? Compared without spaces, invisible marks and emoji variation selectors, but
+    WITH the emoji themselves — «Мама ❤️» and «Мама» are different chats and must stay different."""
+    def k(s: str) -> str:
+        return re.sub(r"[\s​-‏‪-‮⁦-⁩︎️]", "", s or "")
+    return k(header) == k(key)
+
+
 def chromium() -> str | None:
     for n in ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome"):
         p = shutil.which(n)
@@ -92,6 +100,8 @@ class WhatsAppProvider(Provider):
         self.profile.mkdir(parents=True, exist_ok=True)
         os.chmod(self.profile, 0o700)
         try:
+            if self._stale_pids():
+                await self._kill_stale()            # never start a second browser on the same profile
             self.pw = self.pw or await async_playwright().start()
             try:
                 self.ctx = await self._launch(exe)
@@ -116,10 +126,9 @@ class WhatsAppProvider(Provider):
             str(self.profile), executable_path=exe, headless=True, user_agent=UA, locale="ru-RU",
             viewport={"width": 1280, "height": 900}, args=["--disable-extensions", "--no-first-run"])
 
-    async def _kill_stale(self) -> None:
-        """Stop Chromium processes started with JARVIS's own WhatsApp profile (never the user's browser)."""
-        import signal
+    def _stale_pids(self) -> list[int]:
         marker = f"--user-data-dir={self.profile}"
+        out = []
         for pid_dir in Path("/proc").iterdir():
             if not pid_dir.name.isdigit():
                 continue
@@ -128,11 +137,28 @@ class WhatsAppProvider(Provider):
             except OSError:
                 continue
             if any(c.decode("utf-8", "replace") == marker for c in cmd):
-                try:
-                    os.kill(int(pid_dir.name), signal.SIGTERM)
-                except OSError:
-                    pass
-        await asyncio.sleep(1.5)
+                out.append(int(pid_dir.name))
+        return out
+
+    async def _kill_stale(self) -> None:
+        """Stop Chromium processes started with JARVIS's own WhatsApp profile (never the user's browser). A leftover
+        browser holding the profile made WhatsApp Web show its login page for 2 minutes after a restart (measured)."""
+        import signal
+        pids = self._stale_pids()
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        for _ in range(20):                       # wait until they are really gone (max ~4 s), then force
+            if not pids or not self._stale_pids():
+                break
+            await asyncio.sleep(0.2)
+        for pid in self._stale_pids():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
         for f in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
             try:
                 (self.profile / f).unlink()
@@ -200,13 +226,27 @@ class WhatsAppProvider(Provider):
     async def _wait_ready(self, timeout: float) -> str:
         """'ready' | 'qr' | 'timeout'."""
         end = time.time() + timeout
+        login_since = None
         while time.time() < end:
             if await self._first(SEL_READY):
                 return "ready"
-            if await self._first(SEL_QR):
-                return "qr"
+            login = await self._first(SEL_QR)
+            if not login:
+                try:
+                    body = await self.page.inner_text("body")
+                    login = "Отсканируйте" in body or "Scan to log in" in body or "Log into WhatsApp" in body
+                except Exception:   # noqa: BLE001
+                    login = False
+            if login:
+                # The login page also flashes briefly while a saved session is being restored: only a login page that
+                # stays for 20 s means the session is really gone.
+                login_since = login_since or time.time()
+                if time.time() - login_since > 20 or self.state in ("starting", "qr"):
+                    return "qr"
+            else:
+                login_since = None
             await asyncio.sleep(0.5)
-        return "timeout"
+        return "qr" if login_since else "timeout"
 
     # ---------------------------------------------------------------- linking (user scans the QR code)
     async def begin_link(self) -> dict:
@@ -258,7 +298,14 @@ class WhatsAppProvider(Provider):
         fresh = self.page is None or self.page.is_closed()
         await self._open()
         # After a restart WhatsApp Web re-syncs chats from the phone first: allow up to 2 minutes for that.
-        st = await self._wait_ready(120 if fresh else 45)
+        st = await self._wait_ready(90 if fresh else 45)
+        if st != "ready":
+            # Measured: a start right after a JARVIS restart showed the login page for 2 min, and a clean second start
+            # opened the chats at once. So: one clean restart of OUR browser before concluding anything.
+            await self._close()
+            await self._kill_stale()
+            await self._open()
+            st = await self._wait_ready(90)
         if st == "qr":
             self.db.set_kv("whatsapp_linked", False)
             self.state = "not_connected"
@@ -401,8 +448,17 @@ class WhatsAppProvider(Provider):
             raise CommsError(f"Чат «{key}» не найден в WhatsApp", "not_found")
         await self._click(target)
         head = await self._first(SEL_HEADER_TITLE, 10)
-        title = (await head.get_attribute("title") or await head.inner_text()) if head else ""
-        if title.strip() != key:
+        title = ""
+        if head:
+            # WhatsApp draws emoji in names as <img alt="❤️">: read text AND image alts, or «Мама ❤️» looks like «Мама »
+            # and the (correct) chat is refused — measured 2026-10-21.
+            title = await head.evaluate("""(el) => {
+              let s = '';
+              const walk = (n) => { for (const c of n.childNodes) {
+                if (c.nodeType === 3) s += c.textContent; else if (c.tagName === 'IMG') s += c.alt || ''; else walk(c); } };
+              walk(el); return s; }""")
+            title = title or (await head.get_attribute("title") or "")
+        if not _same_name(title, key):
             # Never type into a chat we are not sure about.
             raise CommsError("Открылся не тот чат WhatsApp — отправка остановлена", "rejected", f"header={title!r}",
                              retryable=True)

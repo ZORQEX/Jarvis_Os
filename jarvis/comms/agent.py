@@ -241,8 +241,9 @@ class CommsAgent:
         try:
             intent = await self.parse(text)
         except Exception as e:   # noqa: BLE001
-            return director._finish(tid, cid, "Не смог разобрать команду: Gemini сейчас недоступен (" + str(e)[:120] +
-                                    "). Повторите чуть позже.", meta=self._meta(), failed=True)
+            return director._finish(tid, cid, "Не понял, кому и куда отправить, а Gemini сейчас не отвечает. Скажите так: "
+                                    "«Отправь маме в WhatsApp: привет» — кто, сервис и текст после двоеточия, "
+                                    "тогда я пойму и без Gemini.", meta=self._meta(error=str(e)[:200]), failed=True)
         await self.dispatch(director, tid, cid, intent, text)
 
     async def parse(self, text: str) -> dict:
