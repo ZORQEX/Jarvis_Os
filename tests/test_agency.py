@@ -10,7 +10,7 @@ import pytest
 
 from jarvis.agency.planner import heuristic_plan
 from jarvis.agency.verifier import reconcile, ungrounded_numbers
-from jarvis.providers.base import Cap, Health, ProviderFailure
+from jarvis.providers.base import Cap, GenResult, Health, ProviderFailure
 from jarvis.providers.claude_code import DENY, GATED, build_argv
 from jarvis.tasks import S
 
@@ -372,3 +372,62 @@ async def test_cancel_kills_claude_code_process(core, tmp_path, monkeypatch):
 async def test_explicit_internet_search_beats_technical_keywords(core, both):
     d = await plan(core, "Найди в интернете, что такое Hyprland, и напиши об этом короткое сообщение коллеге")
     assert chain(d) == [("research", "claude"), ("write", "claude")]
+
+
+# ---------------------------------------------------------------- «сделай сайт»: the conversation can always act
+class _Builder(FakeProvider):
+    """Claude Code double: «builds» the site by writing files into the approved folder."""
+
+    async def generate(self, req, on_delta=None, on_progress=None):
+        self.requests.append(req)
+        Path(req.workdir, "index.html").write_text("<!doctype html><title>Кафе</title>")
+        Path(req.workdir, "style.css").write_text("body{}")
+        return GenResult("Сделал сайт кафе: index.html и style.css. Откройте index.html в браузере.", self.id,
+                         "claude-code-model", [], {"input_tokens": 1, "output_tokens": 1}, 0.4, 5, 10,
+                         {"tools_used": ["Write index.html"], "turns": 3})
+
+
+async def test_site_request_goes_to_claude_code_after_a_spoken_yes(core, home):
+    from conftest import ScriptedClaude, wait_for
+    core.config.code_workspaces = [str(home / "Projects")]
+    (home / "Projects").mkdir()
+    builder = _Builder("claude_code", CC)
+    chat = ScriptedClaude(core.config, [[("computer_task", {"instruction": "Сайт для кафе во французском стиле",
+                                                             "new_folder": "kafe-france"}),
+                                         "Готово: сайт в папке kafe-france."]])
+    install(core, claude=chat, claude_code=builder)
+    tid = await core.director.submit("Джарвис, мне нужен сайт для кафешки с минималистичным интерьером", "voice")
+    await wait_for(lambda: any(a["task_id"] == tid for a in core.director.approvals.pending()))
+    a = [a for a in core.director.approvals.pending() if a["task_id"] == tid][0]
+    assert a["tool_id"] == "computer_task" and a["risk"] == "high"
+    assert "kafe-france (новая папка)" in a["summary"]["action"]
+    assert not (home / "Projects" / "kafe-france").exists()          # nothing is created before the «да»
+    await core.director.submit("Да, разрешаю.", "voice")
+    await wait_for(lambda: core.tasks.get(tid)["state"] == "completed", timeout=10)
+    site = home / "Projects" / "kafe-france"
+    assert (site / "index.html").exists() and builder.requests[0].workdir == str(site)
+    assert chat.tool_results[0]["status"] == "ok"
+    h = core.director.history.list()
+    assert h and h[0]["folder"] == str(site) and {f["p"] for f in h[0]["files"]} == {"index.html", "style.css"}
+
+
+async def test_new_project_folder_never_reuses_a_folder_with_files(core, home):
+    from jarvis.agency.tools import new_project_dir
+    core.config.code_workspaces = [str(home / "Projects")]
+    (home / "Projects" / "kafe").mkdir(parents=True)
+    assert new_project_dir("Кафе", core.config) == (home / "Projects" / "kafe").resolve()     # empty: fine
+    (home / "Projects" / "kafe" / "a.txt").write_text("x")
+    assert new_project_dir("Кафе", core.config).name == "kafe-2"
+    assert new_project_dir("Сайт для кафе!", core.config).name == "sayt-dlya-kafe"
+
+
+def test_executor_can_look_things_up_but_never_escalates():
+    from jarvis.providers.claude_code import build_argv
+    argv = build_argv("x", "change")
+    tools = argv[argv.index("--tools") + 1]
+    deny = argv[argv.index("--disallowedTools") + 1:]
+    assert "WebSearch" in tools and "WebFetch" in tools
+    assert "Bash(sudo:*)" in deny and "Bash(pacman:*)" in deny
+    assert "Bash(npm install:*)" in deny                               # installing only when the task allows it
+    allowed = build_argv("x", "change", allow={"install"})
+    assert "Bash(npm install:*)" not in allowed and "Bash(sudo:*)" in allowed

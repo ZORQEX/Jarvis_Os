@@ -22,20 +22,28 @@ from ..db import Database
 from .base import AIProvider, Cap, GenResult, Health, ProviderFailure, StepRequest, usage_of
 
 INSPECT_TOOLS = ["Read", "Glob", "Grep"]
-CHANGE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
+# Web lookup while working (documentation, how to build or install something) — like a developer would.
+CHANGE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
 # Never allowed, even after approval: privilege escalation, system packages, remote shells, publishing.
 DENY = ["Bash(sudo:*)", "Bash(su:*)", "Bash(doas:*)", "Bash(pkexec:*)", "Bash(pacman:*)", "Bash(yay:*)",
         "Bash(paru:*)", "Bash(ssh:*)", "Bash(scp:*)", "Bash(git push:*)", "Bash(rm -rf /:*)", "Bash(rm -rf ~:*)",
         "Bash(chmod 777:*)", "Bash(systemctl enable:*)", "Bash(systemctl disable:*)"]
 # Allowed only when the approved task asked for it.
-GATED = {"install": ["Bash(pip install:*)", "Bash(uv add:*)", "Bash(uv pip install:*)", "Bash(npm install:*)",
-                     "Bash(pnpm add:*)", "Bash(cargo add:*)"],
+GATED = {"install": ["Bash(pip install:*)", "Bash(pip3 install:*)", "Bash(uv add:*)", "Bash(uv pip install:*)",
+                     "Bash(uv tool install:*)", "Bash(pipx install:*)", "Bash(npm install:*)", "Bash(npm i:*)",
+                     "Bash(npm ci:*)", "Bash(npx:*)", "Bash(pnpm add:*)", "Bash(pnpm install:*)", "Bash(yarn add:*)",
+                     "Bash(bun add:*)", "Bash(bun install:*)", "Bash(cargo add:*)", "Bash(cargo install:*)",
+                     "Bash(go install:*)", "Bash(go get:*)"],
          "download": ["Bash(curl:*)", "Bash(wget:*)"]}
 
-SYSTEM = ("Ты работаешь как исполнитель внутри ассистента JARVIS. Работай только в текущей папке. "
-          "Не используй sudo и системные пакетные менеджеры. Устанавливать зависимости проекта и скачивать файлы можно, "
-          "только если это явно разрешено для задачи; иначе остановись и напиши, что требуется. В конце дай краткий отчёт по-русски: что сделано, какие "
-          "файлы изменены, какие проверки (тесты) запускались и с каким результатом.")
+SYSTEM = ("Ты работаешь как исполнитель внутри ассистента JARVIS. Работай только в текущей папке. Доводи задачу до "
+          "конца сам: если чего-то не знаешь — найди в интернете (WebSearch/WebFetch); если папка пустая — создай всё "
+          "нужное с нуля (для сайта — готовые к открытию index.html, стили, скрипты, тексты, без заглушек). "
+          "Не используй sudo и системные пакетные менеджеры. Устанавливать зависимости и инструменты (npm, pip, uv) и "
+          "скачивать файлы можно, только если это явно разрешено для задачи; иначе сделай без них (например, сайт на "
+          "чистом HTML/CSS/JS) или остановись и напиши, что именно требуется. Проверь результат (запусти, открой, "
+          "прогони тесты, если они есть). В конце дай краткий отчёт по-русски: что сделано, какие файлы созданы или "
+          "изменены, как открыть или запустить результат, какие проверки запускались и с каким результатом.")
 
 
 def _clean_env() -> dict:
@@ -49,7 +57,7 @@ def _clean_env() -> dict:
     return out
 
 
-def build_argv(prompt: str, mode: str, model: str = "", budget: float = 2.0, max_turns: int = 30,
+def build_argv(prompt: str, mode: str, model: str = "", budget: float = 2.0, max_turns: int = 80,
                allow: set[str] | None = None) -> list[str]:
     tools = CHANGE_TOOLS if mode == "change" else INSPECT_TOOLS
     argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--restricted",

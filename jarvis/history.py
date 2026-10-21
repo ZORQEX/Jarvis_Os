@@ -12,7 +12,7 @@ from .db import Database, dumps, loads, new_id, now
 from .events import EventBus
 
 # tool -> kind of lasting change
-LASTING = {"claude_code_change": "change", "create_note": "note"}
+LASTING = {"claude_code_change": "change", "computer_task": "change", "create_note": "note"}
 TERMINAL = {"completed", "failed", "cancelled", "blocked"}
 _WAKE = re.compile(r"^\s*(джарвис|jarvis)[\s,!.:—-]*", re.I)
 

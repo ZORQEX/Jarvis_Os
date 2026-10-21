@@ -436,7 +436,8 @@ class Agency:
             parts.append(f"_Выполнено: {chain}._")
         if sources:
             parts.append("Источники:\n" + "\n".join(
-                f"{i}. {s.get('title') or s.get('ref')}" + (f" — {s['url']}" if s.get("url") else "")
+                f"{i}. {s.get('title') or s.get('ref') or s.get('url')}"
+                + (f" — {s['url']}" if s.get("url") and s.get("url") != (s.get("title") or s.get("ref")) else "")
                 for i, s in enumerate(sources[:8], 1)))
         text = "\n\n".join(p for p in parts if p).strip() or "Не удалось выполнить задачу."
         failed = bool(final) and (not main or not main.ok) and not done

@@ -186,6 +186,98 @@ class ClaudeChange(Tool):
         return Verification("unverified", f"Изменённые файлы: {files}. Независимая проверка не выполнялась: {why}")
 
 
+_SLUG = __import__("re").compile(r"[^a-z0-9._-]+")
+
+
+def new_project_dir(name: str, config) -> Path:
+    """A fresh folder for a new project in the first code workspace (~/Projects/<name>), never an existing one."""
+    import re as _re
+    tr = str.maketrans({"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z",
+                        "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r",
+                        "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+                        "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya", " ": "-"})
+    slug = _SLUG.sub("-", (name or "").strip().lower().translate(tr)).strip("-._")[:50]
+    slug = _re.sub(r"-{2,}", "-", slug) or time.strftime("task-%Y%m%d-%H%M")
+    root = Path(os.path.expanduser(config.code_workspaces[0] if config.code_workspaces else "~/Projects")).resolve()
+    p, i = root / slug, 2
+    while p.exists() and any(p.iterdir()):
+        p, i = root / f"{slug}-{i}", i + 1
+    return p
+
+
+class ComputerTask(ClaudeChange):
+    """The conversation's universal «do it» tool: whatever the user asks to make or change on the computer (a site,
+    a program, a script, files, settings of a project) is handed to Claude Code — after the user's confirmation, with
+    the same backup / changed-files / tests checks as any code change. The conversation never has to say «no tool»."""
+
+    def __init__(self, manager, config):
+        super().__init__(manager, config)
+        self.spec = ToolSpec(
+            id="computer_task", title="Задача на компьютере (Claude Code)",
+            description=(
+                "Do real work on this computer through Claude Code (files, code, terminal, web lookup): create "
+                "websites, apps, scripts, games, documents and other files; edit or fix code; run and test programs; "
+                "install a project's dependencies or user-level tools; download files; set up projects. Use it "
+                "whenever the user asks to make, build, create, write (code), fix, install, convert or set up "
+                "something — never answer that there is no tool for it. Give a complete, detailed instruction in the "
+                "user's language (what to build, style, content, technology). For a new thing set new_folder to a "
+                "short latin name (it is created in ~/Projects); for an existing project set folder. Put 'install' "
+                "in allow if packages/tools must be installed, 'download' if files must be fetched. The user "
+                "confirms first; work may take several minutes; the result lists changed files."),
+            params={"type": "object", "required": ["instruction"], "properties": {
+                "instruction": {"type": "string", "maxLength": 4000},
+                "new_folder": {"type": "string", "maxLength": 60},
+                "folder": {"type": "string", "maxLength": 500},
+                "allow": {"type": "array", "items": {"type": "string", "enum": sorted(PERM_RU)}}}},
+            risk=Risk.HIGH, side_effects="local", timeout_s=config.claude_timeout_s + 330, model_callable=True,
+            verification="Список изменённых/созданных файлов; JARVIS сам перезапускает тесты проекта, если они есть",
+            impact="Claude Code создаст или изменит файлы в этой папке и сможет запускать там команды (без sudo и "
+                   "системных пакетов). Существующая папка без git сначала копируется в резервную копию.")
+
+    def validate(self, args, ctx):
+        if "workdir" in args:                  # already-checked args (e.g. resumed after a restart): check again
+            a = dict(args)
+            wd = Path(str(a["workdir"])).resolve()
+            if a.get("new"):
+                root = new_project_dir("x", self.config).parent
+                if wd.parent != root or (wd.exists() and any(wd.iterdir())):
+                    raise ToolInputError("Новая папка должна быть пустой и лежать в " + str(root))
+            else:
+                wd = _in_workspaces(str(wd), self.config)
+            perms = a.get("permissions") or []
+            if not isinstance(perms, list) or any(p not in PERM_RU for p in perms) or not str(a.get("instruction", "")).strip():
+                raise ToolInputError("Неверное задание")
+            return {"instruction": str(a["instruction"])[:4000], "permissions": sorted(set(perms)),
+                    "workdir": str(wd), "new": bool(a.get("new"))}
+        a = Tool.validate(self, args, ctx)
+        perms = a.get("allow") or []
+        if not isinstance(perms, list) or any(p not in PERM_RU for p in perms):
+            raise ToolInputError("Недопустимое разрешение")
+        out = {"instruction": a["instruction"].strip(), "permissions": sorted(set(perms))}
+        if not out["instruction"]:
+            raise ToolInputError("Пустое задание")
+        if a.get("folder"):
+            out["workdir"], out["new"] = str(_in_workspaces(a["folder"], self.config)), False
+        else:
+            out["workdir"], out["new"] = str(new_project_dir(a.get("new_folder") or "", self.config)), True
+        return out
+
+    def describe(self, args):
+        extra = ("; разрешено: " + ", ".join(PERM_RU[p] for p in args.get("permissions", []))) \
+            if args.get("permissions") else ""
+        where = args["workdir"].replace(os.path.expanduser("~"), "~") + (" (новая папка)" if args.get("new") else "")
+        return f"Claude Code: «{args['instruction'][:120]}» в {where}{extra}"
+
+    async def run(self, args, ctx):
+        if args.get("new"):
+            Path(args["workdir"]).mkdir(parents=True, exist_ok=True)
+            if shutil.which("git"):               # a new project is tracked from the start (local only, no commits)
+                await run_cmd(["git", "init", "-q", args["workdir"]])
+        from ..providers.base import StepRequest
+        ctx.payload = {**(ctx.payload or {}), "req": StepRequest(Cap.CODE, args["instruction"])}
+        return await super().run(args, ctx)
+
+
 async def _run_claude(manager, ctx: ToolContext, args: dict, mode: str) -> ToolResult:
     p = manager.get("claude_code")
     req = (ctx.payload or {}).get("req")
@@ -245,7 +337,7 @@ def _backup(wd: str, config, max_bytes: int = 50_000_000) -> str | None:
 async def _git_state(wd: str) -> dict | None:
     if not shutil.which("git"):
         return None
-    r = await run_cmd(["git", "-C", wd, "status", "--porcelain"], timeout=15)
+    r = await run_cmd(["git", "-C", wd, "status", "--porcelain", "--untracked-files=all"], timeout=15)
     if r.code != 0:
         return None
     d = await run_cmd(["git", "-C", wd, "diff", "HEAD", "--stat"], timeout=15)
@@ -257,7 +349,13 @@ def _changed(before: dict | None, after: dict | None) -> list[str]:
         return []
     b = set((before or {}).get("status", "").splitlines())
     lines = [ln for ln in after["status"].splitlines() if ln not in b] or after["status"].splitlines()
-    return [ln[3:] for ln in lines if len(ln) > 3]
+    out = []
+    for ln in lines:
+        if len(ln) > 3:
+            code = ln[:2]
+            mark = "+ " if code in ("??", "A ", "AM") else "- " if "D" in code else ""
+            out.append(mark + ln[3:])                 # «+ new», «- deleted», plain = changed
+    return out
 
 
 async def _run_tests(wd: str) -> dict:

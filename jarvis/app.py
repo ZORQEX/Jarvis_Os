@@ -54,11 +54,12 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     gateway = Gateway(registry, policy, approvals, tasks, bus, audit, config)
     claude = ClaudeChatProvider(config, db, paths.state, registry)
     from .agency.agency import Agency
-    from .agency.tools import AgentGenerate, ClaudeChange, ClaudeInspect, OpenUrl
+    from .agency.tools import AgentGenerate, ClaudeChange, ClaudeInspect, ComputerTask, OpenUrl
     from .providers.claude_code import ClaudeCodeProvider
     from .providers.registry import ProviderManager
     manager = ProviderManager(db, config, [ClaudeCodeProvider(config, db), claude])
-    for t in (AgentGenerate(manager), ClaudeInspect(manager, config), ClaudeChange(manager, config), OpenUrl()):
+    for t in (AgentGenerate(manager), ClaudeInspect(manager, config), ClaudeChange(manager, config),
+              ComputerTask(manager, config), OpenUrl()):
         registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
     flora = None

@@ -1,6 +1,6 @@
 # Test matrix — milestone 1 + Flora (2026-10-20)
 
-Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 241 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
+Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 244 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -144,4 +144,13 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Spoken answers on the fast model in the same conversation (Settings → Голос → «Быстро / Подробнее») | VERIFIED LIVE | context kept across switch; Haiku 30 answers 0.9–1.9 s, no stalls; Sonnet stalls 4–10 s in 1–4 of 10 |
 | Early end of phrase: recognised after 0.6 s of silence, finished phrases answered at once, cut-off ones wait | VERIFIED LOCAL + browser | transcript ready 0.78 s after speech end (was ~1.6 s); test_voice.py probe tests; drive.mjs voiceui 0 errors |
 | Open window reloads itself when JARVIS restarts with a new interface | VERIFIED LOCAL | `ui_build` in snapshot |
+
+## «Сделай сайт»: the conversation can always act (2026-10-22)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Root cause of «нет инструмента»: «мне нужен сайт…» was a conversation step; the conversation had no tool that creates files | FOUND | real task t_d3643ba76cdf485c |
+| `computer_task`: the conversation hands any make/build/fix/install job to Claude Code (new folder in ~/Projects or an existing project), high-risk approval (voice «да» works), changed-files check, tests, history entry | VERIFIED LIVE (dev JARVIS) | «мне нужен сайт для кафешки…» → card in 6.9 s → «Да, разрешаю» → 252 s → `cafe-site/` index.html + style.css + script.js, opened in the browser, 0 JS errors; test_site_request_goes_to_claude_code_after_a_spoken_yes |
+| Executor may look things up (WebSearch/WebFetch), installs user-level tools only when the task allows, never sudo/pacman | VERIFIED LOCAL | test_executor_can_look_things_up_but_never_escalates |
+| New project folders never reuse a folder with files; tracked by a local git from the start | VERIFIED LOCAL | test_new_project_folder_never_reuses_a_folder_with_files |
 
