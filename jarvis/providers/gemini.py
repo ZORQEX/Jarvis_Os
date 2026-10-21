@@ -377,6 +377,8 @@ class GeminiProvider(AIProvider):
         return sorted(out, key=lambda m: self._penalty.get(m, 0) > now_) or [first]
 
     def _penalize(self, model: str, kind: str) -> None:
+        if kind == "quota":
+            self._no_hedge_until = time.time() + 1800     # the key is at its limit: never send duplicate requests
         if kind in ("server", "quota", "model", "network"):
             self._penalty[model] = time.time() + (900 if kind in ("model", "network") else 300)
 
@@ -540,8 +542,14 @@ class GeminiProvider(AIProvider):
             async def once():
                 return await asyncio.wait_for(client.aio.models.generate_content(
                     model=model, contents=[types.Part.from_bytes(data=audio, mime_type=mime), prompt], config=cfg), 20)
+            # Hedging (a second identical request after 2 s) cuts tail latency on a healthy key, but on a throttled
+            # free key both requests are slow and the quota burns twice as fast (measured 2026-10-21: 18.7 s answers).
+            hedge = self.config.stt_hedge_after_s if time.time() >= getattr(self, "_no_hedge_until", 0) else 3600
+            t_stt = time.perf_counter()
             try:
-                r = await _hedged(once, self.config.stt_hedge_after_s)
+                r = await _hedged(once, hedge)
+                if time.perf_counter() - t_stt > 6:
+                    self._no_hedge_until = time.time() + 600
             except Exception as e:   # noqa: BLE001
                 last = classify(e)
                 self._record(False, model)
