@@ -172,15 +172,22 @@ class GeminiVoiceTTS:
         client = self.gemini.client()
         it = await asyncio.wait_for(client.aio.models.generate_content_stream(model=self.model, contents=text,
                                                                               config=cfg), 8)
-        got = False
-        pcm_all = b""
+        # Gemini streams tiny pieces (measured: 239 for two sentences). Send the first ~0.25 s at once (fast start),
+        # then ~1 s blocks, so the window schedules a handful of buffers instead of hundreds.
+        got, pcm_all, buf, rate, first = False, b"", b"", 24000, True
         async for ch in _timeout_iter(it, 15):
             cand = (ch.candidates or [None])[0]
             for p in (cand.content.parts or []) if cand and cand.content else []:
                 if p.inline_data and p.inline_data.data:
                     got = True
+                    rate = _rate(p.inline_data.mime_type)
                     pcm_all += p.inline_data.data
-                    yield _wav(p.inline_data.data, _rate(p.inline_data.mime_type))
+                    buf += p.inline_data.data
+                    if len(buf) >= rate * 2 * (0.25 if first else 1.0):
+                        yield _wav(buf, rate)
+                        buf, first = b"", False
+        if buf:
+            yield _wav(buf, rate)
         if not got:
             raise RuntimeError("Gemini не вернул звук")
         if len(text) < 80:

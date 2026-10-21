@@ -101,6 +101,59 @@ def _local_dt(s: str) -> float | None:
     return time.mktime(d.timetuple())
 
 
+_FILLER = {"джарвис", "jarvis", "говорю", "пожалуйста", "сообщение", "сообщения", "письмо", "моему", "моей", "моим",
+            "мой", "моя", "контакту", "контакт", "контакта", "в", "во", "на", "через", "по", "почту", "почте", "а", "ну",
+            "э", "ээ", "эм", "давай", "срочно", "отправь", "отправить", "напиши", "написать", "пошли", "скажи", "передай",
+            "черкни", "сейчас", "с", "сердечком", "смайликом", "это", "этому", "человеку", "теперь", "ещё", "еще", "тоже"}
+_PRONOUN = {"ей", "ему", "им", "её", "его"}
+
+
+def local_parse(text: str) -> dict | None:
+    """Fallback when Gemini is unavailable: «отправь <кому> в <сервис> [через N минут | в HH:MM]: <текст>» and
+    «… что <текст>», plus the status question. Anything less clear returns None (the user hears that Gemini is down)."""
+    raw = re.sub(r"^\s*(джарвис|jarvis)[\s,.!]*", "", text.strip(), flags=re.I)
+    t = raw.lower().replace("ё", "е")
+    if re.search(r"(какие|что).*(запланир)", t):
+        return {"action": "list_scheduled", "recipients": [], "message": "", "subject": "", "when": ""}
+    if not re.search(r"\b(отправь|напиши|пошли|скажи|передай|черкни)\b", t):
+        return None
+    m = re.search(r"[:—](?!\d)\s*(.+)$", raw) or re.search(r"\b(?:что|чтобы)\s+(.+)$", raw, re.I)
+    if not m:
+        return None
+    msg = re.sub(r"[«»\"“”]", "", m.group(1)).strip()
+    head = raw[:m.start()]
+    plats = [k for k, rx in PLATFORMS.items() if re.search(rf"\b({rx})\b", head.lower())] or ["unknown"]
+    out = {"action": "send", "message": msg[:1].upper() + msg[1:], "subject": "", "when": "", "time_unclear": False}
+    hl = head.lower()
+    mm = re.search(r"через\s+(\d+|полчаса|час|минуту)\s*(минут\w*|час\w*)?", hl)
+    if mm:
+        n = {"полчаса": 30, "час": 60, "минуту": 1}.get(mm.group(1)) or int(mm.group(1))
+        out["in_minutes"] = n * (60 if (mm.group(2) or "").startswith("час") else 1)
+        hl = hl.replace(mm.group(0), " ")
+    mt = re.search(r"\b(завтра\s+)?в\s+(\d{1,2})(?::(\d{2}))?\b", hl)
+    if mt:
+        d = dt.datetime.now().replace(hour=int(mt.group(2)) % 24, minute=int(mt.group(3) or 0), second=0, microsecond=0)
+        if mt.group(1) or d <= dt.datetime.now():
+            d += dt.timedelta(days=1)
+        out["when"] = d.strftime("%Y-%m-%dT%H:%M")
+        hl = hl.replace(mt.group(0), " ")
+    for rx in PLATFORMS.values():
+        hl = re.sub(rf"\b({rx})\b", " ", hl)
+    tok = r"[\w.+-]+@[\w.-]+|\+?\d[\d -]{8,}\d|\w+(?:-\w+)?"
+    words = [w for w in re.findall(tok, hl) if w not in _FILLER and w not in ("то", "вот", "так") and
+             not re.fullmatch(r"(э|м|а)+(-(э|м|а)+)*", w)]
+    if not words:
+        return None
+    named = [w for w in words if w not in _PRONOUN]
+    if not named:
+        name = "__last__"
+    else:                      # keep the user's capitalisation: «Любимая», «Иван»
+        orig = {w.lower().replace("ё", "е"): w for w in re.findall(tok, head)}
+        name = " ".join(orig.get(w, w) for w in named)
+    out["recipients"] = [{"name": name, "platform": p} for p in plats]
+    return out
+
+
 def parse_platform(text: str) -> str | None:
     t = text.lower()
     found = [k for k, rx in PLATFORMS.items() if re.search(rf"\b({rx})\b", t)]
@@ -171,7 +224,14 @@ class CommsAgent:
 
     async def parse(self, text: str) -> dict:
         t0 = time.perf_counter()
-        d = await self.gemini.structured(system_prompt(dt.datetime.now()), text, SCHEMA)
+        try:
+            d = await self.gemini.structured(system_prompt(dt.datetime.now()), text, SCHEMA)
+        except Exception:   # noqa: BLE001 — quota / network: simple commands still work without Gemini
+            local = local_parse(text)
+            if local is None:
+                raise
+            local["_ms"], local["_model"] = round((time.perf_counter() - t0) * 1000), "local"
+            return local
         if not self._plausible(d, text):        # rare garbled answer (e.g. a recipient called "а"): ask once more
             d = await self.gemini.structured(system_prompt(dt.datetime.now()), text, SCHEMA)
             if not self._plausible(d, text):
@@ -298,6 +358,7 @@ class CommsAgent:
             args["due_at"] = due
         ctx = director.ctx(cid)
         ctx["last_contact"] = resolved[-1]
+        ctx["last_contact_at"] = time.time()      # «отправь ей ещё…» right after is about the same person
         director.save_ctx(cid, ctx)
         await self._confirm_and_run(director, tid, cid, args, intent)
 

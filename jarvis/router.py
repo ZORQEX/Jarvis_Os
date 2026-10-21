@@ -89,7 +89,17 @@ def is_comms(t: str) -> bool:
         return True
     if re.search(r"\bзапомни\b.*\b(почт|адрес|номер|телефон|e-?mail|имейл|телеграм)", t):
         return True
+    if re.search(COMMS_VERB + r".*\bконтакт", t):            # «напиши любимая, контакту …»
+        return True
     return False
+
+
+def is_comms_followup(t: str, ctx: dict) -> bool:
+    """«Отправь ей ещё, что я её люблю» shortly after a message to someone: the same person, not a chat question."""
+    import time as _t
+    recent = ctx.get("last_contact") and _t.time() - (ctx.get("last_contact_at") or 0) < 30 * 60
+    return bool(recent and re.search(r"\b(отправь|напиши|скажи|передай|черкни|пошли|ответь)\b", t)
+                and re.search(r"\b(ей|ему|им|ей же|ему же|ещё|еще|тоже|туда же)\b", t))
 
 
 def strip_wake(text: str) -> str:
@@ -122,7 +132,7 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("control", args={"op": "new_conversation"}, why="Новый разговор")
 
     # --- communication: messages, mail, scheduled sends ----------------------------
-    if is_comms(t):
+    if is_comms(t) or is_comms_followup(t, ctx):
         return Route("comms", args={"text": raw}, why="Сообщения: Telegram, WhatsApp, почта", level=1)
 
     # --- deterministic calculations (no AI) -------------------------------------

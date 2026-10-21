@@ -524,3 +524,27 @@ def test_cut_off_phrases_are_detected():
     from jarvis.server import is_fragment
     assert is_fragment("Отправь.") and is_fragment("Отправь сообщение в") and is_fragment("Отправь моей")
     assert not is_fragment("Отправь Ивану в Telegram: привет") and not is_fragment("Да.") and not is_fragment("Привет.")
+
+
+async def test_without_gemini_simple_commands_still_work(core, hub):
+    class Down:
+        last_structured_model = ""
+
+        async def structured(self, *a, **k):
+            raise RuntimeError("429 quota")
+    core.director.comms.gemini = Down()
+    tid = await core.director.submit("Говорю, отправь сообщение в Telegram моему контакту Иван Петров. Напиши: «Я скоро».")
+    a = await pending_send(core)
+    assert a["args"]["deliveries"][0]["to_id"] == "u:1:11" and a["args"]["body"] == "Я скоро."
+    core.director.decide(a["id"], False)
+    await wait_done(core, tid)
+
+
+async def test_follow_up_to_the_same_person_is_a_message(core, hub):
+    from jarvis.router import route
+    cid = core.director.conversation_id()
+    ctx = core.director.ctx(cid)
+    ctx.update(last_contact={"channel": "telegram", "to_id": "u:1:11", "to_name": "Иван Петров"}, last_contact_at=time.time())
+    assert route("Отправь ей теперь, что я её люблю", ctx).kind == "comms"
+    assert route("Напиши любимая, контакту, что я тебя люблю", {}).kind == "comms"
+    assert route("Как дела?", ctx) is None

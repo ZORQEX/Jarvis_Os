@@ -61,7 +61,7 @@ async def test_send_request_is_never_executed_without_mail_and_approval(core, fa
     tid = await core.director.submit("отправь всё")
     t = await wait_done(core, tid)
     msg = core.director.messages(core.director.conversation_id())[-1]["text"]
-    assert "Ничего не отправлено" in msg or "не подключена" in msg
+    assert "Ничего не отправлено" in msg or "модуль связи" in msg
     assert not g.calls and not core.director.flora.mail.sent_all()
 
 
