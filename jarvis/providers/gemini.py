@@ -90,6 +90,7 @@ class GeminiProvider(AIProvider):
         self._fail_streak = 0
         self._open_until = 0.0
         self._penalty: dict[str, float] = {}      # model -> until (overloaded / rate-limited)
+        self._exhausted: dict[str, float] = {}    # model -> until the daily free-tier limit resets
         self._last_fail_ts = 0.0
         self.available_names: set[str] | None = None
         self._init_models()
@@ -372,13 +373,23 @@ class GeminiProvider(AIProvider):
             seen.add(m)
             out.append(m)
         now_ = time.time()
-        return sorted(out, key=lambda m: self._penalty.get(m, 0) > now_) or [first]
+        usable = [m for m in out if self._exhausted.get(m, 0) <= now_] or out    # daily limit spent: skip till reset
+        return sorted(usable, key=lambda m: self._penalty.get(m, 0) > now_) or [first]
 
     def _penalize(self, model: str, kind: str) -> None:
         if kind == "quota":
             self._no_hedge_until = time.time() + 1800     # the key is at its limit: never send duplicate requests
+            q = _LAST_QUOTA
+            if q["daily"] and q["retry"] and time.time() - q["at"] < 5:
+                # Daily free-tier limit: Google says when it resets. Skip this model until then instead of
+                # knocking again every 5 minutes (measured: each retry cost 0.2–2 s per request).
+                self._exhausted[model] = time.time() + min(q["retry"], 86400)
         if kind in ("server", "quota", "model", "network"):
             self._penalty[model] = time.time() + (900 if kind in ("model", "network") else 300)
+
+    def exhausted(self) -> dict[str, float]:
+        now_ = time.time()
+        return {m: t for m, t in self._exhausted.items() if t > now_}
 
     def _record(self, ok: bool, model: str, first_ms: float | None = None):
         info = self.models.get(model)
@@ -593,6 +604,9 @@ async def _timed(it, timeout: float, first_timeout: float | None = None):
             return
 
 
+_LAST_QUOTA: dict = {"retry": None, "daily": False, "at": 0.0}    # details of the most recent 429 from Google
+
+
 def classify(e: Exception) -> ProviderError:
     if isinstance(e, ProviderError):
         return e
@@ -603,6 +617,9 @@ def classify(e: Exception) -> ProviderError:
     if code in (401, 403):
         return ProviderError("auth", "Ключ Gemini отклонён (нет доступа). Проверьте ключ в настройках.")
     if code == 429:
+        import re as _re
+        m = _re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+)s", msg)
+        _LAST_QUOTA.update(retry=int(m.group(1)) if m else None, daily="PerDay" in msg, at=time.time())
         return ProviderError("quota", "Исчерпана квота Gemini или слишком много запросов. Попробуйте позже.")
     if code == 404:
         return ProviderError("model", "Модель Gemini недоступна для этого ключа")

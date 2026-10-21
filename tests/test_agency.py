@@ -352,3 +352,17 @@ async def test_cancel_kills_claude_code_process(core, tmp_path, monkeypatch):
 async def test_explicit_internet_search_beats_technical_keywords(core, both):
     d = await plan(core, "Найди в интернете, что такое Hyprland, и напиши об этом короткое сообщение коллеге")
     assert chain(d) == [("research", "gemini"), ("write", "gemini")]
+
+
+def test_daily_quota_skips_the_model_until_google_resets_it(cfg):
+    from jarvis.providers import gemini as g
+
+    class E(Exception):
+        code = 429
+    p = g.GeminiProvider(cfg)
+    g.classify(E("429 RESOURCE_EXHAUSTED quotaId 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' retryDelay': '3600s'"))
+    p._penalize("gemini-3.6-flash", "quota")
+    assert "gemini-3.6-flash" not in p.chain(cfg.model_main) and p.exhausted()["gemini-3.6-flash"] > 0
+    g.classify(E("429 Too many requests per minute"))            # a per-minute limit is short: no long block
+    p._penalize("gemini-3.5-flash", "quota")
+    assert "gemini-3.5-flash" in p.chain(cfg.model_main)
