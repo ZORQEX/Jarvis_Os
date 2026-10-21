@@ -548,3 +548,14 @@ async def test_follow_up_to_the_same_person_is_a_message(core, hub):
     assert route("Отправь ей теперь, что я её люблю", ctx).kind == "comms"
     assert route("Напиши любимая, контакту, что я тебя люблю", {}).kind == "comms"
     assert route("Как дела?", ctx) is None
+
+
+async def test_provider_crash_during_search_is_a_clear_message(core, hub):
+    async def boom(name):
+        raise TimeoutError("ElementHandle.click: Timeout 30000ms exceeded")
+    hub.providers["whatsapp"].search = boom
+    intents(core, {"action": "send", "recipients": [{"name": "Рома", "platform": "whatsapp"}], "message": "Привет"})
+    tid = await core.director.submit("Отправь Роме в WhatsApp: Привет")
+    await wait_done(core, tid)
+    assert "не получилось найти контакт" in last_text(core) and "Ничего не отправлено" in last_text(core)
+    assert not hub.providers["whatsapp"].sent

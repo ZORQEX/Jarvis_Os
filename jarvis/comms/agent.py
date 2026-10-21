@@ -104,7 +104,8 @@ def _local_dt(s: str) -> float | None:
 _FILLER = {"джарвис", "jarvis", "говорю", "пожалуйста", "сообщение", "сообщения", "письмо", "моему", "моей", "моим",
             "мой", "моя", "контакту", "контакт", "контакта", "в", "во", "на", "через", "по", "почту", "почте", "а", "ну",
             "э", "ээ", "эм", "давай", "срочно", "отправь", "отправить", "напиши", "написать", "пошли", "скажи", "передай",
-            "черкни", "сейчас", "с", "сердечком", "смайликом", "это", "этому", "человеку", "теперь", "ещё", "еще", "тоже"}
+            "черкни", "сейчас", "с", "сердечком", "смайликом", "это", "этому", "человеку", "теперь", "ещё", "еще", "тоже",
+            "у", "для"}
 _PRONOUN = {"ей", "ему", "им", "её", "его"}
 
 
@@ -117,11 +118,17 @@ def local_parse(text: str) -> dict | None:
         return {"action": "list_scheduled", "recipients": [], "message": "", "subject": "", "when": ""}
     if not re.search(r"\b(отправь|напиши|пошли|скажи|передай|черкни)\b", t):
         return None
-    m = re.search(r"[:—](?!\d)\s*(.+)$", raw) or re.search(r"\b(?:что|чтобы)\s+(.+)$", raw, re.I)
+    m = (re.search(r"[:—](?!\d)\s*(.+)$", raw)
+         or re.search(r"\b(?:а|и)\s+(?:сообщение|текст)\s*[:,]?\s+(.+)$", raw, re.I)          # «…а сообщение привет»
+         or re.search(r"\b(?:что|чтобы)\s+(.+)$", raw, re.I)
+         or re.search(r"(?<=[.!?])\s+(\S.+)$", raw))                                  # «…в ватсапе. Привет.»
     if not m:
         return None
     msg = re.sub(r"[«»\"“”]", "", m.group(1)).strip()
     head = raw[:m.start()]
+    verb = re.search(r"\b(отправь|напиши|пошли|скажи|передай|черкни)\b", head, re.I)
+    if verb:
+        head = head[verb.start():]          # «Ещё раз повторяю, отправь …»: only what follows the command counts
     plats = [k for k, rx in PLATFORMS.items() if re.search(rf"\b({rx})\b", head.lower())] or ["unknown"]
     out = {"action": "send", "message": msg[:1].upper() + msg[1:], "subject": "", "when": "", "time_unclear": False}
     hl = head.lower()
@@ -329,6 +336,10 @@ class CommsAgent:
                 cands = best(await p.search(name))
             except CommsError as e:
                 return director._finish(tid, cid, f"{p.title}: {e}", meta=self._meta(intent, error=e.detail), failed=True)
+            except Exception as e:   # noqa: BLE001 — a provider bug must never end as «внутренняя ошибка»
+                director.audit.write("comms.search_failed", channel=plat, error=repr(e)[:300])
+                return director._finish(tid, cid, f"{p.title}: не получилось найти контакт ({e.__class__.__name__}). "
+                                        "Ничего не отправлено — попробуйте ещё раз.", meta=self._meta(intent), failed=True)
             if not cands:
                 return director._finish(tid, cid, f"Не нашёл «{name}» {CHANNEL_TO[plat].replace('на почту', 'в почте')}. "
                                         + ("Скажите адрес или попросите запомнить его: «запомни почту Сергея: …»."

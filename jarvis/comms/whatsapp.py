@@ -245,6 +245,47 @@ class WhatsAppProvider(Provider):
             raise CommsError("WhatsApp Web не загрузился", "network", retryable=True)
         self.state = "connected"
         self._touch()
+        await self._dismiss_popups()
+
+    # Only harmless buttons are ever pressed to close a WhatsApp pop-up (tips, notification prompts, «what's new»).
+    SAFE_BUTTONS = ["Понятно", "OK", "ОК", "Ок", "Продолжить", "Закрыть", "Не сейчас", "Позже", "Пропустить",
+                    "Got it", "Continue", "Close", "Not now", "Later", "Skip", "Dismiss"]
+
+    async def _dismiss_popups(self) -> None:
+        """Measured 2026-10-21: a modal dialog covered the search box and every click timed out after 30 s."""
+        for _ in range(4):
+            dlg = None
+            for sel in ("[role='dialog'][aria-modal='true']", "div[data-animate-modal-popup='true']"):
+                el = await self.page.query_selector(sel)
+                if el and await el.is_visible():
+                    dlg = el
+                    break
+            if not dlg:
+                return
+            try:
+                self.last_dialog = (await dlg.inner_text())[:200]
+            except Exception:   # noqa: BLE001
+                self.last_dialog = ""
+            pressed = False
+            for label in self.SAFE_BUTTONS:
+                btn = await dlg.query_selector(f"button:has-text('{label}'), div[role='button']:has-text('{label}')")
+                if btn and await btn.is_visible():
+                    try:
+                        await btn.click(timeout=3000)
+                        pressed = True
+                    except Exception:   # noqa: BLE001
+                        pass
+                    break
+            if not pressed:
+                await self.page.keyboard.press("Escape")
+            await asyncio.sleep(0.6)
+
+    async def _click(self, el) -> None:
+        try:
+            await el.click(timeout=5000)
+        except Exception:   # noqa: BLE001 — something covers it: close pop-ups once and retry
+            await self._dismiss_popups()
+            await el.click(timeout=5000)
 
     # ---------------------------------------------------------------- contacts
     async def search(self, name: str) -> list[Contact]:
@@ -258,18 +299,25 @@ class WhatsAppProvider(Provider):
         out = self.book.find(name, "whatsapp")
         async with self._lock:
             await self._ensure()
-            box = await self._first(SEL_SEARCH, 10)
-            if not box:
-                raise CommsError("Не нашёл поиск в WhatsApp Web", "unknown", "search box selector")
-            await box.click()
-            await self.page.keyboard.press("Control+A")
-            await self.page.keyboard.press("Backspace")
-            await self.page.keyboard.insert_text(name)
-            await asyncio.sleep(1.5)
-            titles = await self.page.eval_on_selector_all(
-                "#pane-side span[title], [aria-label] [role='listitem'] span[title]",
-                "els => [...new Set(els.map(e => e.getAttribute('title')).filter(Boolean))].slice(0, 30)")
-            await self.page.keyboard.press("Escape")
+            try:
+                box = await self._first(SEL_SEARCH, 10)
+                if not box:
+                    raise CommsError("Не нашёл поиск в WhatsApp Web", "unknown", "search box selector")
+                await self._click(box)
+                await self.page.keyboard.press("Control+A")
+                await self.page.keyboard.press("Backspace")
+                await self.page.keyboard.insert_text(name)
+                await asyncio.sleep(1.5)
+                titles = await self.page.eval_on_selector_all(
+                    "#pane-side span[title], [aria-label] [role='listitem'] span[title]",
+                    "els => [...new Set(els.map(e => e.getAttribute('title')).filter(Boolean))].slice(0, 30)")
+                await self.page.keyboard.press("Escape")
+            except CommsError:
+                raise
+            except Exception as e:   # noqa: BLE001 — never a crash: say what happened
+                raise CommsError("WhatsApp Web не дал найти контакт (страница не отвечает) — попробуйте ещё раз",
+                                 "network", f"{e.__class__.__name__}: {str(e)[:200]}; dialog={getattr(self, 'last_dialog', '')!r}",
+                                 retryable=True) from None
         for t in titles:
             sc = match_score(name, t)
             if sc and not re.fullmatch(r"[\d\s:.,]+", t):
@@ -292,7 +340,7 @@ class WhatsAppProvider(Provider):
         box = await self._first(SEL_SEARCH, 10)
         if not box:
             raise CommsError("Не нашёл поиск в WhatsApp Web", "unknown", retryable=True)
-        await box.click()
+        await self._click(box)
         await self.page.keyboard.press("Control+A")
         await self.page.keyboard.press("Backspace")
         await self.page.keyboard.insert_text(key)
@@ -304,7 +352,7 @@ class WhatsAppProvider(Provider):
                 break
         if not target:
             raise CommsError(f"Чат «{key}» не найден в WhatsApp", "not_found")
-        await target.click()
+        await self._click(target)
         head = await self._first(SEL_HEADER_TITLE, 10)
         title = (await head.get_attribute("title") or await head.inner_text()) if head else ""
         if title.strip() != key:
@@ -317,17 +365,29 @@ class WhatsAppProvider(Provider):
     async def send(self, contact: Contact, body: str, subject: str | None, op_id: str) -> Receipt:
         async with self._lock:
             await self._ensure()
-            await self._open_chat(contact)             # failures up to here: nothing was typed → retryable
-            before = (await self._last_out(body) or {}).get("count", 0)
-            comp = await self._first(SEL_COMPOSER, 5)
-            await comp.click()
-            lines = body.split("\n")
-            for i, line in enumerate(lines):
-                if i:
-                    await self.page.keyboard.press("Shift+Enter")
-                if line:
-                    await self.page.keyboard.insert_text(line)
-            await self.page.keyboard.press("Enter")
+            try:
+                await self._open_chat(contact)         # failures up to here: nothing was typed → safe to retry
+                before = (await self._last_out(body) or {}).get("count", 0)
+                comp = await self._first(SEL_COMPOSER, 5)
+                if not comp:
+                    raise CommsError("Не открылось поле ввода в WhatsApp", "unknown", retryable=True)
+                await self._click(comp)
+            except CommsError:
+                raise
+            except Exception as e:   # noqa: BLE001
+                raise CommsError("WhatsApp Web не открыл чат (страница не отвечает) — ничего не отправлено", "network",
+                                 f"{e.__class__.__name__}: {str(e)[:200]}", retryable=True) from None
+            try:
+                lines = body.split("\n")
+                for i, line in enumerate(lines):
+                    if i:
+                        await self.page.keyboard.press("Shift+Enter")
+                    if line:
+                        await self.page.keyboard.insert_text(line)
+                await self.page.keyboard.press("Enter")
+            except Exception as e:   # noqa: BLE001 — Enter may or may not have gone through
+                raise CommsError("WhatsApp Web сбился во время набора — проверьте чат, ушло ли сообщение", "unknown",
+                                 f"{e.__class__.__name__}: {str(e)[:200]}") from None
             self._touch()
             # Wait for our bubble to appear with a "sent" tick (not just the clock icon).
             for _ in range(40):
