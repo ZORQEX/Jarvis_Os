@@ -9,6 +9,14 @@ from jarvis.app import build
 from jarvis.config import Config, Paths
 
 
+@pytest.fixture(autouse=True)
+def _no_real_voice_cache(tmp_path, monkeypatch):
+    """Tests must never write into the user's ~/.local/share/jarvis (voice cache, quota notes)."""
+    from jarvis.voice.tts import GeminiVoiceTTS
+    monkeypatch.setattr(GeminiVoiceTTS, "CACHE_DIR", tmp_path / "tts-cache")
+    monkeypatch.setattr(GeminiVoiceTTS, "blocked", {})
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_HOME", str(tmp_path / "jh"))

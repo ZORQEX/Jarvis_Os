@@ -214,8 +214,28 @@ class GeminiVoiceTTS:
             reason = ("дневной лимит бесплатного ключа Gemini на живые голоса исчерпан" if per_day
                       else "Gemini временно ограничил частоту запросов")
             self.blocked[model] = (time.time() + delay, reason)
+            self._save_blocks()                # survives a restart: no 1–3 s lost knocking on an exhausted model
         else:
             self.blocked[model] = (time.time() + 120, "модель синтеза Gemini не ответила")
+
+    @classmethod
+    def _save_blocks(cls) -> None:
+        import json
+        try:
+            cls.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            (cls.CACHE_DIR / "quota.json").write_text(json.dumps(
+                {m: v for m, v in cls.blocked.items() if v[0] > time.time()}, ensure_ascii=False))
+        except OSError:
+            pass
+
+    @classmethod
+    def load_blocks(cls) -> None:
+        import json
+        try:
+            data = json.loads((cls.CACHE_DIR / "quota.json").read_text())
+            cls.blocked.update({m: (float(v[0]), str(v[1])) for m, v in data.items() if float(v[0]) > time.time()})
+        except (OSError, ValueError, TypeError, IndexError):
+            pass
 
     async def _stream(self, model: str, text: str):
         from google.genai import types
@@ -327,6 +347,7 @@ class VoiceEngine:
             self.cloud = None
             await self.piper.configure(v["model"], rate)
         else:
+            GeminiVoiceTTS.load_blocks()
             self.cloud = GeminiVoiceTTS(self.gemini, v["model"])
             await self.piper.configure(self.piper.voice, rate)     # local fallback keeps its own voice
         return v
