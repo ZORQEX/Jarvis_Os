@@ -239,15 +239,25 @@ class WhatsAppProvider(Provider):
     async def _ensure(self) -> None:
         if not self._linked_before():
             raise CommsError("WhatsApp не подключён. " + REQUIREMENT, "not_connected", retryable=True)
+        fresh = self.page is None or self.page.is_closed()
         await self._open()
-        st = await self._wait_ready(45)
+        # After a restart WhatsApp Web re-syncs chats from the phone first: allow up to 2 minutes for that.
+        st = await self._wait_ready(120 if fresh else 45)
         if st == "qr":
             self.db.set_kv("whatsapp_linked", False)
             self.state = "not_connected"
             await self._close()
             raise CommsError("WhatsApp отвязал этот компьютер — подключите заново (QR-код)", "auth", retryable=False)
         if st != "ready":
-            raise CommsError("WhatsApp Web не загрузился", "network", retryable=True)
+            seen = ""
+            try:
+                seen = f"url={self.page.url} title={await self.page.title()!r} text={(await self.page.inner_text('body'))[:300]!r}"
+            except Exception:   # noqa: BLE001
+                pass
+            await self._debug_snapshot({"stage": "not ready", "page": seen})
+            await self._close()                      # next attempt starts a clean browser
+            raise CommsError("WhatsApp Web не загрузился — попробуйте ещё раз через минуту", "network", seen[:300],
+                             retryable=True)
         self.state = "connected"
         self._touch()
         await self._dismiss_popups()
