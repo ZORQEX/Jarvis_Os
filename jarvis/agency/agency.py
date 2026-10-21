@@ -271,8 +271,7 @@ class Agency:
             image = Path(shot.result.data["path"]).read_bytes()
             instr += "\n\nНа изображении — снимок экрана пользователя. Опиши, что видно, найди ошибку и объясни её."
         cap = Cap(s.capability)
-        req = StepRequest(cap, instr, context=ctx, image=image, image_mime=mime,
-                          max_tokens=4096 if s.action in ("write", "analyze") else 2048)
+        req = StepRequest(cap, instr, context=ctx, image=image, image_mime=mime, max_tokens=8192)
         args = {"provider": s.executor, "action": s.action, "instruction": s.instruction[:2000],
                 "context_labels": [c["label"] for c in ctx], "context_chars": sum(len(c["text"]) for c in ctx),
                 "sensitivity": d.step_sensitivity.get(s.id, d.sensitivity)}
@@ -395,7 +394,7 @@ class Agency:
 
     def _meta(self, d: Decision, done: list, outs: dict | None = None) -> dict:
         outs = outs or {}
-        providers = sorted({outs[s.id].provider for s in done if outs.get(s.id) and outs[s.id].provider})
+        providers = list(dict.fromkeys(outs[s.id].provider for s in done if outs.get(s.id) and outs[s.id].provider))
         models = sorted({outs[s.id].model for s in done if outs.get(s.id) and outs[s.id].model})
         return {"route": "agency", "mode": d.mode, "providers": providers, "models": models,
                 "cloud": any(self.mgr.get(p).cloud for p in providers if self.mgr.get(p)), "planner": d.planner,

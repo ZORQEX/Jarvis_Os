@@ -1,6 +1,6 @@
 # Test matrix — milestone 1 + Flora (2026-10-20)
 
-Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 111 passed, 1 skipped (opt-in live); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 1 passed.
+Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 137 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-21).
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -44,7 +44,9 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Claude Code adapter (restricted CLI, inspect/change modes) | VERIFIED LIVE | test_live.py; UI run: inspect $0.05, change $0.04 in a scratch git repo |
 | Code change needs high-risk approval; JARVIS lists changed files (git) and reruns pytest itself | VERIFIED LIVE | scratch repo: `a - b` → `a + b`, JARVIS pytest: 2 passed |
 | Cancellation kills the Claude Code process | VERIFIED LOCAL | test_cancel_kills_claude_code_process |
-| Gemini adapter (research with sources, vision, tool loop) | see live checks below | |
+| Gemini: writing, vision, model fallback chain, director research → letter | VERIFIED LIVE | test_live.py (6/6) |
+| Gemini web search with sources | BLOCKED by key quota | Google Search grounding returns 429 for this key → honest no-search fallback, marked unverified |
+| Gemini → Claude Code chain (research → save file, with approval) | VERIFIED LIVE | UI run `drive.mjs two`: file written, 0 console errors |
 | Two-specialist routing (former GPT work → Gemini; computer work → Claude Code) | VERIFIED MOCK | test_agency.py |
 | Multi-AI chain, context isolation (no unrelated history), provenance + usage ledger | VERIFIED MOCK | test_multi_ai_context_isolation_and_provenance |
 | No GPT, no silent substitution when Gemini is unavailable | VERIFIED MOCK | test_gemini_unavailable_is_reported_never_substituted |

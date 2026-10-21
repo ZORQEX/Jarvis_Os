@@ -218,6 +218,9 @@ class GeminiProvider(AIProvider):
         if tools and kinds == {"quota"}:
             # Google Search quota exhausted: answer without search, clearly labelled, no sources.
             cfg.tools = None
+            cfg.system_instruction = ("Поиск в интернете сейчас недоступен. Ответь на запрос по своим знаниям, кратко и "
+                                      "по существу, на русском. Не проси пользователя прислать данные. Если сведения "
+                                      "могут устареть (цены, новости, контакты), скажи об этом одной фразой.")
             for model in self.chain(self.model_for(Cap.GENERAL)):
                 try:
                     r = await self._generate_once(client, model, parts, cfg, on_delta, t0)
@@ -239,6 +242,7 @@ class GeminiProvider(AIProvider):
     async def _generate_once(self, client, model, parts, cfg, on_delta, t0) -> GenResult:
         from google.genai import types
         first = None
+        truncated = False
         text, sources, usage = [], [], None
         try:
             it = await asyncio.wait_for(client.aio.models.generate_content_stream(
@@ -254,6 +258,8 @@ class GeminiProvider(AIProvider):
                     for gc in gm.grounding_chunks:
                         if gc.web and gc.web.uri and not any(s["url"] == gc.web.uri for s in sources):
                             sources.append({"title": gc.web.title or gc.web.domain or gc.web.uri, "url": gc.web.uri})
+                if cand.finish_reason and str(cand.finish_reason).endswith("MAX_TOKENS"):
+                    truncated = True
                 for p in (cand.content.parts if cand.content and cand.content.parts else []):
                     if p.text and not p.thought:
                         if first is None:
@@ -272,7 +278,7 @@ class GeminiProvider(AIProvider):
         self._record(True, model, first)
         return GenResult("".join(text).strip(), "gemini", model, sources,
                          usage.model_dump(exclude_none=True) if usage else {}, None, first,
-                         (time.perf_counter() - t0) * 1000)
+                         (time.perf_counter() - t0) * 1000, {"truncated": truncated})
 
     async def run_tool_loop(self, system: str, history: list[dict], user_text: str, tools: list, execute,
                             on_delta=None, max_rounds: int = 6, should_stop=lambda: False,
@@ -369,7 +375,7 @@ class GeminiProvider(AIProvider):
 
     def _penalize(self, model: str, kind: str) -> None:
         if kind in ("server", "quota", "model", "network"):
-            self._penalty[model] = time.time() + (900 if kind == "model" else 300)
+            self._penalty[model] = time.time() + (900 if kind in ("model", "network") else 300)
 
     def _record(self, ok: bool, model: str, first_ms: float | None = None):
         info = self.models.get(model)

@@ -76,6 +76,7 @@ class AgentGenerate(Tool):
         inputs = [c.get("text", "") for c in req.context] + [req.instruction]
         return ToolResult({"text": r.text, "sources": r.sources, "provider": r.provider, "model": r.model,
                            "grounding": r.meta.get("grounding", True), "note": r.meta.get("note"),
+                           "truncated": r.meta.get("truncated", False),
                            "usage": r.usage, "cost_usd": r.cost_usd, "first_token_ms": r.first_token_ms,
                            "total_ms": r.total_ms, "_inputs": inputs, "action": args["action"]},
                           f"{PROVIDER_NAMES.get(r.provider, r.provider)}: готово", card="agent_result")
@@ -85,6 +86,8 @@ class AgentGenerate(Tool):
         status, detail = verify_step(args["action"], d["text"], d["sources"], d.pop("_inputs", []))
         if d.get("note"):
             status, detail = "unverified", d["note"] + "; источников нет, данные могут быть устаревшими"
+        if d.get("truncated"):
+            status, detail = "unverified", "Ответ обрезан по длине — часть текста могла не поместиться"
         return Verification(status, detail)
 
 

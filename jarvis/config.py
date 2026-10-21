@@ -82,7 +82,7 @@ class Config:
     tts_voice: str = "Kore"
     max_tool_rounds: int = 6
     ai_timeout_s: float = 60.0
-    ai_first_token_timeout_s: float = 20.0   # a model that is silent this long is skipped for the next in the chain
+    ai_first_token_timeout_s: float = 12.0   # a model that is silent this long is skipped for the next in the chain
     history_turns: int = 12
     privacy_profile: str = "AUTHORIZED_CLOUD"
     approval_ttl_s: int = 900
