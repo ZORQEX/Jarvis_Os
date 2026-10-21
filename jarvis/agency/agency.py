@@ -116,7 +116,7 @@ class Agency:
         return d
 
     def _insert_file_reads(self, d: Decision, text: str) -> None:
-        """«Проанализируй ~/Documents/x.pdf» → read the file locally first (tool), then give it to Gemini."""
+        """«Проанализируй ~/Documents/x.pdf» → read the file locally first (tool), then give it to Claude."""
         from .decision import Step
         new = []
         for s in d.steps:
@@ -159,7 +159,7 @@ class Agency:
         if r and r.voice and director.speech and self._is_long(d):
             director.speech.ack(tid)          # local, pre-synthesized: no extra AI call
         elif r and r.voice and director.speech:
-            # Gemini slow (measured 13–24 s under «high demand»): after 2.5 s of silence say «Секунду…» so the user
+            # A slow answer (Claude busy, a web search, a tool call): after 2.5 s of silence say «Секунду…» so the user
             # knows JARVIS heard them. ack() does nothing if the answer has already started.
             asyncio.get_running_loop().call_later(2.5, director.speech.ack, tid)
         cloud = sorted({s.executor for s in runnable if s.executor_kind == "provider" and self.mgr.get(s.executor).cloud})
@@ -357,7 +357,7 @@ class Agency:
             res = await p.run_tool_loop(system, hist, s.instruction, self.registry.model_tools(), execute,
                                         on_delta, self.config.max_tool_rounds, lambda: director.policy.estop,
                                         lambda c, n, m: director._checkpoint(tid, c, n, m), thinking,
-                                        role="voice" if voice and p.id == "gemini" else "main")
+                                        role="voice" if voice else "main", conversation=cid)
         except ProviderFailure as e:
             self.mgr.record(p.id, p.model_for(Cap.GENERAL), tid, sid, "general", None, None,
                             (time.perf_counter() - t0) * 1000, False, e.kind)
@@ -446,14 +446,14 @@ class Agency:
         lines = []
         nothing_configured = not any(p.configured() for p in self.mgr.providers.values() if p.id != "claude_code")
         if nothing_configured and self._is_plain_chat(d):
-            return ("Эту просьбу я понял не полностью, а Gemini ещё не подключён. "
-                    "Подключить можно в **Настройках → AI-агентство** — ключи хранятся в системном хранилище. "
+            return ("Эту просьбу я понял не полностью, а Claude Code на этом компьютере недоступен "
+                    "(не установлен или не выполнен вход: `claude auth login`). "
                     "Пока работают локальные команды: скажите «помощь».")
         if nothing_configured and all(s.executor_kind == "provider" and s.action not in ("inspect_code", "change_code")
                                       for s in d.steps):
             plan = " → ".join(ACTION_RU.get(s.action, s.action) for s in d.steps)
-            return (f"Задачу понял: {plan}. Но для неё нужен Gemini, а он не подключён или недоступен. "
-                    "Подключить: **Настройки → AI-агентство**. Ничего не выполнялось и никуда не отправлялось.")
+            return (f"Задачу понял: {plan}. Но для неё нужен Claude Code, а он недоступен (вход: `claude auth login`). "
+                    "Ничего не выполнялось и никуда не отправлялось.")
         for s in d.steps:
             lines.append(f"- {ACTION_RU.get(s.action, s.action)}: {s.reason}")
         notes = "\n".join(d.notes)

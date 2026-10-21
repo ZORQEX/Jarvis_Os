@@ -1,4 +1,4 @@
-"""Real voice turns through the server path (STT → Director → Gemini → streamed Piper speech).
+"""Real voice turns through the server path (local STT → Director → Claude → streamed local speech).
 Usage: uv run python scripts/voice_latency.py <tmp_dir> ["фраза" ...]  — prints per-stage timings from the end of speech."""
 import asyncio, base64, os, subprocess, sys, tempfile, time
 os.environ["JARVIS_HOME"] = tempfile.mkdtemp(prefix="jarvis-e2e-")
@@ -10,7 +10,7 @@ PHRASES = sys.argv[2:] or ["Джарвис, сколько будет двадц
            "Кто такой Илон Маск?", "А сколько ему лет?", "Расскажи подробно, как работает майнинг биткоина."]
 
 async def main():
-    core = build(); srv = Server(core); await core.gemini.check()
+    core = build(); srv = Server(core); await core.claude.warm()
     await core.director.speech.engine.prewarm()
     mk = PiperTTS(); await mk.start()
     q = core.bus.subscribe()

@@ -308,20 +308,21 @@ async def test_estop_cancels_and_blocks_until_cleared(core, home):
     assert not core.policy.estop
 
 
-async def test_ai_route_without_key_is_honest(core):
+async def test_ai_route_without_claude_is_honest(core):
     d = core.director
     tid = await d.submit("расскажи анекдот про архитекторов")
     t = await wait_done(core, tid)
     assert t["state"] == S.COMPLETED
     msg = d.messages(d.conversation_id())[-1]
-    assert "не подключён" in msg["text"] and msg["meta"]["cloud"] is False
+    assert "Claude Code" in msg["text"] and "недоступен" in msg["text"] and msg["meta"]["cloud"] is False
 
 
 async def test_strict_offline_never_calls_cloud(core, monkeypatch):
     core.db.set_kv("privacy_profile", "STRICT_OFFLINE")
     called = []
-    monkeypatch.setattr(core.gemini, "configured", lambda: True)
-    monkeypatch.setattr(core.gemini, "stream", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(core.claude, "configured", lambda: True)
+    monkeypatch.setattr(core.claude, "run_tool_loop", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(core.claude, "generate", lambda *a, **k: called.append(1))
     tid = await core.director.submit("объясни разницу между сметами")
     await wait_done(core, tid)
     assert not called

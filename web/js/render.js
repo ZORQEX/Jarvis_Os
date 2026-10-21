@@ -218,7 +218,7 @@ function reminderCard(d) {
 }
 
 // ---------------------------------------------------------------- agency cards
-const PNAME = { gemini: "Gemini", claude_code: "Claude Code" };
+const PNAME = { claude: "Claude", claude_code: "Claude Code" };
 const ACT = { files: "файлы", read_file: "чтение файла", research: "поиск", analyze: "анализ", write: "текст", translate: "перевод", vision_screen: "экран",
   chat: "ответ", inspect_code: "просмотр кода", change_code: "изменение кода", compare_estimates: "сметы",
   read_mail: "почта", send_message: "отправка" };

@@ -13,11 +13,12 @@ from .planner import CONF, HIGH_SENS
 
 # Role assignment: primary specialist first, then allowed alternates.
 PREFS: dict[str, list[str]] = {
-    # Claude Code: computer & engineering. Gemini: everything else that needs AI.
+    # Everything runs through Claude Code: «claude» = conversation and content (long-lived session, JARVIS tools via
+    # MCP, web search); «claude_code» = the computer/code executor in a project folder.
     Cap.CODE: ["claude_code"], Cap.TERMINAL: ["claude_code"], Cap.FILESYSTEM: ["claude_code"],
-    Cap.WEB_RESEARCH: ["gemini"], Cap.VISION: ["gemini"], Cap.VOICE: ["gemini"], Cap.WRITING: ["gemini"],
-    Cap.TRANSLATION: ["gemini"], Cap.DOC_ANALYSIS: ["gemini"], Cap.GENERAL: ["gemini"],
-    Cap.DESKTOP_TOOLS: ["gemini"], Cap.PLANNING: ["gemini"],
+    Cap.WEB_RESEARCH: ["claude"], Cap.VISION: ["claude"], Cap.VOICE: ["claude"], Cap.WRITING: ["claude"],
+    Cap.TRANSLATION: ["claude"], Cap.DOC_ANALYSIS: ["claude"], Cap.GENERAL: ["claude"],
+    Cap.DESKTOP_TOOLS: ["claude"], Cap.PLANNING: ["claude"],
 }
 TOOL_FOR = {"compare_estimates": "flora_compare", "read_mail": "mail_read", "send_message": "email_send",
             "read_file": "read_file"}

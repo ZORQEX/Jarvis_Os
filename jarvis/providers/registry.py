@@ -26,14 +26,11 @@ class ModelEntry:
 
 
 def model_registry(config) -> list[ModelEntry]:
-    g = ["text", "image", "audio"]
     return [
-        ModelEntry("gemini", config.model_main, "main", ["general", "web_research", "vision", "desktop_tools",
-                                                         "document_analysis", "writing", "translation"], g, True),
-        *[ModelEntry("gemini", m, "fallback", ["general", "writing", "web_research", "vision", "document_analysis"],
-                     g, True, priority=6 + i) for i, m in enumerate(config.gemini_fallbacks)],
-        ModelEntry("gemini", config.model_fast, "fast", ["planning", "voice", "general"], g, True),
-        ModelEntry("gemini", config.model_deep, "deep", ["document_analysis", "general"], g, True),
+        ModelEntry("claude", config.claude_chat_model, "main", ["general", "web_research", "vision", "desktop_tools",
+                                                                "document_analysis", "writing", "translation", "voice"],
+                   ["text", "image"], True),
+        ModelEntry("claude", config.claude_fast_model, "fast", ["planning"], ["text"], False),
         ModelEntry("claude_code", config.claude_model or "default", "code", ["code", "terminal", "filesystem"],
                    ["text"], True),
     ]

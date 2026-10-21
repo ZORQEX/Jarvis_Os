@@ -1,7 +1,6 @@
 """Local speech recognition (GigaAM v3 via onnx-asr) as a separate process. Nothing leaves the computer, no quota.
 
-Gemini transcription remains only as a fallback when the local model is not installed or fails, and only when the
-privacy profile allows the cloud."""
+This is the only speech recognition in JARVIS (there is no cloud fallback)."""
 from __future__ import annotations
 
 import asyncio

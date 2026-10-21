@@ -17,7 +17,7 @@ from ..tools.base import (Risk, Tool, ToolContext, ToolError, ToolInputError, To
                           run_cmd)
 from .verifier import verify_step
 
-PROVIDER_NAMES = {"gemini": "Gemini", "claude_code": "Claude Code"}
+PROVIDER_NAMES = {"claude": "Claude", "claude_code": "Claude Code"}
 PERM_RU = {"install": "установка зависимостей проекта", "download": "скачивание файлов из интернета"}
 
 
@@ -39,7 +39,7 @@ class AgentGenerate(Tool):
             id="agent_generate", title="ИИ-шаг",
             description="Internal: run one step on an AI specialist.",
             params={"type": "object", "required": ["provider", "action", "instruction"], "properties": {
-                "provider": {"type": "string", "enum": ["gemini"]},
+                "provider": {"type": "string", "enum": ["claude"]},
                 "action": {"type": "string", "enum": ["research", "analyze", "write", "translate", "vision_screen"]},
                 "instruction": {"type": "string", "maxLength": 2000},
                 "context_labels": {"type": "array"}, "context_chars": {"type": "integer"},

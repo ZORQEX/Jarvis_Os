@@ -17,7 +17,7 @@ def _have_tool() -> bool:
     return shutil.which("secret-tool") is not None
 
 
-ENV = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+ENV: dict[str, tuple[str, ...]] = {}
 
 
 def _env(account: str) -> str | None:

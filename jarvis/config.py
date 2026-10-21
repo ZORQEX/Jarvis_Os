@@ -67,24 +67,18 @@ PRIVACY_PROFILES = ("AUTHORIZED_CLOUD", "PRIVATE_LOCAL", "STRICT_OFFLINE")
 class Config:
     host: str = "127.0.0.1"
     port: int = 8791
-    model_fast: str = "gemini-3.5-flash-lite"
-    model_main: str = "gemini-3.8-flash"
-    model_deep: str = "gemini-4-argon"
-    # When a Gemini model is overloaded (503), rate-limited or unavailable, the next one in this chain is tried.
-    gemini_fallbacks: list[str] = field(default_factory=lambda: ["gemini-3.6-flash", "gemini-3.5-flash",
-                                                                 "gemini-3.5-flash-lite"])
-    # Claude Code CLI: empty model = the CLI's own default
+    # All AI runs through the local Claude Code CLI (the user's own Claude sign-in).
+    # Conversation, web search, texts, documents, screenshots: a fast, capable model (measured ~1.0–1.5 s to first words).
+    claude_chat_model: str = "claude-sonnet-5-5"
+    # Short structured jobs (reading a message command into JSON, planning): the fastest model.
+    claude_fast_model: str = "claude-haiku-5-5"
+    # Claude Code as the computer/code executor: empty model = the CLI's own default
     claude_model: str = ""
     claude_budget_usd: float = 2.0
     claude_timeout_s: float = 900.0
     code_workspaces: list[str] = field(default_factory=lambda: ["~/Projects"])
-    max_tool_rounds: int = 6
-    ai_timeout_s: float = 60.0
-    ai_first_token_timeout_s: float = 12.0
-    # Voice conversation: the fastest model first, short first-token wait, local TTS.
-    model_voice: str = "gemini-3.5-flash-lite"
-    voice_first_token_timeout_s: float = 6.0
-    stt_hedge_after_s: float = 2.0       # slow transcription → send a duplicate request, use the first answer
+    max_tool_rounds: int = 12          # tool calls Claude may make for one request
+    ai_timeout_s: float = 120.0
     piper_voice: str = "ru_RU-denis-medium"   # emergency fallback voice if Silero cannot speak
     history_turns: int = 12
     privacy_profile: str = "AUTHORIZED_CLOUD"

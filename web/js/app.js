@@ -334,11 +334,11 @@ function metaLine(t, task) {
   const m = r.meta || {};
   const bits = [];
   if (m.route === "ai") {
-    bits.push(`<span class="cloud">${ICON.cloud.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${esc(m.model || "Gemini")}</span>`);
+    bits.push(`<span class="cloud">${ICON.cloud.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${esc(m.model || "Claude")}</span>`);
     if (m.first_token_ms) bits.push(`первый ответ ${fmtMs(m.first_token_ms)}`);
     if (m.usage?.total_token_count) bits.push(`${m.usage.total_token_count} токенов`);
   } else if (m.route === "agency") {
-    const names = { gemini: "Gemini", claude_code: "Claude Code" };
+    const names = { claude: "Claude", claude_code: "Claude Code" };
     if (m.providers?.length) bits.push(`<span class="cloud">${ICON.spark.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${esc(m.providers.map((p) => names[p] || p).join(" → "))}</span>`);
     else bits.push("без ИИ");
   } else if (m.route === "local" || m.route === "flora") {
@@ -417,7 +417,7 @@ function renderPrivacy() {
   const cloud = { AUTHORIZED_CLOUD: "по запросу", PRIVATE_LOCAL: "только с согласия", STRICT_OFFLINE: "выключено" }[S.core.privacy] || "—";
   $("#privacy").innerHTML = `
     <div class="line">${voice.muted ? ICON.micOff : ICON.mic} Микрофон ${mic}</div>
-    <div class="line">${ICON.cloud} Отправка в Gemini <b>${cloud}</b></div>
+    <div class="line">${ICON.cloud} Отправка в Claude <b>${cloud}</b></div>
     <div class="line">${ICON.image} Камера <b>не используется</b></div>
     <div class="line">${ICON.shield} Подтверждения <b class="ok">включены</b></div>
     <button class="btn ghost" data-act="toggle-mute" style="align-self:flex-start;margin-top:2px">${voice.muted ? ICON.mic + " Включить микрофон" : ICON.micOff + " Выключить микрофон"}</button>`;
@@ -427,13 +427,12 @@ function renderPrivacy() {
 const input = $("#input");
 function renderComposer() {
   const mic = $("#micBtn"), conv = $("#convBtn");
-  const aiReady = S.provider?.configured && S.core.privacy === "AUTHORIZED_CLOUD";
+  const aiReady = true;            // speech is recognised and spoken on this computer: no cloud needed for the mic
   mic.classList.toggle("recording", voice.listening && !voice.conversation);
   mic.classList.toggle("busy", S.voice === "transcribing");
   conv.classList.toggle("on", voice.conversation);
   for (const b of [mic, conv]) b.disabled = voice.muted || !voice.supported || !aiReady;
-  const why = voice.muted ? "Микрофон выключен" : !S.provider?.configured ? "Голос требует подключённого Gemini"
-    : !aiReady ? "Голос распознаётся в облаке — включите режим «Облако разрешено»" : "";
+  const why = voice.muted ? "Микрофон выключен" : "";
   mic.title = why || "Сказать одну фразу (Ctrl+Space)";
   conv.title = why || (voice.conversation ? "Закончить разговор (Ctrl+Shift+Space)" : "Разговор без кнопок (Ctrl+Shift+Space)");
   $("#sendBtn").disabled = !input.value.trim();
@@ -610,15 +609,15 @@ function renderSettings() {
       <h2>Приватность</h2>
       <div class="muted" style="font-size:13.5px">Что можно отправлять во внешний ИИ. Локальные действия работают в любом режиме.</div>
       <div class="choices" role="radiogroup" aria-label="Режим приватности">
-        ${choice("AUTHORIZED_CLOUD", "Облако разрешено", "Свободные запросы уходят в Gemini без дополнительного вопроса. Файлы — только те, что нужны для задачи.")}
+        ${choice("AUTHORIZED_CLOUD", "Облако разрешено", "Свободные запросы уходят в Claude (через Claude Code) без дополнительного вопроса. Файлы — только те, что нужны для задачи.")}
         ${choice("PRIVATE_LOCAL", "Приватно", "Перед каждой отправкой в облако JARVIS спросит разрешение.")}
-        ${choice("STRICT_OFFLINE", "Строго офлайн", "Ничего не уходит в облако. Голос и свободные вопросы отключены.")}
+        ${choice("STRICT_OFFLINE", "Строго офлайн", "Ничего не уходит в облако. Голос, команды, сообщения работают; свободные вопросы к ИИ — нет.")}
       </div>
     </div>
     <div class="panel">
       <h2>Голос</h2>
       <div class="muted" style="font-size:13.5px">Речь распознаётся и озвучивается на этом компьютере (GigaAM и Silero) — без интернета и лимитов;
-        в Gemini уходит только текст вопроса, если на него нужен ответ ИИ. Микрофон слушает только когда включён (кнопка или разговор).</div>
+        в Claude уходит только текст вопроса, если на него нужен ответ ИИ. Микрофон слушает только когда включён (кнопка или разговор).</div>
       <h2 style="font-size:13.5px;margin:14px 0 2px">Голос JARVIS</h2>
       <div class="faint" style="font-size:12.5px">Голоса Silero работают на этом компьютере: без интернета, без лимитов, фраза готова за ~0,25 с.
         Модели Silero — для личного некоммерческого использования.</div>

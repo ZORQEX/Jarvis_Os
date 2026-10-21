@@ -2,7 +2,7 @@
 
 Authentication is Telegram's own: api_id/api_hash of the user's application (my.telegram.org) and a login
 code sent by Telegram (plus the cloud password if 2FA is on). The resulting session is stored only in the
-OS keyring; it is never logged, never put into prompts and never sent to Gemini."""
+OS keyring; it is never logged, never put into prompts and never sent to any AI."""
 from __future__ import annotations
 
 import asyncio

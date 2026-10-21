@@ -65,10 +65,10 @@ R = {
                           r"выбери\s+\d*\s*\w*\s*(лучш|подходящ)\w*|найди расхождени\w*|выдели главн\w*|расхождени\w*"),
 }
 OVERRIDE = re.compile(r"(?:^|\s|,)(?:через|используй|с помощью|пусть это сделает|пусть)\s+"
-                      r"(gemini|джемини|гемини|claude(?:\s+code)?|клод|клауд)\b[,.:]?|"
-                      r"^(claude|клод|gemini|джемини)\s*[,:]", re.I)
-OVERRIDE_MAP = {"gemini": "gemini", "джемини": "gemini", "гемини": "gemini", "claude": "claude_code",
-                "claude code": "claude_code", "клод": "claude_code", "клауд": "claude_code"}
+                      r"(claude(?:\s+code)?|клод(?:\s+код)?|клауд(?:\s+код)?)\b[,.:]?|"
+                      r"^(claude(?:\s+code)?|клод(?:\s+код)?)\s*[,:]", re.I)
+OVERRIDE_MAP = {"claude": "claude", "клод": "claude", "клауд": "claude", "claude code": "claude_code",
+                "клод код": "claude_code", "клауд код": "claude_code"}
 HIGH_SENS = re.compile(r"\bпарол\w*|\bпаспорт\w*|\bномер\w* (?:банковск\w+ )?карт\w*|\bcvv|\bcvc|\bпин-?код\w*|"
                        r"\bснилс|\bseed[- ]фраз\w*|\bприватн\w* ключ\w*|private key|\bpassword", re.I)
 CONF = re.compile(r"флор\w*|смет\w*|договор\w*|письм\w* от|счёт|счет\b|кп\b|бюджет\w*|зарплат\w*")
@@ -85,7 +85,7 @@ def parse_override(text: str) -> tuple[str | None, str]:
     m = OVERRIDE.search(text)
     if not m:
         return None, text
-    name = (m.group(1) or m.group(2) or "").casefold().replace("ё", "е")
+    name = re.sub(r"\s+", " ", (m.group(1) or m.group(2) or "").casefold().replace("ё", "е"))
     pid = OVERRIDE_MAP.get(name)
     cleaned = (text[:m.start()] + " " + text[m.end():]).strip(" ,.")
     return pid, cleaned or text
@@ -139,7 +139,8 @@ def classify_clause(c: str, prev: str | None) -> tuple[str, float]:
     return "chat", 0.5
 
 
-REMOVED_PROVIDER = re.compile(r"(?:через|используй|с помощью)?\s*\b(gpt|джипити|чат\s?гпт|chatgpt|openai)\b[,.:]?", re.I)
+REMOVED_PROVIDER = re.compile(r"(?:через|используй|с помощью)?\s*\b(gpt|джипити|чат\s?гпт|chatgpt|openai|gemini|джемини|"
+                              r"гемини|джимини)\b[,.:]?", re.I)
 
 
 def heuristic_plan(task_id: str, text: str) -> tuple[Decision, float]:
@@ -147,7 +148,7 @@ def heuristic_plan(task_id: str, text: str) -> tuple[Decision, float]:
     text_in = strip_wake(text)
     removed_note = None
     if REMOVED_PROVIDER.search(text_in):
-        removed_note = "Отдельного GPT в JARVIS нет — такие задачи выполняет Gemini."
+        removed_note = "Других ИИ (GPT, Gemini) в JARVIS нет — всё выполняет Claude через Claude Code."
         text_in = REMOVED_PROVIDER.sub(" ", text_in).strip(" ,.:") or text_in
     override, body = parse_override(text_in)
     clauses: list[Clause] = []

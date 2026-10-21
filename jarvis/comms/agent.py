@@ -1,5 +1,5 @@
-"""Communication agent: voice/text command → Gemini structured intent → recipient resolution → clarification
-or confirmation → Gateway tool. Gemini only reads the command (never credentials, never mail/chat contents);
+"""Communication agent: voice/text command → local reading or Claude structured intent → recipient resolution →
+clarification or confirmation → Gateway tool. Claude only reads the command (never credentials, never mail/chat contents);
 the providers perform the real action; the agent never says "sent" unless a provider confirmed it."""
 from __future__ import annotations
 
@@ -112,8 +112,8 @@ _PRONOUN = {"ей", "ему", "им", "её", "его"}
 
 
 def local_parse(text: str) -> dict | None:
-    """Fallback when Gemini is unavailable: «отправь <кому> в <сервис> [через N минут | в HH:MM]: <текст>» and
-    «… что <текст>», plus the status question. Anything less clear returns None (the user hears that Gemini is down)."""
+    """Local reading (no AI): «отправь <кому> в <сервис> [через N минут | в HH:MM]: <текст>» and
+    «… что <текст>», plus the status question. Anything less clear returns None and goes to Claude."""
     from ..router import strip_wake
     raw = strip_wake(text)
     t = raw.lower().replace("ё", "е")
@@ -127,7 +127,7 @@ def local_parse(text: str) -> dict | None:
          or re.search(r"\b(?:а|и)\s+(?:сообщение|текст)\s*[:,]?\s+(.+)$", raw, re.I))          # «…а сообщение привет»
     if not m:
         m = re.search(r"\b(?:что|чтобы)\s+(.+)$", raw, re.I)
-        retold = bool(m)                     # «напиши маме, что я задержусь»: Gemini rephrases this better
+        retold = bool(m)                     # «напиши маме, что я задержусь»: Claude rephrases this better
     m = (m or re.search(r"(?<=[.!?])\s+(\S.+)$", raw)                                       # «…в ватсапе. Привет.»
          or re.search(rf"\b(?:в|на|по)\s+(?:{chan})\s*,?\s+(?!(?:в|на|через|завтра)\b)(\S.+)$", raw, re.I))  # «…в WhatsApp привет»
     if not m:
@@ -168,7 +168,7 @@ def local_parse(text: str) -> dict | None:
     out["recipients"] = [{"name": name, "platform": p} for p in plats]
     out["_retold"] = retold or bool(re.search(r"\b(и|или)\b|,", re.sub(rf"\b({chan})\b", " ", head.lower())
                                                                   .split(verb.group(0).lower(), 1)[-1] if verb else ""))
-    # «Сергею и Ивану», «маме или папе»: several people — left to Gemini, never guessed locally
+    # «Сергею и Ивану», «маме или папе»: several people — left to Claude, never guessed locally
     vague = re.search(r"\b(вечером|утром|днем|днём|ночью|позже|попозже|потом|послезавтра|завтра|в понедельник|"
                       r"во вторник|в среду|в четверг|в пятницу|в субботу|в воскресенье|на выходных)\b", t)
     if vague and not out.get("when") and not out.get("in_minutes"):
@@ -204,11 +204,11 @@ def _count_words(n: int, noun=("сообщение", "сообщения", "со
 
 
 class CommsAgent:
-    def __init__(self, hub, gemini, config):
-        self.hub, self.gemini, self.config = hub, gemini, config
+    def __init__(self, hub, ai, config):
+        self.hub, self.ai, self.config = hub, ai, config
         self.revisions: dict[str, dict] = {}       # task id → revised args (edit while a confirmation is open)
         self.superseded: set[str] = set()           # tasks whose open question was replaced by a newer command
-        self.local_first = True                     # clear commands are read without Gemini (instant, no quota)
+        self.local_first = True                     # clear commands are read without AI (instant, no quota)
 
     # ---------------------------------------------------------------- entry points
     def pending(self, ctx: dict) -> dict | None:
@@ -241,31 +241,31 @@ class CommsAgent:
         try:
             intent = await self.parse(text)
         except Exception as e:   # noqa: BLE001
-            return director._finish(tid, cid, "Не понял, кому и куда отправить, а Gemini сейчас не отвечает. Скажите так: "
+            return director._finish(tid, cid, "Не понял, кому и куда отправить, а Claude сейчас не отвечает. Скажите так: "
                                     "«Отправь маме в WhatsApp: привет» — кто, сервис и текст после двоеточия, "
-                                    "тогда я пойму и без Gemini.", meta=self._meta(error=str(e)[:200]), failed=True)
+                                    "тогда я пойму и без ИИ.", meta=self._meta(error=str(e)[:200]), failed=True)
         await self.dispatch(director, tid, cid, intent, text)
 
     async def parse(self, text: str) -> dict:
         t0 = time.perf_counter()
         local = local_parse(text)
         if local and self.local_first and self._confident(local):
-            # A clear «кому / куда / что» command needs no AI: instant, no quota (measured: Gemini took 13–26 s).
+            # A clear «кому / куда / что» command needs no AI: instant, no quota (measured: an AI round trip took 3–26 s).
             local["_ms"], local["_model"] = round((time.perf_counter() - t0) * 1000), "local"
             return local
         try:
-            d = await self.gemini.structured(system_prompt(dt.datetime.now()), text, SCHEMA, budget=8.0)
-        except Exception:   # noqa: BLE001 — quota / network: simple commands still work without Gemini
+            d = await self.ai.structured(system_prompt(dt.datetime.now()), text, SCHEMA, budget=15.0)
+        except Exception:   # noqa: BLE001 — limits / network: simple commands still work without AI
             if local is None:
                 raise
             local["_ms"], local["_model"] = round((time.perf_counter() - t0) * 1000), "local"
             return local
         if not self._plausible(d, text):        # rare garbled answer (e.g. a recipient called "а"): ask once more
-            d = await self.gemini.structured(system_prompt(dt.datetime.now()), text, SCHEMA)
+            d = await self.ai.structured(system_prompt(dt.datetime.now()), text, SCHEMA)
             if not self._plausible(d, text):
                 d = {"action": "other"} if d.get("action") != "send" else d
         d["_ms"] = round((time.perf_counter() - t0) * 1000)
-        d["_model"] = getattr(self.gemini, "last_structured_model", "")
+        d["_model"] = getattr(self.ai, "last_structured_model", "")
         return d
 
     @staticmethod
@@ -502,7 +502,7 @@ class CommsAgent:
             return await self._apply_edit(director, tid, cid, self.hub.outbox.get(ids[0]), intent)
 
     async def _reparse_part(self, text: str, intent: dict, field: str) -> dict:
-        """The user answered a follow-up ("Ивану", "в 14:00"): read just that piece with Gemini."""
+        """The user answered a follow-up ("Ивану", "в 14:00"): read just that piece with Claude."""
         d = await self.parse(("Отправь " + text) if field == "recipients" else ("Отправь сообщение " + text))
         out = dict(intent)
         if field == "recipients":
@@ -716,7 +716,7 @@ class CommsAgent:
 
     @staticmethod
     def _meta(intent: dict | None = None, out=None, **kw) -> dict:
-        m = {"route": "comms", "provider": "gemini" if intent and intent.get("_ms") is not None else "local"}
+        m = {"route": "comms", "provider": "claude" if intent and intent.get("_model") not in (None, "", "local") else "local"}
         if intent and intent.get("_ms") is not None:
             m.update(intent_ms=intent["_ms"], model=intent.get("_model"))
         if out is not None:

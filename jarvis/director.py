@@ -12,7 +12,6 @@ from .db import Database, dumps, loads, new_id, now
 from .events import AuditLog, EventBus
 from .gateway import Gateway, Outcome
 from .policy import ApprovalError, Approvals, PolicyEngine
-from .providers.gemini import GeminiProvider
 from .scheduler import Scheduler, fmt_time
 from .tasks import S, TERMINAL, IllegalTransition, TaskStore
 from .tools.base import Risk, Tool, ToolResult, ToolSpec, Verification
@@ -25,14 +24,14 @@ class CloudConsent(Tool):
     """Pseudo-tool so that, in PRIVATE_LOCAL mode, sending a request to the cloud goes
     through the same approval path as any other consequential action."""
     spec = ToolSpec(id="cloud_send", title="Отправка в облачный ИИ",
-                    description="Send the user's request to Gemini", params={"type": "object", "properties": {
+                    description="Send the user's request to Claude", params={"type": "object", "properties": {
                         "provider": {"type": "string"}, "preview": {"type": "string", "maxLength": 400}}},
                     risk=Risk.MODERATE, side_effects="external", timeout_s=2, model_callable=False,
                     verification="Согласие пользователя зафиксировано",
-                    impact="Текст запроса и недавний контекст беседы уйдут в Google Gemini.")
+                    impact="Текст запроса и недавний контекст беседы уйдут в Claude (Anthropic) через Claude Code.")
 
     def describe(self, args):
-        return f"Отправить запрос в {args.get('provider', 'Gemini')}: «{args.get('preview', '')[:120]}»"
+        return f"Отправить запрос в {args.get('provider', 'Claude')}: «{args.get('preview', '')[:120]}»"
 
     async def run(self, args, ctx):
         return ToolResult({}, "Отправка разрешена.")
@@ -59,10 +58,10 @@ def _set_event() -> asyncio.Event:
 
 class Director:
     def __init__(self, *, db: Database, bus: EventBus, audit: AuditLog, tasks: TaskStore, policy: PolicyEngine,
-                 approvals: Approvals, gateway: Gateway, gemini: GeminiProvider, scheduler: Scheduler, config,
+                 approvals: Approvals, gateway: Gateway, ai, scheduler: Scheduler, config,
                  flora=None, providers=None, agency=None):
         self.db, self.bus, self.audit, self.tasks = db, bus, audit, tasks
-        self.policy, self.approvals, self.gw, self.gemini = policy, approvals, gateway, gemini
+        self.policy, self.approvals, self.gw, self.ai = policy, approvals, gateway, ai
         self.scheduler, self.config, self.flora = scheduler, config, flora
         self.providers, self.agency = providers, agency
         self.speech = None           # SpeechManager, set by the composition root
@@ -606,13 +605,13 @@ class Director:
         active = self.tasks.active()
         running = [s for t in active for s in t["steps"] if s["state"] in ("running", "verifying")]
         running_steps = bool(running)
-        names = {"gemini": "Gemini", "claude_code": "Claude Code"}
+        names = {"claude": "Claude", "claude_code": "Claude Code"}
         working = next((names.get((s.get("args") or {}).get("provider"), "Claude Code" if s["tool_id"].startswith("claude")
                                   else None) for s in running
                         if s["tool_id"] in ("agent_generate", "agent_chat", "claude_code_inspect", "claude_code_change")),
                        None)
         if not working and any(r.thinking for r in self.rt.values()):
-            working = "Gemini"
+            working = "Claude"
         thinking = any(r.thinking for r in self.rt.values())
         paused = [t for t in active if t["state"] == S.PAUSED]
         if self.policy.estop:
@@ -659,7 +658,7 @@ class Director:
                                   "created_at": t["created_at"], "route": t["route"]}
                                  for t in self.tasks.recent(12)],
                 "approvals": self.approvals.pending(), "core": self.core_state(),
-                "provider": self.gemini.describe(), "tools": self.gw.registry.describe(),
+                "provider": self.ai.describe(), "tools": self.gw.registry.describe(),
                 "providers": self.providers.describe() if self.providers else [],
                 "reminders": self.scheduler.upcoming(), "session_grants": sorted(self.policy.session_grants),
                 "uptime_s": round(time.time() - self.started_at)}

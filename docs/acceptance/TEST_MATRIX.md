@@ -95,3 +95,15 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Trusted rules (explicit, revocable, click-only) | VERIFIED MOCK | test_trust_rule_skips_confirmation_until_revoked |
 | Emergency stop blocks scheduled delivery; content tamper blocks delivery | VERIFIED MOCK | test_comms.py |
 | Attachments | NOT IMPLEMENTED | architecture ready (caps.can_send_file=false) |
+
+## All AI through Claude Code — Gemini removed (2026-10-21)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Conversation keeps context, streams, warm process | VERIFIED LIVE | test_live: context («А сколько ему лет?»); dev JARVIS: 2.5 s short answers |
+| Claude calls JARVIS tools through MCP, approvals unchanged | VERIFIED LIVE | dev JARVIS: search_files via MCP (4.8 s); create_note → approval card → file created |
+| «Стоп» interrupts without restarting | VERIFIED LIVE | stopped at once; next answer 1.3 s |
+| Web research with sources, letters, screenshot/image reading | VERIFIED LIVE | test_live.py |
+| Message commands: local first, Claude JSON otherwise | VERIFIED LIVE | 4.3 s with claude-haiku-5-5 |
+| No Gemini code or dependency left | VERIFIED LOCAL | test_no_gemini_code_left_in_the_application |
+| Tests never call the real Claude | VERIFIED LOCAL | conftest: providers «not installed» unless scripted |

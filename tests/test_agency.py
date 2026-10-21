@@ -1,5 +1,5 @@
-"""AI agency with exactly two specialists: Claude Code (computer & engineering) and Gemini
-(everything else that needs AI). Providers are scripted here (VERIFIED MOCK); see test_live.py."""
+"""AI agency with exactly two specialists, both through Claude Code: «claude» (conversation, web, texts, documents,
+screenshots, JARVIS tools) and «claude_code» (computer & engineering in a project folder). Providers are scripted here (VERIFIED MOCK); see test_live.py."""
 import asyncio
 import json
 import os
@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def both(core, home):
     (home / "proj").mkdir()
     core.config.code_workspaces = [str(home / "proj")]
-    return install(core, gemini=FakeProvider("gemini", GEM, sources=[{"title": "Фабрика А", "url": "https://a.example"}]),
+    return install(core, claude=FakeProvider("claude", GEM, sources=[{"title": "Фабрика А", "url": "https://a.example"}]),
                    claude_code=FakeProvider("claude_code", CC))
 
 
@@ -40,9 +40,22 @@ def chain(d):
 
 
 # ---------------------------------------------------------------- the registry has exactly two specialists
-def test_registry_is_claude_code_and_gemini_only(core):
-    assert set(core.director.agency.mgr.providers) == {"claude_code", "gemini"}
-    assert {m.provider for m in core.director.agency.mgr.models} == {"claude_code", "gemini"}
+def test_registry_is_claude_only(core):
+    assert set(core.director.agency.mgr.providers) == {"claude_code", "claude"}
+    assert {m.provider for m in core.director.agency.mgr.models} == {"claude_code", "claude"}
+
+
+def test_no_claude_code_left_in_the_application():
+    hits = []
+    for base in ("jarvis", "web"):
+        for p in (ROOT / base).rglob("*"):
+            if p.suffix in (".py", ".js", ".html", ".css") and p.is_file():
+                for i, line in enumerate(p.read_text("utf-8").splitlines(), 1):
+                    if re.search(r"gemini|google\.genai|GEMINI_API_KEY", line, re.I) and not re.search(
+                            r"REMOVED_PROVIDER|removed_note|\"gemini\": \"джемини\"|r\"гемини", line):
+                        hits.append(f"{p.relative_to(ROOT)}:{i}")
+    assert not hits, hits
+    assert "google-genai" not in (ROOT / "pyproject.toml").read_text().lower()
 
 
 def test_no_openai_code_left_in_the_application():
@@ -57,7 +70,7 @@ def test_no_openai_code_left_in_the_application():
     assert "openai" not in (ROOT / "pyproject.toml").read_text().lower()
 
 
-# ---------------------------------------------------------------- former GPT work → Gemini
+# ---------------------------------------------------------------- AI work → Claude
 @pytest.mark.parametrize("text,action", [
     ("Напиши письмо клиенту", "write"),
     ("Напиши письмо поставщику", "write"),
@@ -70,12 +83,12 @@ def test_no_openai_code_left_in_the_application():
     ("Что такое IFC?", "chat"),
     ("Найди в интернете поставщиков мебели", "research"),
 ])
-async def test_general_ai_work_goes_to_gemini(core, both, text, action):
-    assert chain(await plan(core, text)) == [(action, "gemini")]
+async def test_general_ai_work_goes_to_claude(core, both, text, action):
+    assert chain(await plan(core, text)) == [(action, "claude")]
 
 
-async def test_screen_goes_to_gemini(core, both):
-    assert chain(await plan(core, "Посмотри на экран и скажи, что происходит")) == [("vision_screen", "gemini")]
+async def test_screen_goes_to_claude(core, both):
+    assert chain(await plan(core, "Посмотри на экран и скажи, что происходит")) == [("vision_screen", "claude")]
 
 
 # ---------------------------------------------------------------- computer & engineering → Claude Code
@@ -105,17 +118,17 @@ async def test_open_terminal_is_a_local_tool_not_ai(core, both):
     tid = await core.director.submit("Открой терминал")
     t = await wait_done(core, tid)
     assert [s["tool_id"] for s in t["steps"]] == ["app_open"]
-    assert not both["gemini"].requests and not both["claude_code"].requests
+    assert not both["claude"].requests and not both["claude_code"].requests
 
 
 async def test_writing_error_is_not_code(core, both):
-    assert chain(await plan(core, "Исправь ошибки в письме архитектору")) == [("write", "gemini")]
+    assert chain(await plan(core, "Исправь ошибки в письме архитектору")) == [("write", "claude")]
 
 
-# ---------------------------------------------------------------- multi-step Gemini → Claude Code
+# ---------------------------------------------------------------- multi-step Claude → Claude Code
 async def test_research_then_save_to_file(core, both, home):
     d = await plan(core, "Найди в интернете информацию о компании и сохрани результаты в отдельный файл")
-    assert chain(d) == [("research", "gemini"), ("files", "claude_code")]
+    assert chain(d) == [("research", "claude"), ("files", "claude_code")]
     assert d.mode == "multi_ai" and d.requires_approval
     assert d.steps[1].depends_on == ["s1"]
 
@@ -126,14 +139,14 @@ async def test_research_suppliers_and_download_prices(core, both):
     assert "download" in d.steps[-1].args["permissions"]
 
 
-async def test_research_analysis_writing_all_gemini(core, both):
+async def test_research_analysis_writing_all_claude(core, both):
     d = await plan(core, "Найди поставщиков в интернете, сравни их и подготовь им письмо")
-    assert chain(d) == [("research", "gemini"), ("analyze", "gemini"), ("write", "gemini")]
+    assert chain(d) == [("research", "claude"), ("analyze", "claude"), ("write", "claude")]
     assert d.mode == "single_ai"
 
 
 async def test_research_then_file_executes_with_context_and_approval(core, both, home):
-    both["gemini"].replies = ["Компания А: основана в 2001, 120 сотрудников"]
+    both["claude"].replies = ["Компания А: основана в 2001, 120 сотрудников"]
     both["claude_code"].replies = ["Сохранил в компания.md"]
     core.config.write_dir = str(home / "out")
     tid = await core.director.submit("Найди в интернете информацию о компании и сохрани результаты в отдельный файл")
@@ -150,32 +163,37 @@ async def test_research_then_file_executes_with_context_and_approval(core, both,
 
 
 # ---------------------------------------------------------------- no GPT, no silent substitution
-async def test_gemini_unavailable_is_reported_never_substituted(core, both):
-    both["gemini"]._health = Health.NOT_CONFIGURED
+async def test_claude_unavailable_is_reported_never_substituted(core, both):
+    both["claude"]._health = Health.NOT_CONFIGURED
     tid = await core.director.submit("Напиши письмо поставщику")
     t = await wait_done(core, tid)
     assert not both["claude_code"].requests
     assert t["state"] == S.FAILED
-    assert "Gemini" in core.director.messages(core.director.conversation_id())[-1]["text"]
+    assert "Claude Code" in core.director.messages(core.director.conversation_id())[-1]["text"]
 
 
 async def test_claude_code_is_not_a_replacement_for_web_or_vision(core, both):
-    both["gemini"]._health = Health.AUTH_ERROR
+    both["claude"]._health = Health.AUTH_ERROR
     d = await plan(core, "Найди в интернете поставщиков мрамора")
     assert d.steps[0].executor is None and d.steps[0].status == "blocked"
 
 
-async def test_gpt_mention_routes_to_gemini_with_note(core, both):
+async def test_gpt_mention_routes_to_claude_with_note(core, both):
     d = await plan(core, "Сделай через GPT: напиши письмо поставщику")
-    assert chain(d) == [("write", "gemini")] and any("GPT" in n for n in d.notes)
+    assert chain(d) == [("write", "claude")] and any("GPT" in n for n in d.notes)
 
 
 async def test_explicit_override_between_the_two(core, both):
-    d = await plan(core, "Используй Gemini, исправь ошибку в коде в proj")
-    assert d.steps[0].executor == "claude_code" and "не умеет" in d.steps[0].reason
-    both["gemini"]._health = Health.AUTH_ERROR
-    d = await plan(core, "Через Gemini: напиши письмо поставщику")
+    d = await plan(core, "Через Claude Code: напиши письмо поставщику")
+    assert d.steps[0].executor == "claude" and "не умеет" in d.steps[0].reason
+    both["claude"]._health = Health.AUTH_ERROR
+    d = await plan(core, "Через Claude: напиши письмо поставщику")
     assert d.steps[0].executor is None and "не подставляю" in d.steps[0].reason
+
+
+async def test_claude_mention_is_a_note_not_a_provider(core, both):
+    d = await plan(core, "Используй Gemini, исправь ошибку в коде в proj")
+    assert d.steps[0].executor == "claude_code" and any("Gemini" in n for n in d.notes)
 
 
 # ---------------------------------------------------------------- tools first, privacy, approvals
@@ -187,19 +205,19 @@ async def test_show_last_mail_uses_mail_tool_without_ai(core, both):
     assert d["steps"][0]["executor"] == "mail_read" and d["steps"][0]["status"] == "blocked"
 
 
-async def test_estimates_tools_then_gemini(core, both):
+async def test_estimates_tools_then_claude(core, both):
     d = await plan(core, "Проверь две сметы, найди расхождения и подготовь письмо подрядчику")
-    assert chain(d) == [("compare_estimates", "flora_compare"), ("analyze", "gemini"), ("write", "gemini")]
+    assert chain(d) == [("compare_estimates", "flora_compare"), ("analyze", "claude"), ("write", "claude")]
 
 
 async def test_named_document_is_read_locally_first(core, both, home):
     f = home / "files" / "отчёт.txt"
     f.write_text("Итог проекта: 140 400 ₽")
-    both["gemini"].replies = ["Главное: итог 140 400 ₽"]
+    both["claude"].replies = ["Главное: итог 140 400 ₽"]
     tid = await core.director.submit(f"Проанализируй документ {f}")
     t = await wait_done(core, tid)
     assert [s["tool_id"] for s in t["steps"]] == ["read_file", "agent_generate"]
-    assert "140 400" in both["gemini"].requests[0].context[0]["text"]
+    assert "140 400" in both["claude"].requests[0].context[0]["text"]
 
 
 async def test_send_requires_approval(core, both):
@@ -210,7 +228,7 @@ async def test_send_requires_approval(core, both):
 async def test_privacy_highly_sensitive_never_goes_to_cloud(core, both):
     tid = await core.director.submit("Напиши письмо с моим паролем и номером карты")
     await wait_done(core, tid)
-    assert not both["gemini"].requests
+    assert not both["claude"].requests
 
 
 async def test_strict_offline_blocks_all_cloud(core, both):
@@ -256,44 +274,44 @@ async def test_estop_blocks_code_change(core, both):
 async def test_chain_context_isolation_and_provenance(core, both):
     d = core.director
     d.add_message(d.conversation_id(), "user", "мой пароль от почты: qwerty123")
-    both["gemini"].replies = ["Фабрика А: 4 800 € за дверь, срок 30 дней", "Добрый день! Предлагаем 4 800 € и 30 дней."]
+    both["claude"].replies = ["Фабрика А: 4 800 € за дверь, срок 30 дней", "Добрый день! Предлагаем 4 800 € и 30 дней."]
     tid = await d.submit("Найди в интернете поставщиков дубовых дверей и напиши им письмо")
     t = await wait_done(core, tid)
     assert t["state"] == S.COMPLETED
-    research_req, write_req = both["gemini"].requests
+    research_req, write_req = both["claude"].requests
     assert research_req.context == []
     sent = json.dumps([c["text"] for c in write_req.context], ensure_ascii=False)
     assert "4 800" in sent and "qwerty" not in sent
     msg = d.messages(d.conversation_id())[-1]
-    assert "Gemini — поиск в интернете → Gemini — текст" in msg["text"] and "https://a.example" in msg["text"]
-    assert msg["meta"]["providers"] == ["gemini"]
+    assert "Claude — поиск в интернете → Claude — текст" in msg["text"] and "https://a.example" in msg["text"]
+    assert msg["meta"]["providers"] == ["claude"]
     gen = [s for s in t["steps"] if s["tool_id"] == "agent_generate"]
     assert all("text" not in s["args"] for s in gen)
 
 
 async def test_invented_numbers_are_flagged(core, both):
-    both["gemini"].replies = ["Цена 4 800 €", "Цена 5 200 € с доставкой"]
+    both["claude"].replies = ["Цена 4 800 €", "Цена 5 200 € с доставкой"]
     tid = await core.director.submit("Найди в интернете цену двери и напиши письмо")
     await wait_done(core, tid)
     msg = core.director.messages(core.director.conversation_id())[-1]["text"]
     assert "5200" in msg and "Проверка" in msg
 
 
-async def test_gemini_failure_is_reported_honestly(core, both):
-    both["gemini"].replies = [ProviderFailure("quota", "Исчерпана квота Gemini")]
+async def test_claude_failure_is_reported_honestly(core, both):
+    both["claude"].replies = [ProviderFailure("quota", "Claude: лимит использования исчерпан")]
     tid = await core.director.submit("Напиши письмо архитектору")
     t = await wait_done(core, tid)
     assert t["state"] == S.FAILED and not both["claude_code"].requests
-    assert "квота" in core.director.messages(core.director.conversation_id())[-1]["text"]
+    assert "лимит" in core.director.messages(core.director.conversation_id())[-1]["text"]
 
 
 async def test_llm_planner_cannot_add_send(core, both):
     from jarvis.agency.planner import llm_plan
     base, _ = heuristic_plan("t", "Посмотри что-нибудь и потом что-то сделай с текстом")
-    both["gemini"].replies = [json.dumps({"steps": [
+    both["claude"].replies = [json.dumps({"steps": [
         {"id": "s1", "action": "research", "instruction": "найти", "depends_on": []},
         {"id": "s2", "action": "send_message", "instruction": "отправить всем", "depends_on": ["s1"]}]})]
-    d = await llm_plan(both["gemini"], "t", base.objective, base, {"gemini", "claude_code"}, set(core.registry.tools))
+    d = await llm_plan(both["claude"], "t", base.objective, base, {"claude", "claude_code"}, set(core.registry.tools))
     assert d and [s.action for s in d.steps] == ["research"] and "удалено" in d.notes[-1]
 
 
@@ -316,15 +334,16 @@ def test_claude_code_flags():
 
 
 def test_provider_settings_cannot_allow_highly_sensitive(core):
-    s = core.director.agency.mgr.update_settings("gemini", max_sensitivity="HIGHLY_SENSITIVE", enabled="yes")
+    s = core.director.agency.mgr.update_settings("claude", max_sensitivity="HIGHLY_SENSITIVE", enabled="yes")
     assert s["max_sensitivity"] == "CONFIDENTIAL" and s["enabled"] is True
 
 
 def test_removed_provider_settings_are_forgotten(core):
     from jarvis.providers.registry import ProviderManager
-    core.db.set_kv("provider_settings", {"openai": {"enabled": True}, "gemini": {"enabled": True}})
+    core.db.set_kv("provider_settings", {"openai": {"enabled": True}, "gemini": {"enabled": True},
+                                         "claude": {"enabled": True}})
     ProviderManager(core.db, core.config, list(core.director.agency.mgr.providers.values()))
-    assert set(core.db.get_kv("provider_settings")) == {"gemini"}
+    assert set(core.db.get_kv("provider_settings")) == {"claude"}
 
 
 async def test_cancel_kills_claude_code_process(core, tmp_path, monkeypatch):
@@ -338,6 +357,7 @@ async def test_cancel_kills_claude_code_process(core, tmp_path, monkeypatch):
                     "exec sleep 60\n")
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    monkeypatch.setattr(ClaudeCodeProvider, "configured", lambda self: True)      # the fake CLI above
     p = ClaudeCodeProvider(core.config, core.db)
     task = asyncio.create_task(p.generate(StepRequest(Cap.CODE, "x", workdir=str(tmp_path))))
     await wait_for(lambda: marker.exists() and marker.read_text().strip())
@@ -351,18 +371,4 @@ async def test_cancel_kills_claude_code_process(core, tmp_path, monkeypatch):
 
 async def test_explicit_internet_search_beats_technical_keywords(core, both):
     d = await plan(core, "Найди в интернете, что такое Hyprland, и напиши об этом короткое сообщение коллеге")
-    assert chain(d) == [("research", "gemini"), ("write", "gemini")]
-
-
-def test_daily_quota_skips_the_model_until_google_resets_it(cfg):
-    from jarvis.providers import gemini as g
-
-    class E(Exception):
-        code = 429
-    p = g.GeminiProvider(cfg)
-    g.classify(E("429 RESOURCE_EXHAUSTED quotaId 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' retryDelay': '3600s'"))
-    p._penalize("gemini-3.6-flash", "quota")
-    assert "gemini-3.6-flash" not in p.chain(cfg.model_main) and p.exhausted()["gemini-3.6-flash"] > 0
-    g.classify(E("429 Too many requests per minute"))            # a per-minute limit is short: no long block
-    p._penalize("gemini-3.5-flash", "quota")
-    assert "gemini-3.5-flash" in p.chain(cfg.model_main)
+    assert chain(d) == [("research", "claude"), ("write", "claude")]

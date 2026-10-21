@@ -22,7 +22,7 @@ from .events import redact
 WEB = Path(__file__).resolve().parent.parent / "web"
 COOKIE = "jarvis_session"
 UI_TOOLS = {"open_path", "open_url"}
-KEY_PROVIDERS = {"gemini": "JARVIS — Gemini API key"}
+KEY_PROVIDERS: dict[str, str] = {}      # no API keys: the AI is Claude through the local Claude Code sign-in
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: data:; "
        "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; "
        "script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
@@ -57,6 +57,10 @@ class Server:
         r.add_post("/api/submit", self.api_submit)
         r.add_get("/artifact", self.artifact)
         r.add_get("/static/{path:.+}", self.static)
+        # Tool calls of the Claude conversation (jarvis/mcp_bridge.py). Own secret per run, loopback only; every call
+        # still goes through the Gateway (policy, the user's approval, verification, audit).
+        self.mcp_secret = pysecrets.token_urlsafe(32)
+        r.add_post("/mcp/call", self.mcp_call)
         self.app.on_startup.append(self.on_startup)
         self.app.on_cleanup.append(self.on_cleanup)
         self.sockets: set[web.WebSocketResponse] = set()
@@ -83,6 +87,10 @@ class Server:
             return web.Response(status=403, text="forbidden host")
         if req.path == "/health":
             return await handler(req)
+        if req.path == "/mcp/call":
+            if req.method != "POST" or not hmac.compare_digest(req.headers.get("X-JARVIS-MCP", ""), self.mcp_secret):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            return await handler(req)
         if req.path == "/" and req.query.get("t"):
             if hmac.compare_digest(req.query["t"], self.token):
                 resp = web.Response(status=302, headers={"Location": "/", "Cache-Control": "no-store"})
@@ -103,6 +111,7 @@ class Server:
 
     # ------------------------------------------------------------------ lifecycle
     async def on_startup(self, app):
+        self.core.claude.bridge = {"url": f"http://127.0.0.1:{self.port}/mcp/call", "secret": self.mcp_secret}
         self.core.scheduler.start()
         if self.core.comms:
             asyncio.get_running_loop().create_task(self.core.comms.start())
@@ -129,6 +138,7 @@ class Server:
             await self.core.director.speech.engine.stop()
         if getattr(self.core.director, "stt", None):
             await self.core.director.stt.stop()
+        await self.core.claude.stop()
         await self.core.scheduler.stop()
         if self.core.comms:
             await self.core.comms.stop()
@@ -137,15 +147,13 @@ class Server:
         self.core.audit.write("core.stop")
 
     async def _warm(self) -> bool:
-        """Called when the user starts speaking: keep the Gemini HTTPS connection warm (no model quota used)."""
+        """Called when the user starts speaking: make sure the Claude conversation process is running (no usage)."""
         now_ = time.time()
-        if now_ - getattr(self, "_warmed_at", 0) < 20 or not self.core.gemini.configured():
+        if now_ - getattr(self, "_warmed_at", 0) < 20 or not self.core.claude.configured():
             return False
         self._warmed_at = now_
         try:
-            pager = await self.core.gemini.client().aio.models.list(config={"page_size": 1})
-            async for _ in pager:
-                break
+            await self.core.claude.warm()
             return True
         except Exception:   # noqa: BLE001
             return False
@@ -154,10 +162,8 @@ class Server:
         """One spoken request: STT → Director (same path as typed text) → streamed speech."""
         d = self.core.director
         local = getattr(d, "stt", None)
-        local_ok = bool(local and local.available())
-        cloud_ok = d.privacy_profile() == "AUTHORIZED_CLOUD"
-        if not (local_ok or cloud_ok):
-            raise ValueError("Локальное распознавание не установлено, а облако выключено режимом приватности")
+        if not (local and local.available()):
+            raise ValueError("Распознавание речи не установлено (scripts/install.sh — GigaAM, на этом компьютере)")
         audio = base64.b64decode(data.get("audio_b64", ""), validate=True)
         if not 1000 < len(audio) < 10 * 1024 * 1024:
             raise ValueError("Запись слишком короткая или слишком длинная")
@@ -168,22 +174,11 @@ class Server:
         turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
         if sp:
             sp.mark(turn, "stt_start")
-        stt_model = None
+        stt_model = local.name
         try:
-            text = None
-            if local_ok and mime == "audio/wav":
-                try:
-                    text, stt_model = await local.transcribe(audio), local.name     # on this computer, no quota
-                except Exception as e:   # noqa: BLE001
-                    self.core.audit.write("voice.local_stt_failed", error=repr(e)[:200])
-                    if not cloud_ok:
-                        raise
-            if text is None:
-                names = self.core.comms.vocabulary() if self.core.comms else None
-                confirming = any(d.voice_approvable(a["tool_id"]) for a in d.approvals.pending())
-                text = await self.core.gemini.transcribe(audio, mime, names=names,
-                                                         expect="confirm" if confirming else None)
-                stt_model = getattr(self.core.gemini, "last_transcribe_model", None)
+            if mime != "audio/wav":
+                raise ValueError("нужна запись WAV")
+            text = await local.transcribe(audio)          # on this computer: no internet, no quota
         except Exception as e:   # noqa: BLE001
             if sp:
                 sp.annotate(turn, error=str(e)[:200])
@@ -217,7 +212,8 @@ class Server:
         return {"text": text, "task_id": task_id, "turn": turn}
 
     async def _check_providers(self):
-        """Startup health: model lists for API providers (free), sign-in status for Claude Code (no usage)."""
+        """Startup health: Claude Code sign-in status (no usage); then the conversation process is started, so the
+        first question does not pay the CLI start-up (measured ~3 s cold vs ~1–1.5 s warm)."""
         mgr = self.core.director.providers
         for pid, p in mgr.providers.items():
             if p.configured():
@@ -225,11 +221,17 @@ class Server:
                     await p.health_check(live=False)
                 except Exception as e:   # noqa: BLE001 — health must never crash startup
                     self.core.audit.write("provider.health_error", provider=pid, error=repr(e)[:200])
+        if self.core.claude.configured() and self.core.claude.logged_in is not False:
+            try:
+                await self.core.claude.warm()
+                self.core.claude.status = "ready"
+            except Exception as e:   # noqa: BLE001
+                self.core.audit.write("claude.warm_failed", error=repr(e)[:200])
         self._publish_providers()
 
     def _publish_providers(self):
         self.core.bus.publish("providers", {"providers": self.core.director.providers.describe(),
-                                            "provider": self.core.gemini.describe()})
+                                            "provider": self.core.claude.describe()})
         self.core.director._touch()
 
     async def _forward(self):
@@ -247,6 +249,16 @@ class Server:
                 self.sockets.discard(ws)
 
     # ------------------------------------------------------------------ handlers
+    async def mcp_call(self, req):
+        try:
+            body = await req.json()
+        except ValueError:
+            return web.json_response({"error": "bad json"}, status=400)
+        name, args = str(body.get("name", ""))[:64], body.get("arguments") or {}
+        self.core.audit.write("claude.tool_call", tool=name)
+        res = await self.core.claude.mcp_call(name, args if isinstance(args, dict) else {})
+        return web.json_response({"result": res})
+
     async def health(self, req):
         return web.json_response({"ok": True, "app": "jarvis-workos"})
 

@@ -3,8 +3,8 @@
 Done: milestone 1 (working JARVIS) and milestone 2 (Flora on synthetic data). See TEST_MATRIX.md.
 
 ## Next, in order
-1. **Gemini live check** (needs the client's or developer's API key via Settings or `jarvis setup-gemini`):
-   run `gemini.check`, one chat with a tool call, one voice transcription, one TTS; record latency/cost;
+1. **Claude live check** (the Claude Code sign-in on this computer; `JARVIS_LIVE=1 uv run pytest tests/test_live.py`):
+   one chat with a tool call over MCP, one web search, one screenshot reading; record latency;
    update TEST_MATRIX statuses from MOCK/UNVERIFIED to LIVE.
 2. **Gmail read-only adapter** behind `MailProvider` (OAuth installed-app flow with PKCE, scope
    `gmail.readonly`, token in keyring). Needs: a Google Cloud OAuth client and a test account. Then draft-only

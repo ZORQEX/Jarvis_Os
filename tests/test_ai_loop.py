@@ -1,9 +1,9 @@
-"""Director ↔ Gemini loop with a scripted provider (VERIFIED MOCK, not a live API test).
+"""Director ↔ Claude conversation with a scripted provider (VERIFIED MOCK, not a live API test).
 Checks: model tool calls go through the policy gateway, approvals still apply,
 history/function responses are threaded correctly, provider errors are honest."""
 import pytest
 
-from jarvis.providers.gemini import ProviderError
+from jarvis.providers.base import ProviderFailure as ProviderError
 from jarvis.tasks import S
 
 from conftest import wait_done, wait_for
@@ -11,32 +11,30 @@ from conftest import wait_done, wait_for
 
 @pytest.fixture
 def fake(core):
-    from conftest import ScriptedGemini, install
+    from conftest import ScriptedClaude, install
 
     def go(turns):
-        g = ScriptedGemini(core.config, turns)
-        install(core, gemini=g)
+        g = ScriptedClaude(core.config, turns)
+        install(core, claude=g)
         return g
     return go
 
 
 async def test_model_tool_call_runs_through_gateway(core, fake):
-    g = fake([[("system_info", {})], ["Свободно много места."]])
+    g = fake([[("system_info", {}), "Свободно много места."]])
     tid = await core.director.submit("проверь, всё ли в порядке с компьютером")
     t = await wait_done(core, tid)
     assert t["state"] == S.COMPLETED
     assert [s["tool_id"] for s in t["steps"]] == ["agent_chat", "system_info"]
     assert t["steps"][1]["verification"]["status"] == "verified"
     # second model call received the function response
-    last = g.calls[1][-1]
-    assert last.role == "user" and last.parts[0].function_response.name == "system_info"
-    assert last.parts[0].function_response.response["status"] == "ok"
+    assert g.tool_results[0]["status"] == "ok"            # the tool result went back to Claude
     msg = core.director.messages(core.director.conversation_id())[-1]
     assert msg["text"] == "Свободно много места." and msg["meta"]["cloud"] is True
 
 
 async def test_model_cannot_skip_approval(core, fake, home):
-    fake([[("create_note", {"text": "от модели"})], ["Готово."]])
+    fake([[("create_note", {"text": "от модели"}), "Готово."]])
     tid = await core.director.submit("сохрани мысль про окна")
     await wait_for(lambda: core.approvals.pending())
     assert not (home / "out").exists()
@@ -47,12 +45,13 @@ async def test_model_cannot_skip_approval(core, fake, home):
 
 
 async def test_model_cannot_call_ui_only_or_unknown_tools(core, fake):
-    g = fake([[("flora_send", {"draft_id": "x"}), ("shell_exec", {"cmd": "rm -rf ~"})], ["Не могу."]])
+    g = fake([[("flora_send", {"draft_id": "x"}), ("shell_exec", {"cmd": "rm -rf ~"}), "Не могу."]])
     tid = await core.director.submit("сделай что-нибудь полезное с почтой")
     t = await wait_done(core, tid)
     states = {s["tool_id"]: s["state"] for s in t["steps"]}
     assert states.get("flora_send") in (None, "invalid", "denied")   # not model-callable: never runs
     assert "shell_exec" not in states
+    assert [r["status"] for r in g.tool_results] == ["invalid", "invalid"]
     assert not core.director.flora.mail.sent_all()
 
 
@@ -66,12 +65,12 @@ async def test_send_request_is_never_executed_without_mail_and_approval(core, fa
 
 
 async def test_provider_error_is_reported_not_faked(core, fake):
-    fake([ProviderError("quota", "Исчерпана квота Gemini")])
+    fake([ProviderError("quota", "Claude: лимит использования исчерпан")])
     tid = await core.director.submit("расскажи что-нибудь интересное")
     t = await wait_done(core, tid)
     assert t["state"] == S.FAILED
     msg = core.director.messages(core.director.conversation_id())[-1]
-    assert "квота" in msg["text"]
+    assert "лимит" in msg["text"] and "Claude" in msg["text"]
 
 
 async def test_private_mode_asks_before_cloud(core, fake):
@@ -87,9 +86,8 @@ async def test_private_mode_asks_before_cloud(core, fake):
 
 async def test_tool_round_limit(core, fake):
     core.config.max_tool_rounds = 2
-    fake([[("system_info", {})], [("system_info", {})], [("system_info", {})]])
+    g = fake([[("system_info", {}), ("system_info", {}), ("system_info", {}), "Хватит."]])
     tid = await core.director.submit("зацикленный запрос")
     t = await wait_done(core, tid)
-    assert len(t["steps"]) == 1 or len(t["steps"]) == 2
-    msg = core.director.messages(core.director.conversation_id())[-1]
-    assert "лимит шагов" in msg["text"]
+    assert len([s for s in t["steps"] if s["tool_id"] == "system_info"]) == 2
+    assert g.tool_results[-1]["status"] == "denied" and "лимит шагов" in g.tool_results[-1]["error"]

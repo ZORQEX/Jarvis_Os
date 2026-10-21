@@ -1,5 +1,5 @@
 """Level-0/1 router: unambiguous commands are mapped straight to tools,
-without any model call. Anything not matched confidently goes to Gemini."""
+without any model call. Anything not matched confidently goes to Claude."""
 from __future__ import annotations
 
 import os

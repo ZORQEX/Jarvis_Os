@@ -53,7 +53,7 @@ function draw() {
       <div id="cjobs"></div></div>
     <div class="panel"><h2>Подключения</h2>
       <div class="muted" style="font-size:13px">Вход — только через сами сервисы (код Telegram, QR-код WhatsApp, пароль приложения почты).
-        Ключи и сессии хранятся в системной связке ключей и никогда не уходят в Gemini.</div>
+        Ключи и сессии хранятся в системной связке ключей и никогда не передаются ИИ.</div>
       <div class="pcards" id="caccounts"></div></div>
     <div class="panel" id="crules"></div>
     <div class="panel" id="cbook"></div>

@@ -6,7 +6,6 @@
   jarvis stop         emergency stop (cancel work, block consequential actions)
   jarvis resume       clear emergency stop
   jarvis say TEXT     send a command as if typed
-  jarvis setup-gemini store a Gemini API key in the system keyring (hidden input)
   jarvis waybar       stream state for a Waybar custom module
 """
 from __future__ import annotations
@@ -229,13 +228,6 @@ def main(argv: list[str] | None = None) -> None:
         ensure_core(cfg, paths)
         st, body = _req(cfg, paths, "POST", "/api/submit", {"text": " ".join(argv[1:]), "source": "cli"})
         print(body.decode())
-    elif cmd == "setup-gemini":
-        from . import secrets
-        print("Ключ Gemini API будет сохранён в системном хранилище ключей (GNOME Keyring).")
-        print("Получить ключ: https://aistudio.google.com/apikey  — ввод не отображается.")
-        key = getpass.getpass("Ключ: ")
-        secrets.store("gemini", key, "JARVIS — Gemini API key")
-        print("Сохранено. Откройте Настройки → Gemini → «Проверить», чтобы проверить доступ к моделям.")
     elif cmd == "waybar":
         waybar(cfg, paths)
     else:

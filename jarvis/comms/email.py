@@ -1,7 +1,7 @@
 """E-mail through the user's own mailbox: SMTP to send, IMAP to verify ("Sent") and to find addresses.
 
 Authentication is the mail provider's own (an app password for Gmail/Yandex/Mail.ru). The password lives only in
-the OS keyring. Mail headers read for address lookup are used locally and never sent to Gemini."""
+the OS keyring. Mail headers read for address lookup are used locally and never sent to any AI."""
 from __future__ import annotations
 
 import asyncio

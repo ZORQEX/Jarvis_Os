@@ -43,7 +43,7 @@ class FakeMessenger(Provider):
 
 
 class Intents:
-    """Stands in for Gemini's structured call: returns scripted intents and records what it was given."""
+    """Stands in for Claude's structured call: returns scripted intents and records what it was given."""
 
     def __init__(self, *intents):
         self.queue, self.seen = list(intents), []
@@ -93,10 +93,10 @@ def iso(minutes=60):
 
 
 def intents(core, *items):
-    """Scripted Gemini intents: these tests exercise the Gemini path, so the instant local reading is switched off."""
-    core.director.comms.gemini = Intents(*items)
+    """Scripted Claude intents: these tests exercise the AI path, so the instant local reading is switched off."""
+    core.director.comms.ai = Intents(*items)
     core.director.comms.local_first = False
-    return core.director.comms.gemini
+    return core.director.comms.ai
 
 
 def last_text(core):
@@ -528,13 +528,13 @@ def test_cut_off_phrases_are_detected():
     assert not is_fragment("Отправь Ивану в Telegram: привет") and not is_fragment("Да.") and not is_fragment("Привет.")
 
 
-async def test_without_gemini_simple_commands_still_work(core, hub):
+async def test_without_ai_simple_commands_still_work(core, hub):
     class Down:
         last_structured_model = ""
 
         async def structured(self, *a, **k):
             raise RuntimeError("429 quota")
-    core.director.comms.gemini = Down()
+    core.director.comms.ai = Down()
     tid = await core.director.submit("Говорю, отправь сообщение в Telegram моему контакту Иван Петров. Напиши: «Я скоро».")
     a = await pending_send(core)
     assert a["args"]["deliveries"][0]["to_id"] == "u:1:11" and a["args"]["body"] == "Я скоро."
@@ -563,26 +563,26 @@ async def test_provider_crash_during_search_is_a_clear_message(core, hub):
     assert not hub.providers["whatsapp"].sent
 
 
-async def test_clear_commands_are_read_locally_without_gemini(core, hub):
-    class NoGemini:
+async def test_clear_commands_are_read_locally_without_ai(core, hub):
+    class NoAI:
         last_structured_model = ""
         calls = 0
 
         async def structured(self, *a, **k):
-            NoGemini.calls += 1
-            raise AssertionError("Gemini must not be needed for a clear command")
+            NoAI.calls += 1
+            raise AssertionError("AI must not be needed for a clear command")
     hub.providers["whatsapp"].people = [("chat:Мама ❤️", "Мама ❤️", "чат WhatsApp")]
-    core.director.comms.gemini = NoGemini()
+    core.director.comms.ai = NoAI()
     t0 = time.perf_counter()
     tid = await core.director.submit("Отправь сообщение контакту мама в WhatsApp привет.")
     a = await pending_send(core)
-    assert time.perf_counter() - t0 < 1.0 and NoGemini.calls == 0
+    assert time.perf_counter() - t0 < 1.0 and NoAI.calls == 0
     assert a["args"]["deliveries"][0]["to_id"] == "chat:Мама ❤️" and a["args"]["body"] == "Привет."
     core.director.decide(a["id"], False)
     await wait_done(core, tid)
 
 
-def test_local_reading_leaves_unclear_commands_to_gemini():
+def test_local_reading_leaves_unclear_commands_to_claude():
     from jarvis.comms.agent import CommsAgent, local_parse
     for q in ["Отправь Сергею и Ивану в Telegram: Встреча переносится.", "Напиши маме в вотсап, что я задержусь",
               "Отправь ей теперь, что я её люблю", "Отправь сообщение в WhatsApp"]:

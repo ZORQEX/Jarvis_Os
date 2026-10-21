@@ -150,7 +150,7 @@ class ClaudeCodeProvider(AIProvider):
             raise ProviderFailure("unavailable", "Claude Code не установлен")
         if not req.workdir or not os.path.isdir(req.workdir):
             raise ProviderFailure("invalid", "Не задана рабочая папка для Claude Code")
-        from .gemini import context_block
+        from .claude_chat import context_block
         prompt = (context_block(req.context) + "\n\n" if req.context else "") + req.instruction
         argv = build_argv(prompt, req.mode, self.config.claude_model, self.config.claude_budget_usd,
                           allow=set(getattr(req, "permissions", []) or []))

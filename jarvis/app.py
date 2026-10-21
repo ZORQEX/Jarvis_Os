@@ -9,7 +9,7 @@ from .director import CloudConsent, Director
 from .events import AuditLog, EventBus
 from .gateway import Gateway, Registry
 from .policy import Approvals, PolicyEngine
-from .providers.gemini import GeminiProvider
+from .providers.claude_chat import ClaudeChatProvider
 from .scheduler import ReminderCreate, Scheduler
 from .tasks import TaskStore
 from .tools.desktop import AppOpen, Notify, Screenshot, VolumeSet, WindowList, WorkspaceSwitch
@@ -29,7 +29,7 @@ class Core:
     approvals: Approvals
     registry: Registry
     gateway: Gateway
-    gemini: GeminiProvider
+    claude: ClaudeChatProvider    # the conversational AI (Claude via the local Claude Code CLI)
     scheduler: Scheduler
     director: Director
     recovered: list[str]
@@ -52,46 +52,46 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     tools += extra_tools or []
     registry = Registry(tools)
     gateway = Gateway(registry, policy, approvals, tasks, bus, audit, config)
-    gemini = GeminiProvider(config)
+    claude = ClaudeChatProvider(config, db, paths.state, registry)
     from .agency.agency import Agency
     from .agency.tools import AgentGenerate, ClaudeChange, ClaudeInspect, OpenUrl
     from .providers.claude_code import ClaudeCodeProvider
     from .providers.registry import ProviderManager
-    manager = ProviderManager(db, config, [ClaudeCodeProvider(config, db), gemini])
+    manager = ProviderManager(db, config, [ClaudeCodeProvider(config, db), claude])
     for t in (AgentGenerate(manager), ClaudeInspect(manager, config), ClaudeChange(manager, config), OpenUrl()):
         registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
     flora = None
     try:
         from .flora.workflow import FloraWorkflow
-        flora = FloraWorkflow(paths, db, bus, audit, gemini, config)
+        flora = FloraWorkflow(paths, db, bus, audit, claude, config)
         flora.approvals = approvals
         for t in flora.tools():
             registry.tools[t.spec.id] = t
     except ImportError:
         pass
     director = Director(db=db, bus=bus, audit=audit, tasks=tasks, policy=policy, approvals=approvals,
-                        gateway=gateway, gemini=gemini, scheduler=scheduler, config=config, flora=flora,
+                        gateway=gateway, ai=claude, scheduler=scheduler, config=config, flora=flora,
                         providers=manager, agency=agency)
     from .voice.speech import SpeechManager
     from .voice.tts import DEFAULT_VOICE, PiperTTS, SileroTTS, VoiceEngine
     # Local voice only (Silero; Piper «Денис» as emergency fallback). The user's choice from Settings → Голос.
     chosen = db.get_kv("tts_voice") or DEFAULT_VOICE
     if not str(chosen).startswith("silero:"):
-        chosen = DEFAULT_VOICE                      # older choices (Gemini / Piper voices) no longer exist
+        chosen = DEFAULT_VOICE                      # older choices (cloud / Piper voices) no longer exist
     engine = VoiceEngine(SileroTTS(), PiperTTS(config.piper_voice), chosen, float(db.get_kv("tts_rate") or 1.0))
     director.speech = SpeechManager(db, bus, engine)
     from .voice.stt import LocalSTT
-    director.stt = LocalSTT()           # speech recognition on this computer (GigaAM); Gemini only as a fallback
-    comms = build_comms(paths, config, db, bus, audit, registry, policy, gemini, director)
+    director.stt = LocalSTT()           # speech recognition on this computer (GigaAM) — the only one
+    comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)
     recovered = tasks.recover_after_restart()
     approvals.expire_old()
     audit.write("core.start", recovered_tasks=len(recovered))
-    return Core(paths, config, db, bus, audit, tasks, policy, approvals, registry, gateway, gemini, scheduler,
+    return Core(paths, config, db, bus, audit, tasks, policy, approvals, registry, gateway, claude, scheduler,
                 director, recovered, comms)
 
 
-def build_comms(paths, config, db, bus, audit, registry, policy, gemini, director):
+def build_comms(paths, config, db, bus, audit, registry, policy, ai, director):
     """Communication agent: Telegram, WhatsApp, e-mail behind one provider contract and one outbox."""
     import hashlib
     import os
@@ -111,7 +111,7 @@ def build_comms(paths, config, db, bus, audit, registry, policy, gemini, directo
         registry.tools[t.spec.id] = t
     policy.hooks.append(hub.policy_hook)
     hub.full_access = lambda: policy.full_access
-    director.comms = CommsAgent(hub, gemini, config)
+    director.comms = CommsAgent(hub, ai, config)
     director.hub = hub
     hub.outbox.deliver = director.deliver_job
     hub.outbox.on_missed = director.on_missed_message

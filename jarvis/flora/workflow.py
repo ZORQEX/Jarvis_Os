@@ -50,8 +50,8 @@ def short_source(src: dict, project: dict) -> str:
 
 
 class FloraWorkflow:
-    def __init__(self, paths, db: Database, bus: EventBus, audit: AuditLog, gemini, config):
-        self.paths, self.db, self.bus, self.audit, self.gemini, self.config = paths, db, bus, audit, gemini, config
+    def __init__(self, paths, db: Database, bus: EventBus, audit: AuditLog, ai, config):
+        self.paths, self.db, self.bus, self.audit, self.ai, self.config = paths, db, bus, audit, ai, config
         self.mail = DemoMailbox(paths.data)
         self.project = json.loads((FIXTURES / "project.json").read_text("utf-8"))
         self.ann_dir = paths.artifacts / "flora" / "annotations"

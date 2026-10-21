@@ -9,7 +9,7 @@ from jarvis.calc import answer
 from jarvis.voice.speech import SentenceBuffer, SpeechManager
 from jarvis.voice.tts import PiperTTS, SileroTTS, clean_for_speech
 
-from conftest import ScriptedGemini, install, wait_done, wait_for
+from conftest import ScriptedClaude, install, wait_done, wait_for
 
 
 class FakeTTS:
@@ -67,8 +67,8 @@ def test_non_calculations_go_to_ai(q):
 
 
 async def test_fast_path_answers_without_any_model_call(core, speech):
-    g = ScriptedGemini(core.config, [])
-    install(core, gemini=g)
+    g = ScriptedClaude(core.config, [])
+    install(core, claude=g)
     t0 = time.perf_counter()
     tid = await core.director.submit("Джарвис, сколько будет 25% от 800?", "voice")
     await wait_done(core, tid)
@@ -109,9 +109,9 @@ def test_speech_text_is_cleaned():
 
 # ---------------------------------------------------------------- streaming, order, interruption
 async def test_voice_answer_is_spoken_while_generated(core, speech):
-    g = ScriptedGemini(core.config, [["Искусственный интеллект — это область науки. ", "Она создаёт системы, ",
+    g = ScriptedClaude(core.config, [["Искусственный интеллект — это область науки. ", "Она создаёт системы, ",
                                       "которые решают задачи. Например, распознают речь."]])
-    install(core, gemini=g)
+    install(core, claude=g)
     drain = audio_events(core)
     tid = await core.director.submit("Что такое искусственный интеллект?", "voice")
     await wait_done(core, tid)
@@ -121,13 +121,13 @@ async def test_voice_answer_is_spoken_while_generated(core, speech):
     assert audio[0]["text"].startswith("Искусственный интеллект")
     assert base64.b64decode(audio[0]["audio_b64"]).startswith(b"RIFF")
     # the voice-mode instruction and the fast voice model were used
-    assert g.calls and "голосового разговора" in g.last_system and g.last_model == core.config.model_voice
+    assert g.calls and "голосового разговора" in g.last_system and g.last_role == "voice"
 
 
 async def test_interrupt_stops_speech_and_cancels_answer_but_not_actions(core, speech, home):
     speech.engine.delay = 0.2
-    g = ScriptedGemini(core.config, [["Первое предложение длинного ответа. "] * 3])
-    install(core, gemini=g)
+    g = ScriptedClaude(core.config, [["Первое предложение длинного ответа. "] * 3])
+    install(core, claude=g)
     drain = audio_events(core)
     tid = await core.director.submit("Расскажи подробно, как работает майнинг Bitcoin", "voice")
     await wait_for(lambda: speech.engine.calls)
@@ -145,8 +145,8 @@ async def test_interrupt_stops_speech_and_cancels_answer_but_not_actions(core, s
 
 
 async def test_long_request_gets_immediate_local_acknowledgement(core, speech):
-    g = ScriptedGemini(core.config, [["Майнинг — это проверка блоков. "]])
-    install(core, gemini=g)
+    g = ScriptedClaude(core.config, [["Майнинг — это проверка блоков. "]])
+    install(core, claude=g)
     tid = await core.director.submit("Расскажи подробно, как работает майнинг Bitcoin", "voice")
     await wait_for(lambda: speech.engine.calls)
     from jarvis.voice.tts import ACKS
@@ -155,8 +155,8 @@ async def test_long_request_gets_immediate_local_acknowledgement(core, speech):
 
 
 async def test_long_answers_are_capped_in_speech(core, speech):
-    g = ScriptedGemini(core.config, [["Очень длинное предложение номер один про всё на свете. " * 40]])
-    install(core, gemini=g)
+    g = ScriptedClaude(core.config, [["Очень длинное предложение номер один про всё на свете. " * 40]])
+    install(core, claude=g)
     tid = await core.director.submit("Что такое блокчейн?", "voice")
     await wait_done(core, tid)
     await wait_for(lambda: speech.engine.calls and speech.engine.calls[-1] == "Остальное — на экране.")
@@ -164,8 +164,8 @@ async def test_long_answers_are_capped_in_speech(core, speech):
 
 
 async def test_typed_requests_are_not_spoken_unless_asked(core, speech):
-    g = ScriptedGemini(core.config, [["Ответ."], ["Ответ два."]])
-    install(core, gemini=g)
+    g = ScriptedClaude(core.config, [["Ответ."], ["Ответ два."]])
+    install(core, claude=g)
     await wait_done(core, await core.director.submit("Что такое API?"))
     assert not speech.engine.calls
     await wait_done(core, await core.director.submit("Что такое REST?", speak=True))
@@ -173,11 +173,11 @@ async def test_typed_requests_are_not_spoken_unless_asked(core, speech):
 
 
 async def test_follow_up_keeps_recent_context(core, speech):
-    g = ScriptedGemini(core.config, [["Илон Маск — предприниматель."], ["Ему 55 лет."]])
-    install(core, gemini=g)
+    g = ScriptedClaude(core.config, [["Илон Маск — предприниматель."], ["Ему 55 лет."]])
+    install(core, claude=g)
     await wait_done(core, await core.director.submit("Кто такой Илон Маск?", "voice"))
     await wait_done(core, await core.director.submit("А сколько ему лет?", "voice"))
-    sent = " ".join(p.text or "" for c in g.calls[-1] for p in c.parts)
+    sent = " ".join(m["text"] for m in g.calls[-1]["history"])
     assert "Илон Маск" in sent
 
 
@@ -190,8 +190,8 @@ def test_compact_history_is_bounded():
 
 # ---------------------------------------------------------------- telemetry
 async def test_voice_turn_telemetry_records_real_stages(core, speech):
-    g = ScriptedGemini(core.config, [["Готово, это просто. Вот ответ."]])
-    install(core, gemini=g)
+    g = ScriptedClaude(core.config, [["Готово, это просто. Вот ответ."]])
+    install(core, claude=g)
     t = time.time()
     turn = speech.new_turn(t - 1.5, t)
     speech.mark(turn, "stt_start"); speech.mark(turn, "stt_end"); speech.mark(turn, "request_start")
@@ -225,7 +225,7 @@ async def test_speech_failure_is_reported_and_text_stays(core):
             raise RuntimeError("нет звука")
     sp = SpeechManager(core.db, core.bus, Dead())
     core.director.speech = sp
-    install(core, gemini=ScriptedGemini(core.config, [["Ответ есть. Второе предложение."]]))
+    install(core, claude=ScriptedClaude(core.config, [["Ответ есть. Второе предложение."]]))
     drain = audio_events(core)
     tid = await core.director.submit("Что такое API?", "voice")
     await wait_done(core, tid)
@@ -273,7 +273,7 @@ async def test_streamed_voice_chunks_are_played_in_order(core):
                 yield f"RIFF{i}".encode()
     sp = SpeechManager(core.db, core.bus, Chunky())
     core.director.speech = sp
-    install(core, gemini=ScriptedGemini(core.config, [["Ответ."]]))
+    install(core, claude=ScriptedClaude(core.config, [["Ответ."]]))
     drain = audio_events(core)
     tid = await core.director.submit("Что такое API?", "voice")
     await wait_done(core, tid)
@@ -338,7 +338,7 @@ def _silence() -> bytes:
     return buf.getvalue()
 
 
-async def test_voice_uses_local_recognition_and_never_the_cloud_when_it_works(core, monkeypatch):
+async def test_voice_uses_local_recognition_even_fully_offline(core, monkeypatch):
     import base64 as b64
     from jarvis.server import Server
 
@@ -352,9 +352,6 @@ async def test_voice_uses_local_recognition_and_never_the_cloud_when_it_works(co
             return "Сколько будет 2 плюс 2?"
     core.director.stt = FakeLocal()
 
-    async def cloud(*a, **k):
-        raise AssertionError("Gemini must not be called")
-    monkeypatch.setattr(core.gemini, "transcribe", cloud)
     core.db.set_kv("privacy_profile", "STRICT_OFFLINE")           # local recognition works even fully offline
     srv = Server(core)
     r = await srv._voice_turn({"audio_b64": b64.b64encode(b"RIFF" + b"\0" * 4000).decode(), "mime": "audio/wav"})
@@ -365,15 +362,14 @@ async def test_voice_uses_local_recognition_and_never_the_cloud_when_it_works(co
 
 async def test_slow_answer_gets_a_spoken_hold_phrase(core, speech):
     from jarvis.voice.tts import ACKS
-    g = ScriptedGemini(core.config, [["Ответ."]])
-    orig = g.stream
+    g = ScriptedClaude(core.config, [["Ответ."]])
+    orig = g.run_tool_loop
 
     async def slow(*a, **k):
         await asyncio.sleep(3.0)
-        async for x in orig(*a, **k):
-            yield x
-    g.stream = slow
-    install(core, gemini=g)
+        return await orig(*a, **k)
+    g.run_tool_loop = slow
+    install(core, claude=g)
     tid = await core.director.submit("Что такое API?", "voice")
     await wait_done(core, tid, timeout=8)
     await wait_for(lambda: len(speech.engine.calls) >= 2)
