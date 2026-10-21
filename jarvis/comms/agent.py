@@ -9,7 +9,7 @@ import time
 
 from ..db import now
 from .base import CHANNEL_RU, CHANNEL_TO, UNSUPPORTED, CommsError, Contact
-from .contacts import best, match_score
+from .contacts import best, is_self, match_score
 from .outbox import STATUS_RU, _short, when_ru
 
 PENDING_TTL = 300
@@ -419,7 +419,10 @@ class CommsAgent:
         when = _local_dt((target or {}).get("when"))
         out = []
         for j in jobs:
-            if name and name not in ("__pending__",) and not match_score(name, j["to_name"]):
+            if is_self(name):
+                if not (j["to_id"] == "self" or j["to_name"].startswith(("Вы", "Избранное"))):
+                    continue
+            elif name and name not in ("__pending__",) and not match_score(name, j["to_name"]):
                 continue
             if plat in CHANNEL_RU and j["channel"] != plat:
                 continue

@@ -473,3 +473,12 @@ def test_spoken_question_is_clear_without_declension(core, hub):
     q = core.director.comms.question({"deliveries": [{"channel": "email", "to_id": "s@x.ru", "to_name": "Сергей Орлов"}],
                                       "body": "Документы готовы.", "subject": "Документы готовы"})
     assert q == "Кому: Сергей Орлов, почта. Тема: «Документы готовы». Текст: «Документы готовы». Отправить?"
+
+
+async def test_cancel_message_to_self(core, hub):
+    c = Contact("telegram", "self", "Избранное (вы сами)")
+    j = hub.outbox.create(c, "тест", None, time.time() + 600, task_id="t", step_id=None, auth="approval:x")
+    intents(core, {"action": "cancel", "target": {"name": "себе"}})
+    t = await core.director.submit("Отмени сообщение себе")
+    await wait_done(core, t)
+    assert hub.outbox.get(j["id"])["status"] == "cancelled"
