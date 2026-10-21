@@ -347,7 +347,10 @@ class WhatsAppProvider(Provider):
                   for (const r of rows) {
                     const t = [...r.querySelectorAll('span[title]')].map((s) => s.getAttribute('title')).filter(Boolean);
                     if (!t.length || seen.has(t[0])) continue;
-                    seen.add(t[0]); out.push({ title: t[0], last: t[1] || '' });
+                    // Only WHEN the chat was last active (e.g. «13:00», «вчера», «21.10.2026») — never message text:
+                    // a preview can hold codes or private words and would be shown and spoken (measured 2026-10-21).
+                    const when = (r.innerText || '').match(/\\b(\\d{1,2}:\\d{2}|вчера|сегодня|yesterday|\\d{1,2}\\.\\d{1,2}\\.\\d{2,4}|понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)\\b/i);
+                    seen.add(t[0]); out.push({ title: t[0], when: when ? when[0] : '' });
                     if (out.length >= 30) break;
                   }
                   return out;
@@ -363,8 +366,8 @@ class WhatsAppProvider(Provider):
             t, shown = r["title"], _visible(r["title"])
             sc = match_score(name, shown)
             if sc and not re.fullmatch(r"[\d\s:.,]+", shown):
-                last = _visible(r.get("last") or "")
-                hint = f"последнее: «{last[:30]}{'…' if len(last) > 30 else ''}»" if last else "чат WhatsApp"
+                when = _visible(r.get("when") or "")
+                hint = f"последняя переписка: {when}" if when else "чат WhatsApp"
                 out.append(Contact("whatsapp", "chat:" + t, shown, hint, "WhatsApp", sc))
         return out
 
