@@ -15,6 +15,8 @@ ACTIONS = {
     "chat": (Cap.GENERAL, "provider"),           # conversation + JARVIS desktop tools via function calling
     "inspect_code": (Cap.CODE, "provider"),
     "change_code": (Cap.CODE, "provider"),
+    "files": (Cap.FILESYSTEM, "provider"),       # create/save/move/download files via Claude Code
+    "read_file": (None, "tool"),                 # deterministic: read a named local document
     "compare_estimates": (None, "tool"),         # deterministic: flora_compare
     "read_mail": (None, "tool"),                 # deterministic: mail connector
     "send_message": (None, "tool"),              # external side effect: approval-gated
@@ -41,6 +43,7 @@ class Step:
     result_ref: str | None = None      # task_steps.id holding the output
     verification: dict | None = None
     approval: str = "not_required"     # not_required | required | approved | denied
+    args: dict = field(default_factory=dict)      # tool args (read_file path) / Claude permissions
 
 
 @dataclass
@@ -92,7 +95,7 @@ def validate(d: Decision, known_providers: set[str], known_tools: set[str]) -> D
             raise DecisionError("Пустое или слишком длинное задание шага")
         ids.add(s.id)
     # Policy-derived fields are recomputed, never taken from a model.
-    if any(s.action in ("send_message", "change_code") for s in d.steps):
+    if any(s.action in ("send_message", "change_code", "files") for s in d.steps):
         d.requires_approval = True
         d.risk = "high"
     providers = {s.capability for s in d.steps if s.executor_kind == "provider"}

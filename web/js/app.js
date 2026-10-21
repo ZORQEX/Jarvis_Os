@@ -151,6 +151,7 @@ function renderStatus() {
   const el = $("#status");
   el.dataset.state = st;
   let label = STATUS_RU[st] || st;
+  if (S.core.working && ["EXECUTING", "THINKING", "PROCESSING"].includes(st)) label = `${S.core.working} работает…`;
   if (st === "WAITING_APPROVAL" && S.core.pending_approvals > 1) label += ` (${S.core.pending_approvals})`;
   $(".status-label", el).textContent = label;
   $("#app").dataset.estop = S.core.estop ? "1" : "0";
@@ -293,7 +294,7 @@ function metaLine(t, task) {
     if (m.first_token_ms) bits.push(`первый ответ ${fmtMs(m.first_token_ms)}`);
     if (m.usage?.total_token_count) bits.push(`${m.usage.total_token_count} токенов`);
   } else if (m.route === "agency") {
-    const names = { gemini: "Gemini", openai: "GPT", claude_code: "Claude Code" };
+    const names = { gemini: "Gemini", claude_code: "Claude Code" };
     if (m.providers?.length) bits.push(`<span class="cloud">${ICON.spark.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${esc(m.providers.map((p) => names[p] || p).join(" → "))}</span>`);
     else bits.push("без ИИ");
   } else if (m.route === "local" || m.route === "flora") {

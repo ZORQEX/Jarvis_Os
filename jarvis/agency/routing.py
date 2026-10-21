@@ -13,23 +13,19 @@ from .planner import CONF, HIGH_SENS
 
 # Role assignment: primary specialist first, then allowed alternates.
 PREFS: dict[str, list[str]] = {
-    Cap.WEB_RESEARCH: ["gemini", "openai"],
-    Cap.VISION: ["gemini", "openai"],
-    Cap.VOICE: ["gemini"],
-    Cap.WRITING: ["openai", "gemini"],
-    Cap.TRANSLATION: ["openai", "gemini"],
-    Cap.DOC_ANALYSIS: ["openai", "gemini"],
-    Cap.GENERAL: ["gemini", "openai"],
-    Cap.DESKTOP_TOOLS: ["gemini", "openai"],
-    Cap.CODE: ["claude_code"],
-    Cap.PLANNING: ["gemini", "openai"],
+    # Claude Code: computer & engineering. Gemini: everything else that needs AI.
+    Cap.CODE: ["claude_code"], Cap.TERMINAL: ["claude_code"], Cap.FILESYSTEM: ["claude_code"],
+    Cap.WEB_RESEARCH: ["gemini"], Cap.VISION: ["gemini"], Cap.VOICE: ["gemini"], Cap.WRITING: ["gemini"],
+    Cap.TRANSLATION: ["gemini"], Cap.DOC_ANALYSIS: ["gemini"], Cap.GENERAL: ["gemini"],
+    Cap.DESKTOP_TOOLS: ["gemini"], Cap.PLANNING: ["gemini"],
 }
-TOOL_FOR = {"compare_estimates": "flora_compare", "read_mail": "mail_read", "send_message": "email_send"}
+TOOL_FOR = {"compare_estimates": "flora_compare", "read_mail": "mail_read", "send_message": "email_send",
+            "read_file": "read_file"}
 TOOL_MISSING = {"mail_read": "Почта (Gmail) ещё не подключена — читать письма пока нельзя. Демо-ящик есть в проекте «Флора».",
                 "email_send": "Почта (Gmail) ещё не подключена — отправка невозможна. Отправка всегда требует вашего "
                               "явного подтверждения.",
                 "flora_compare": "Модуль смет недоступен."}
-LOCAL_DATA = {"compare_estimates", "read_mail", "inspect_code", "change_code", "vision_screen"}
+LOCAL_DATA = {"compare_estimates", "read_mail", "inspect_code", "change_code", "vision_screen", "read_file", "files"}
 
 
 def step_sensitivity(step: Step, by_id: dict[str, Step], sens: dict[str, str]) -> str:
@@ -122,7 +118,7 @@ def route(d: Decision, mgr: ProviderManager, tools: set[str], privacy: str) -> D
         s.reason = (s.reason + "; " if s.reason else "") + why
         if pid is None:
             s.status = "blocked"
-        if s.action == "change_code":
+        if s.action in ("change_code", "files"):
             s.approval = "required"
     # Steps that depend on blocked steps cannot run.
     for s in d.steps:

@@ -474,7 +474,15 @@ class Director:
     def core_state(self) -> dict:
         pending = self.approvals.pending()
         active = self.tasks.active()
-        running_steps = any(s["state"] in ("running", "verifying") for t in active for s in t["steps"])
+        running = [s for t in active for s in t["steps"] if s["state"] in ("running", "verifying")]
+        running_steps = bool(running)
+        names = {"gemini": "Gemini", "claude_code": "Claude Code"}
+        working = next((names.get((s.get("args") or {}).get("provider"), "Claude Code" if s["tool_id"].startswith("claude")
+                                  else None) for s in running
+                        if s["tool_id"] in ("agent_generate", "agent_chat", "claude_code_inspect", "claude_code_change")),
+                       None)
+        if not working and any(r.thinking for r in self.rt.values()):
+            working = "Gemini"
         thinking = any(r.thinking for r in self.rt.values())
         paused = [t for t in active if t["state"] == S.PAUSED]
         if self.policy.estop:
@@ -493,7 +501,7 @@ class Director:
             state = "ERROR" if self._last_finish[1] == "error" else "COMPLETED"
         else:
             state = "IDLE"
-        return {"state": state, "active_tasks": len(active), "pending_approvals": len(pending),
+        return {"state": state, "active_tasks": len(active), "pending_approvals": len(pending), "working": working,
                 "estop": self.policy.estop, "ai": self._ai_summary(),
                 "privacy": self.privacy_profile()}
 

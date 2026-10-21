@@ -1,14 +1,23 @@
 # ADR-002: AI agency — one JARVIS, several specialists
 
-Date: 2026-10-21 · Status: accepted
+Date: 2026-10-21 · Status: accepted · Amended 2026-10-21: GPT/OpenAI removed — two specialists only
 
 ## Decision
 - **Provider contract** (`jarvis/providers/base.py`): `AIProvider` with explicit capabilities, modalities, health
   (CONNECTED, DEGRADED, RATE_LIMITED, AUTH_ERROR, OFFLINE, DISABLED, NOT_CONFIGURED), `generate()` (normalized step)
   and, where supported, `run_tool_loop()` (function calling through the JARVIS gateway).
-- **Adapters**: Gemini (google-genai; Google Search grounding for research), OpenAI (openai SDK, Responses API,
-  `store=False`), Claude Code (local `claude` CLI headless, `--restricted`, no MCP, no session persistence,
-  bounded turns/budget/time; inspect = Read/Glob/Grep; change = +Edit/Write/Bash with a deny list).
+- **Two specialists only**:
+  - **Claude Code** — computer & engineering: code, debugging, terminal, files and folders, git, logs, installing
+    project dependencies, desktop configuration (Hyprland/Waybar/Omarchy). Local `claude` CLI headless,
+    `--restricted`, no MCP, no session persistence, bounded turns/budget/time; inspect = Read/Glob/Grep;
+    change = +Edit/Write/Bash with a permanent deny list (sudo, system packages, ssh, git push) and per-task gated
+    permissions (project installs, downloads) shown in the approval card. Non-git folders are backed up first.
+  - **Gemini** — everything else that needs AI: general questions, reasoning, planning, web research (Google Search
+    grounding with sources), vision/screen/camera, voice, writing (emails, messages, posts, reports, marketing,
+    creative), editing, translation, summaries, document and business analysis. Model chain with automatic
+    fallback on overload/limits (3.8-flash → 3.6-flash → 3.5-flash → 3.5-flash-lite).
+- GPT/OpenAI was removed completely (adapter, SDK dependency, key handling, settings, UI). There is no third
+  provider and no cross-provider fallback: if Gemini is unavailable, JARVIS reports it.
 - **Registry/manager** (`providers/registry.py`): one place for model IDs (from config), per-provider user settings
   (enabled, fallback eligibility, max data sensitivity — HIGHLY_SENSITIVE can never be allowed), usage ledger.
 - **Agency** (`jarvis/agency/`): deterministic planner (clause split + action classification, domain carry-over),

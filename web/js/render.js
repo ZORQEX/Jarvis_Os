@@ -16,18 +16,24 @@ export function md(src) {
     .replace(/(^|[\s(])_([^_]+)_(?=$|[\s).,!?:;])/g, "$1<em>$2</em>")
     .replace(/(^|[\s(])\*([^*]+)\*(?=$|[\s).,!?:;])/g, "$1<em>$2</em>");
   const out = [];
+  const UL = /^\s*[-*•]\s+/, OL = /^\s*\d+[.)]\s+/, H = /^#{1,4}\s+/;
   for (const para of text.split(/\n{2,}/)) {
-    const lines = para.split("\n");
-    if (lines.every((l) => /^\s*[-*•]\s+/.test(l))) {
-      out.push("<ul>" + lines.map((l) => `<li>${inline(l.replace(/^\s*[-*•]\s+/, ""))}</li>`).join("") + "</ul>");
-    } else if (lines.every((l) => /^\s*\d+[.)]\s+/.test(l))) {
-      out.push("<ol>" + lines.map((l) => `<li>${inline(l.replace(/^\s*\d+[.)]\s+/, ""))}</li>`).join("") + "</ol>");
-    } else if (/^#{1,3}\s/.test(lines[0])) {
-      out.push(`<p><strong>${inline(lines[0].replace(/^#+\s/, ""))}</strong></p>` +
-        (lines.length > 1 ? `<p>${lines.slice(1).map(inline).join("<br>")}</p>` : ""));
-    } else {
-      out.push(`<p>${lines.map(inline).join("<br>")}</p>`);
+    // A paragraph may mix plain lines, headings and list runs: group consecutive lines of the same kind.
+    let run = [], kind = null;
+    const flush = () => {
+      if (!run.length) return;
+      if (kind === "ul") out.push("<ul>" + run.map((l) => `<li>${inline(l.replace(UL, ""))}</li>`).join("") + "</ul>");
+      else if (kind === "ol") out.push("<ol>" + run.map((l) => `<li>${inline(l.replace(OL, ""))}</li>`).join("") + "</ol>");
+      else out.push(`<p>${run.map(inline).join("<br>")}</p>`);
+      run = [];
+    };
+    for (const l of para.split("\n")) {
+      if (H.test(l)) { flush(); kind = null; out.push(`<p><strong>${inline(l.replace(H, ""))}</strong></p>`); continue; }
+      const k = UL.test(l) ? "ul" : OL.test(l) ? "ol" : "p";
+      if (k !== kind) { flush(); kind = k; }
+      run.push(l);
     }
+    flush();
   }
   return out.join("").replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
 }
@@ -212,8 +218,8 @@ function reminderCard(d) {
 }
 
 // ---------------------------------------------------------------- agency cards
-const PNAME = { gemini: "Gemini", openai: "GPT", claude_code: "Claude Code" };
-const ACT = { research: "поиск", analyze: "анализ", write: "текст", translate: "перевод", vision_screen: "экран",
+const PNAME = { gemini: "Gemini", claude_code: "Claude Code" };
+const ACT = { files: "файлы", read_file: "чтение файла", research: "поиск", analyze: "анализ", write: "текст", translate: "перевод", vision_screen: "экран",
   chat: "ответ", inspect_code: "просмотр кода", change_code: "изменение кода", compare_estimates: "сметы",
   read_mail: "почта", send_message: "отправка" };
 const SSTAT = { planned: "в плане", running: "идёт", done: "готово", failed: "ошибка", blocked: "невозможно", skipped: "пропущено" };

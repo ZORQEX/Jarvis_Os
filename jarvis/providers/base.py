@@ -58,6 +58,7 @@ class ProviderFailure(Exception):
     def __init__(self, kind: str, message: str):
         super().__init__(message)
         self.kind = kind
+        self.partial = False   # True if some output had already reached the user
 
 
 @dataclass
@@ -70,6 +71,7 @@ class StepRequest:
     image_mime: str = "image/png"
     workdir: str | None = None             # Claude Code
     mode: str = "inspect"                  # Claude Code: inspect | change
+    permissions: list = field(default_factory=list)   # Claude Code change: subset of {"install", "download"}
     max_tokens: int = 2048
     language: str = "ru"
 

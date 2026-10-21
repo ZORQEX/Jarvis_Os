@@ -75,7 +75,7 @@ class FakeProvider(AIProvider):
 
     def __init__(self, pid, caps, replies=None, health=Health.CONNECTED, cloud=True, sources=None):
         self.id = pid
-        self.display_name = {"gemini": "Gemini", "openai": "GPT", "claude_code": "Claude Code"}.get(pid, pid)
+        self.display_name = {"gemini": "Gemini", "claude_code": "Claude Code"}.get(pid, pid)
         self.role_ru = "test"
         self.capabilities = set(caps)
         self.cloud = cloud

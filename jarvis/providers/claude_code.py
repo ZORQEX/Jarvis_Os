@@ -23,15 +23,18 @@ from .base import AIProvider, Cap, GenResult, Health, ProviderFailure, StepReque
 
 INSPECT_TOOLS = ["Read", "Glob", "Grep"]
 CHANGE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
-# Never allowed, even after approval: privilege escalation, installs, network egress, publishing.
+# Never allowed, even after approval: privilege escalation, system packages, remote shells, publishing.
 DENY = ["Bash(sudo:*)", "Bash(su:*)", "Bash(doas:*)", "Bash(pkexec:*)", "Bash(pacman:*)", "Bash(yay:*)",
-        "Bash(paru:*)", "Bash(pip install:*)", "Bash(uv add:*)", "Bash(uv pip install:*)", "Bash(npm install:*)",
-        "Bash(curl:*)", "Bash(wget:*)", "Bash(ssh:*)", "Bash(scp:*)", "Bash(git push:*)", "Bash(rm -rf /:*)",
-        "Bash(systemctl:*)", "Bash(chmod 777:*)"]
+        "Bash(paru:*)", "Bash(ssh:*)", "Bash(scp:*)", "Bash(git push:*)", "Bash(rm -rf /:*)", "Bash(rm -rf ~:*)",
+        "Bash(chmod 777:*)", "Bash(systemctl enable:*)", "Bash(systemctl disable:*)"]
+# Allowed only when the approved task asked for it.
+GATED = {"install": ["Bash(pip install:*)", "Bash(uv add:*)", "Bash(uv pip install:*)", "Bash(npm install:*)",
+                     "Bash(pnpm add:*)", "Bash(cargo add:*)"],
+         "download": ["Bash(curl:*)", "Bash(wget:*)"]}
 
 SYSTEM = ("Ты работаешь как исполнитель внутри ассистента JARVIS. Работай только в текущей папке. "
-          "Не используй sudo, не устанавливай пакеты, не обращайся к сети. Если для задачи это нужно — "
-          "остановись и напиши, что требуется. В конце дай краткий отчёт по-русски: что сделано, какие "
+          "Не используй sudo и системные пакетные менеджеры. Устанавливать зависимости проекта и скачивать файлы можно, "
+          "только если это явно разрешено для задачи; иначе остановись и напиши, что требуется. В конце дай краткий отчёт по-русски: что сделано, какие "
           "файлы изменены, какие проверки (тесты) запускались и с каким результатом.")
 
 
@@ -46,14 +49,19 @@ def _clean_env() -> dict:
     return out
 
 
-def build_argv(prompt: str, mode: str, model: str = "", budget: float = 2.0, max_turns: int = 30) -> list[str]:
+def build_argv(prompt: str, mode: str, model: str = "", budget: float = 2.0, max_turns: int = 30,
+               allow: set[str] | None = None) -> list[str]:
     tools = CHANGE_TOOLS if mode == "change" else INSPECT_TOOLS
     argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--restricted",
             "--strict-mcp-config", "--no-session-persistence", "--permission-mode", "dontAsk",
             "--tools", ",".join(tools), "--allowedTools", *tools, "--max-turns", str(max_turns),
             "--max-budget-usd", f"{budget:.2f}", "--append-system-prompt", SYSTEM]
     if mode == "change":
-        argv += ["--disallowedTools", *DENY]
+        deny = list(DENY)
+        for perm, rules in GATED.items():
+            if perm not in (allow or set()):
+                deny += rules
+        argv += ["--disallowedTools", *deny]
     if model:
         argv += ["--model", model]
     return argv
@@ -72,7 +80,7 @@ def summarize_tool(name: str, inp: dict) -> str:
 class ClaudeCodeProvider(AIProvider):
     id = "claude_code"
     display_name = "Claude Code"
-    role_ru = "Компьютер · терминал · файлы · код · отладка"
+    role_ru = "Компьютер · терминал · файлы · код · отладка · установка · система"
     capabilities = {Cap.CODE, Cap.TERMINAL, Cap.FILESYSTEM}
     modalities = {"text"}
     cloud = True     # the CLI sends the work to Anthropic
@@ -144,7 +152,8 @@ class ClaudeCodeProvider(AIProvider):
             raise ProviderFailure("invalid", "Не задана рабочая папка для Claude Code")
         from .gemini import context_block
         prompt = (context_block(req.context) + "\n\n" if req.context else "") + req.instruction
-        argv = build_argv(prompt, req.mode, self.config.claude_model, self.config.claude_budget_usd)
+        argv = build_argv(prompt, req.mode, self.config.claude_model, self.config.claude_budget_usd,
+                          allow=set(getattr(req, "permissions", []) or []))
         t0 = time.perf_counter()
         proc = await asyncio.create_subprocess_exec(*argv, cwd=req.workdir, env=_clean_env(),
                                                     stdin=asyncio.subprocess.DEVNULL,

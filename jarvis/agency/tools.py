@@ -17,12 +17,14 @@ from ..tools.base import (Risk, Tool, ToolContext, ToolError, ToolInputError, To
                           run_cmd)
 from .verifier import verify_step
 
-PROVIDER_NAMES = {"gemini": "Gemini", "openai": "GPT", "claude_code": "Claude Code"}
+PROVIDER_NAMES = {"gemini": "Gemini", "claude_code": "Claude Code"}
+PERM_RU = {"install": "установка зависимостей проекта", "download": "скачивание файлов из интернета"}
 
 
-def _in_workspaces(path: str, workspaces: list[str]) -> Path:
+def _in_workspaces(path: str, config) -> Path:
+    from .planner import claude_roots
     p = Path(os.path.expanduser(path)).resolve()
-    roots = [Path(os.path.expanduser(w)).resolve() for w in workspaces]
+    roots = claude_roots(config)
     if not p.is_dir():
         raise ToolInputError(f"Папка не найдена: {p}")
     if not any(p == r or p.is_relative_to(r) for r in roots):
@@ -37,7 +39,7 @@ class AgentGenerate(Tool):
             id="agent_generate", title="ИИ-шаг",
             description="Internal: run one step on an AI specialist.",
             params={"type": "object", "required": ["provider", "action", "instruction"], "properties": {
-                "provider": {"type": "string", "enum": ["gemini", "openai"]},
+                "provider": {"type": "string", "enum": ["gemini"]},
                 "action": {"type": "string", "enum": ["research", "analyze", "write", "translate", "vision_screen"]},
                 "instruction": {"type": "string", "maxLength": 2000},
                 "context_labels": {"type": "array"}, "context_chars": {"type": "integer"},
@@ -73,6 +75,7 @@ class AgentGenerate(Tool):
                             r.total_ms, True)
         inputs = [c.get("text", "") for c in req.context] + [req.instruction]
         return ToolResult({"text": r.text, "sources": r.sources, "provider": r.provider, "model": r.model,
+                           "grounding": r.meta.get("grounding", True), "note": r.meta.get("note"),
                            "usage": r.usage, "cost_usd": r.cost_usd, "first_token_ms": r.first_token_ms,
                            "total_ms": r.total_ms, "_inputs": inputs, "action": args["action"]},
                           f"{PROVIDER_NAMES.get(r.provider, r.provider)}: готово", card="agent_result")
@@ -80,6 +83,8 @@ class AgentGenerate(Tool):
     async def verify(self, args, result, ctx):
         d = result.data
         status, detail = verify_step(args["action"], d["text"], d["sources"], d.pop("_inputs", []))
+        if d.get("note"):
+            status, detail = "unverified", d["note"] + "; источников нет, данные могут быть устаревшими"
         return Verification(status, detail)
 
 
@@ -96,7 +101,7 @@ class ClaudeInspect(Tool):
 
     def validate(self, args, ctx):
         a = super().validate(args, ctx)
-        a["workdir"] = str(_in_workspaces(a["workdir"], self.config.code_workspaces))
+        a["workdir"] = str(_in_workspaces(a["workdir"], self.config))
         return a
 
     def describe(self, args):
@@ -119,28 +124,47 @@ class ClaudeChange(Tool):
         self.manager, self.config = manager, config
         self.spec = ToolSpec(
             id="claude_code_change", title="Claude Code · изменения",
-            description="Internal: Claude Code edits files and runs commands in an approved project folder.",
+            description="Internal: Claude Code edits files and runs commands in an approved folder.",
             params={"type": "object", "required": ["instruction", "workdir"], "properties": {
-                "instruction": {"type": "string", "maxLength": 2000}, "workdir": {"type": "string", "maxLength": 500}}},
+                "instruction": {"type": "string", "maxLength": 2000}, "workdir": {"type": "string", "maxLength": 500},
+                "permissions": {"type": "array", "default": []}}},
             risk=Risk.HIGH, side_effects="local", timeout_s=config.claude_timeout_s + 330, model_callable=False,
             verification="Список изменённых файлов по git; JARVIS сам перезапускает тесты проекта",
-            impact="Claude Code сможет менять файлы и запускать команды в этой папке (без sudo, установки пакетов, "
-                   "сети и git push). Затем JARVIS сам покажет изменённые файлы и перезапустит тесты.")
+            impact="Claude Code сможет менять файлы и запускать команды в этой папке (без sudo, системных пакетов и "
+                   "git push). Если папка не под git, JARVIS сначала сделает резервную копию. Потом покажет изменённые "
+                   "файлы и, если есть тесты, сам их перезапустит.")
 
     def validate(self, args, ctx):
-        a = super().validate(args, ctx)
-        a["workdir"] = str(_in_workspaces(a["workdir"], self.config.code_workspaces))
+        a = Tool.validate(self, args, ctx)
+        a["workdir"] = str(_in_workspaces(a["workdir"], self.config))
+        perms = a.get("permissions") or []
+        if not isinstance(perms, list) or any(p not in PERM_RU for p in perms):
+            raise ToolInputError("Недопустимое разрешение")
+        a["permissions"] = sorted(set(perms))
         return a
 
     def describe(self, args):
-        return f"Claude Code: «{args['instruction'][:100]}» в {args['workdir'].replace(os.path.expanduser('~'), '~')}"
+        extra = ("; разрешено: " + ", ".join(PERM_RU[p] for p in args.get("permissions", []))) \
+            if args.get("permissions") else ""
+        return f"Claude Code: «{args['instruction'][:100]}» в {args['workdir'].replace(os.path.expanduser('~'), '~')}{extra}"
 
     async def run(self, args, ctx):
         wd = args["workdir"]
         before = await _git_state(wd)
+        snap = None
+        if before is None:
+            snap = _snapshot(wd)
+            res_backup = await asyncio.to_thread(_backup, wd, ctx.config)
+        else:
+            res_backup = None
+        if (ctx.payload or {}).get("req") is not None:
+            ctx.payload["req"].permissions = args.get("permissions", [])
         res = await _run_claude(self.manager, ctx, args, "change")
-        after = await _git_state(wd)
-        res.data["git"] = {"repo": after is not None, "changed": _changed(before, after)}
+        if before is not None:
+            after = await _git_state(wd)
+            res.data["git"] = {"repo": True, "changed": _changed(before, after)}
+        else:
+            res.data["git"] = {"repo": False, "changed": _diff_snapshot(snap, _snapshot(wd)), "backup": res_backup}
         ctx.progress("JARVIS проверяет тесты", None)
         res.data["tests"] = await _run_tests(wd)
         return res
@@ -148,6 +172,8 @@ class ClaudeChange(Tool):
     async def verify(self, args, result, ctx):
         g, t = result.data.get("git", {}), result.data.get("tests", {})
         files = ", ".join(g.get("changed", [])[:10]) or "нет"
+        if g.get("backup"):
+            files += f" (резервная копия: {g['backup'].replace(os.path.expanduser('~'), '~')})"
         if t.get("ran"):
             ok = t.get("code") == 0
             return Verification("verified" if ok else "failed",
@@ -177,6 +203,40 @@ async def _run_claude(manager, ctx: ToolContext, args: dict, mode: str) -> ToolR
                        "turns": r.meta.get("turns"), "permission_denials": len(r.meta.get("permission_denials", [])),
                        "action": "change_code" if mode == "change" else "inspect_code", "sources": []},
                       "Claude Code: готово", card="agent_result")
+
+
+def _snapshot(wd: str, limit: int = 20000) -> dict:
+    out = {}
+    for i, p in enumerate(Path(wd).rglob("*")):
+        if i > limit:
+            break
+        if p.is_file() and ".git" not in p.parts:
+            try:
+                st = p.stat()
+                out[str(p.relative_to(wd))] = (st.st_size, int(st.st_mtime_ns))
+            except OSError:
+                pass
+    return out
+
+
+def _diff_snapshot(a: dict | None, b: dict) -> list[str]:
+    a = a or {}
+    changed = [f"+ {k}" for k in b if k not in a] + [f"~ {k}" for k in b if k in a and a[k] != b[k]] + \
+        [f"- {k}" for k in a if k not in b]
+    return sorted(changed)
+
+
+def _backup(wd: str, config, max_bytes: int = 50_000_000) -> str | None:
+    """Copy a non-git folder before Claude Code changes it (skipped for very large folders)."""
+    total = sum(p.stat().st_size for p in Path(wd).rglob("*") if p.is_file())
+    if total > max_bytes:
+        return None
+    dest = Path(os.path.expanduser("~/.local/share/jarvis/backups")) / (time.strftime("%Y%m%d-%H%M%S-")
+                                                                      + Path(wd).name)
+    if os.environ.get("JARVIS_HOME"):
+        dest = Path(os.environ["JARVIS_HOME"]) / "data" / "backups" / dest.name
+    shutil.copytree(wd, dest, symlinks=True, ignore=shutil.ignore_patterns(".venv", "node_modules", "__pycache__"))
+    return str(dest)
 
 
 async def _git_state(wd: str) -> dict | None:

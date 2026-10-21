@@ -21,7 +21,7 @@ from .events import redact
 WEB = Path(__file__).resolve().parent.parent / "web"
 COOKIE = "jarvis_session"
 UI_TOOLS = {"open_path", "open_url"}
-KEY_PROVIDERS = {"gemini": "JARVIS — Gemini API key", "openai": "JARVIS — OpenAI API key"}
+KEY_PROVIDERS = {"gemini": "JARVIS — Gemini API key"}
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: data:; "
        "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; "
        "script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")

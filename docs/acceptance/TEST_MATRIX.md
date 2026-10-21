@@ -44,11 +44,10 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Claude Code adapter (restricted CLI, inspect/change modes) | VERIFIED LIVE | test_live.py; UI run: inspect $0.05, change $0.04 in a scratch git repo |
 | Code change needs high-risk approval; JARVIS lists changed files (git) and reruns pytest itself | VERIFIED LIVE | scratch repo: `a - b` → `a + b`, JARVIS pytest: 2 passed |
 | Cancellation kills the Claude Code process | VERIFIED LOCAL | test_cancel_kills_claude_code_process |
-| Gemini adapter (research with sources, vision, tool loop) | IMPLEMENTED UNVERIFIED (no key) | tool loop VERIFIED MOCK (test_ai_loop.py) |
-| OpenAI adapter (Responses API, streaming, tools, web citations) | IMPLEMENTED UNVERIFIED (no key) | shows NOT_CONFIGURED |
-| Routing tests 1–10 from the spec | VERIFIED MOCK | test_agency.py::test_1 … test_10 |
+| Gemini adapter (research with sources, vision, tool loop) | see live checks below | |
+| Two-specialist routing (former GPT work → Gemini; computer work → Claude Code) | VERIFIED MOCK | test_agency.py |
 | Multi-AI chain, context isolation (no unrelated history), provenance + usage ledger | VERIFIED MOCK | test_multi_ai_context_isolation_and_provenance |
-| Fallback by policy; no fallback when disabled; explicit override never substituted | VERIFIED MOCK | test_9, test_provider_failure_falls_back_once_and_reports, test_explicit_override… |
+| No GPT, no silent substitution when Gemini is unavailable | VERIFIED MOCK | test_gemini_unavailable_is_reported_never_substituted |
 | Privacy: HIGHLY_SENSITIVE never to cloud; per-provider sensitivity limit; STRICT_OFFLINE | VERIFIED MOCK | test_privacy_*, test_provider_sensitivity_setting…, test_strict_offline_blocks_all_cloud |
 | Invented numbers flagged; source outranks AI in disagreements | VERIFIED LOCAL | test_invented_numbers_are_flagged, test_source_outranks_ai_opinion |
 | LLM planner cannot add a send or lower risk | VERIFIED MOCK | test_llm_planner_cannot_add_send_or_lower_risk |

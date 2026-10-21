@@ -15,11 +15,11 @@ from pathlib import Path
 from ..db import dumps, new_id, now
 from ..providers.base import CAP_RU, Cap, ProviderFailure, StepRequest
 from .decision import Decision, validate
-from .planner import find_workdir, heuristic_plan, llm_plan
+from .planner import R as PLAN_RE, claude_roots, find_workdir, heuristic_plan, llm_plan
 from .routing import choose, route
 from .tools import PROVIDER_NAMES
 
-ACTION_RU = {"research": "поиск в интернете", "analyze": "анализ", "write": "текст", "translate": "перевод",
+ACTION_RU = {"files": "работа с файлами", "read_file": "чтение файла", "research": "поиск в интернете", "analyze": "анализ", "write": "текст", "translate": "перевод",
              "vision_screen": "анализ экрана", "chat": "ответ", "inspect_code": "просмотр кода",
              "change_code": "изменение кода", "compare_estimates": "сравнение смет", "read_mail": "чтение почты",
              "send_message": "отправка"}
@@ -68,12 +68,23 @@ class Agency:
                                 None if better else "invalid")
                 if better:
                     d = better
+        self._insert_file_reads(d, text)
         route(d, self.mgr, tools, privacy)
         cid = director.conversation_id()
         last_dir = director.ctx(cid).get("last_code_dir")
+        roots = [str(r) for r in claude_roots(self.config)]
         for s in d.steps:
-            if s.action in ("inspect_code", "change_code") and s.status == "planned":
-                wd = find_workdir(text, self.config.code_workspaces, last_dir)
+            if s.action in ("inspect_code", "change_code", "files") and s.status == "planned":
+                low = s.instruction.casefold()
+                perms = []
+                if PLAN_RE["install"].search(low):
+                    perms.append("install")
+                if re.search(r"скача|загрузи\w* из интернета|download", low):
+                    perms.append("download")
+                s.args["permissions"] = perms
+                wd = find_workdir(s.instruction + " " + text, roots, last_dir, s.action,
+                                  str(Path(os.path.expanduser(self.config.write_dir)).resolve())
+                                  if s.action == "files" else None)
                 if wd is None and s.action == "inspect_code":
                     wd = next((str(Path(os.path.expanduser(w)).resolve()) for w in self.config.code_workspaces
                                if Path(os.path.expanduser(w)).is_dir()), None)
@@ -84,6 +95,27 @@ class Agency:
                 else:
                     s.candidates.append({"workdir": wd})
         return d
+
+    def _insert_file_reads(self, d: Decision, text: str) -> None:
+        """«Проанализируй ~/Documents/x.pdf» → read the file locally first (tool), then give it to Gemini."""
+        from .decision import Step
+        new = []
+        for s in d.steps:
+            if s.action in ("analyze", "write", "translate", "chat") and not s.depends_on:
+                for m in re.finditer(r"(~?/[\w./\-]+\.\w{1,5})", s.instruction):
+                    p = Path(os.path.expanduser(m.group(1))).resolve()
+                    if p.is_file():
+                        rid = f"r{len(new) + 1}"
+                        new.append(Step(id=rid, action="read_file", instruction=f"Прочитать {p.name}",
+                                        args={"path": str(p)}))
+                        s.depends_on.append(rid)
+                        if s.action == "chat":
+                            s.action, s.capability = "analyze", Cap.DOC_ANALYSIS.value
+        if new:
+            for n in new:
+                n.capability, n.executor_kind = None, "tool"
+            d.steps = new + d.steps
+            d.sensitivity = "CONFIDENTIAL" if d.sensitivity != "HIGHLY_SENSITIVE" else d.sensitivity
 
     def _save(self, tid: str, d: Decision) -> None:
         self.db.execute("UPDATE tasks SET decision=?, updated_at=? WHERE id=?", (dumps(d.as_dict()), now(), tid))
@@ -205,22 +237,30 @@ class Agency:
         instr = s.instruction
         if s.action in ("write", "translate"):
             instr += ("\n\nОбщая задача пользователя: " + d.objective[:600] +
-                      "\nПодготовь только черновик (ничего не отправляется). Используй только факты из данных выше; "
-                      "если цифр или имён не хватает — оставь пометку [уточнить].")
+                      "\nПодготовь только черновик (ничего не отправляется). Пиши естественно и готово к отправке. "
+                      "Не выдумывай факты: цифр, дат и условий, которых нет в данных, не пиши. Если не хватает "
+                      "чего-то действительно важного (имя получателя, цена, срок), поставь не больше 2–3 пометок "
+                      "[уточнить]; подпись оставь общей («С уважением,»).")
         elif s.action == "analyze":
             instr += "\n\nОбщая задача: " + d.objective[:600] + \
                      "\nОпирайся только на данные выше, ссылайся на источники, отметь неопределённость."
-        if s.action in ("inspect_code", "change_code"):
+        if s.action in ("inspect_code", "change_code", "files"):
             wd = next((c["workdir"] for c in s.candidates if "workdir" in c), None)
-            tool = "claude_code_change" if s.action == "change_code" else "claude_code_inspect"
+            tool = "claude_code_inspect" if s.action == "inspect_code" else "claude_code_change"
+            if s.action == "files":
+                instr += ("\n\nЭто файловая операция в папке пользователя. Если ниже есть результаты предыдущих шагов — "
+                          "сохрани их содержимое (например, в Markdown-файл с понятным именем), ничего не выдумывая.")
             req = StepRequest(Cap.CODE, instr, context=ctx)
-            out = await director.gw.execute(tid, tool, {"instruction": s.instruction[:2000], "workdir": wd}, why,
-                                            gate=director._gate(tid), cancelled=director._cancelled(tid),
-                                            payload={"req": req})
+            args = {"instruction": s.instruction[:2000], "workdir": wd}
+            if tool == "claude_code_change":
+                args["permissions"] = s.args.get("permissions", [])
+            out = await director.gw.execute(tid, tool, args, why, gate=director._gate(tid),
+                                            cancelled=director._cancelled(tid), payload={"req": req})
             if out.status == "ok":
                 director.save_ctx(cid, {**director.ctx(cid), "last_code_dir": wd})
-                s.approval = "approved" if s.action == "change_code" else s.approval
-            elif out.status == "denied" and s.action == "change_code":
+                if s.action != "inspect_code":
+                    s.approval = "approved"
+            elif out.status == "denied" and s.action != "inspect_code":
                 s.approval = "denied"
             return self._from_outcome(out, "claude_code")
         image, mime = None, "image/png"
@@ -249,11 +289,14 @@ class Agency:
                        step_ref=out.step_id, verification=out.verification.as_dict() if out.verification else None)
 
     async def _tool_step(self, director, tid, cid, s, why) -> StepOut:
-        out = await director.execute(tid, cid, s.executor, {}, why)
+        out = await director.execute(tid, cid, s.executor, dict(s.args), why)
         if out.status != "ok":
             return StepOut(False, error=out.error, failure_kind=out.status, step_ref=out.step_id)
         data = out.result.data
         text = out.result.summary
+        if s.executor == "read_file":
+            return StepOut(True, data.get("text", ""), [{"title": data.get("name"), "ref": data.get("path")}], None, None,
+                           step_ref=out.step_id, verification=out.verification.as_dict() if out.verification else None)
         if s.executor == "flora_compare":
             c = data["comparison"]
             rows = "\n".join(f"- {r['code']}: было {r['base']['sum'] if r['base'] else '—'}, стало "
@@ -322,6 +365,12 @@ class Agency:
         if sends and any(s.status != "done" for s in sends):
             parts.append("Ничего не отправлено: отправка возможна только после вашего явного подтверждения.")
         # Verification flags from the final content step.
+        for s in done:
+            v = outs[s.id].verification or {}
+            if s.action == "research" and "Квота поиска" in (v.get("detail") or ""):
+                parts.insert(0, "_⚠ Поиск в интернете сейчас недоступен (исчерпана квота Google для ключа) — ответ "
+                                "основан на знаниях модели, без источников; проверьте актуальность._")
+                break
         if final and main and main.verification and main.verification.get("status") in ("unverified", "failed") and \
                 final.action in ("write", "translate", "analyze", "research"):
             parts.append(f"_Проверка: {main.verification['detail']}_")
@@ -333,7 +382,7 @@ class Agency:
                 key = src.get("url") or src.get("ref")
                 if key and key not in [x.get("url") or x.get("ref") for x in sources]:
                     sources.append(src)
-        if chain and (len(done) > 1 or d.mode != "single_ai" or (main and main.provider not in (None, "gemini"))):
+        if chain and (len(done) > 1 or d.mode != "single_ai" or (main and main.provider == "claude_code")):
             parts.append(f"_Выполнено: {chain}._")
         if sources:
             parts.append("Источники:\n" + "\n".join(
@@ -363,13 +412,13 @@ class Agency:
         lines = []
         nothing_configured = not any(p.configured() for p in self.mgr.providers.values() if p.id != "claude_code")
         if nothing_configured and self._is_plain_chat(d):
-            return ("Эту просьбу я понял не полностью, а облачный ИИ ещё не подключён (ни Gemini, ни GPT). "
+            return ("Эту просьбу я понял не полностью, а Gemini ещё не подключён. "
                     "Подключить можно в **Настройках → AI-агентство** — ключи хранятся в системном хранилище. "
                     "Пока работают локальные команды: скажите «помощь».")
         if nothing_configured and all(s.executor_kind == "provider" and s.action not in ("inspect_code", "change_code")
                                       for s in d.steps):
             plan = " → ".join(ACTION_RU.get(s.action, s.action) for s in d.steps)
-            return (f"Задачу понял: {plan}. Но для неё нужен Gemini или GPT, а они ещё не подключены. "
+            return (f"Задачу понял: {plan}. Но для неё нужен Gemini, а он не подключён или недоступен. "
                     "Подключить: **Настройки → AI-агентство**. Ничего не выполнялось и никуда не отправлялось.")
         for s in d.steps:
             lines.append(f"- {ACTION_RU.get(s.action, s.action)}: {s.reason}")

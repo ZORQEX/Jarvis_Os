@@ -74,7 +74,7 @@ class GeminiProvider(AIProvider):
     name = "gemini"
     id = "gemini"
     display_name = "Gemini"
-    role_ru = "Интернет · зрение · голос · исследования · беседа"
+    role_ru = "Общий ИИ · интернет · зрение · голос · тексты · анализ · коммуникации"
     capabilities = {Cap.WEB_RESEARCH, Cap.VISION, Cap.VOICE, Cap.GENERAL, Cap.DESKTOP_TOOLS, Cap.DOC_ANALYSIS,
                     Cap.WRITING, Cap.TRANSLATION, Cap.PLANNING}
     modalities = {"text", "image", "audio"}
@@ -91,6 +91,9 @@ class GeminiProvider(AIProvider):
         self.models: dict[str, ModelInfo] = {}
         self._fail_streak = 0
         self._open_until = 0.0
+        self._penalty: dict[str, float] = {}      # model -> until (overloaded / rate-limited)
+        self._last_fail_ts = 0.0
+        self.available_names: set[str] | None = None
         self._init_models()
 
     def _init_models(self):
@@ -137,6 +140,7 @@ class GeminiProvider(AIProvider):
             pager = await client.aio.models.list(config={"page_size": 200})
             async for m in pager:
                 names[m.name.removeprefix("models/")] = m
+            self.available_names = set(names)
             for mid, info in self.models.items():
                 m = names.get(mid)
                 info.available = m is not None
@@ -163,6 +167,9 @@ class GeminiProvider(AIProvider):
         if not self.configured():
             return Health.NOT_CONFIGURED
         if self.status == "error":
+            # A failure is not permanent: after 2 minutes Gemini may be tried again (and recovers on success).
+            if time.time() - self._last_fail_ts > 120:
+                return Health.DEGRADED
             return {"auth": Health.AUTH_ERROR, "quota": Health.RATE_LIMITED, "network": Health.OFFLINE}.get(
                 self.last_error_kind or "", Health.DEGRADED)
         if time.time() < self._open_until:
@@ -190,15 +197,54 @@ class GeminiProvider(AIProvider):
             parts.append(types.Part.from_bytes(data=req.image, mime_type=req.image_mime))
         parts.append(types.Part.from_text(text=req.instruction))
         tools = [types.Tool(google_search=types.GoogleSearch())] if req.capability == Cap.WEB_RESEARCH else None
+        self.last_generate_meta = {}
         cfg = types.GenerateContentConfig(system_instruction=req.system or AGENCY_SYSTEM, tools=tools,
                                           max_output_tokens=req.max_tokens)
         t0 = time.perf_counter()
         first = None
         text, sources, usage = [], [], None
+        last: ProviderFailure | None = None
+        kinds = set()
+        for model in self.chain(model):
+            try:
+                return await self._generate_once(client, model, parts, cfg, on_delta, t0)
+            except ProviderFailure as pe:
+                if pe.kind in ("server", "quota", "model", "network") and pe.partial is False:
+                    if not (tools and pe.kind == "quota"):      # a search-quota 429 says nothing about the model
+                        self._penalize(model, pe.kind)
+                    last, kinds = pe, kinds | {pe.kind}
+                    continue
+                raise
+        if tools and kinds == {"quota"}:
+            # Google Search quota exhausted: answer without search, clearly labelled, no sources.
+            cfg.tools = None
+            for model in self.chain(self.model_for(Cap.GENERAL)):
+                try:
+                    r = await self._generate_once(client, model, parts, cfg, on_delta, t0)
+                    r.meta["grounding"] = False
+                    r.meta["note"] = "Квота поиска Google для этого ключа исчерпана — ответ без поиска в интернете"
+                    return r
+                except ProviderFailure as pe:
+                    if pe.kind in ("server", "quota", "model", "network") and not pe.partial:
+                        last = pe
+                        continue
+                    raise
+        reason = {"quota": "исчерпана квота или лимит запросов Gemini для этого ключа",
+                  "server": "модели Gemini сейчас перегружены", "model": "нужные модели Gemini недоступны",
+                  "network": "нет связи с Gemini"}
+        raise ProviderFailure(last.kind if last else "server",
+                              "Gemini: " + ", ".join(reason.get(k, k) for k in sorted(kinds)) +
+                              (" (поиск в интернете)" if tools else "") + ". Попробуйте позже.")
+
+    async def _generate_once(self, client, model, parts, cfg, on_delta, t0) -> GenResult:
+        from google.genai import types
+        first = None
+        text, sources, usage = [], [], None
         try:
             it = await asyncio.wait_for(client.aio.models.generate_content_stream(
-                model=model, contents=[types.Content(role="user", parts=parts)], config=cfg), self.config.ai_timeout_s)
-            async for chunk in _timed(it, self.config.ai_timeout_s):
+                model=model, contents=[types.Content(role="user", parts=parts)], config=cfg),
+                self.config.ai_first_token_timeout_s)
+            async for chunk in _timed(it, self.config.ai_timeout_s, self.config.ai_first_token_timeout_s):
                 usage = chunk.usage_metadata or usage
                 cand = (chunk.candidates or [None])[0]
                 if not cand:
@@ -219,6 +265,7 @@ class GeminiProvider(AIProvider):
             raise
         except Exception as e:   # noqa: BLE001
             pe = classify(e)
+            pe.partial = bool(text)
             self._record(False, model)
             self.last_error, self.last_error_kind = str(pe), pe.kind
             raise pe from None
@@ -268,6 +315,7 @@ class GeminiProvider(AIProvider):
             if on_thinking:
                 on_thinking(False)
             contents.append(done["content"])
+            model = done.get("model", model)
             first_ms = first_ms or done["first_token_ms"]
             for k, v in (done.get("usage") or {}).items():
                 if isinstance(v, int):
@@ -308,19 +356,36 @@ class GeminiProvider(AIProvider):
         if time.time() < self._open_until:
             raise ProviderError("unavailable", "Gemini временно отключён после серии ошибок; повтор через несколько секунд")
 
+    def chain(self, first: str) -> list[str]:
+        """first + configured fallbacks; models known to be missing are skipped, overloaded ones go last."""
+        seen, out = set(), []
+        for m in [first, *self.config.gemini_fallbacks]:
+            if m in seen or (self.available_names is not None and m not in self.available_names):
+                continue
+            seen.add(m)
+            out.append(m)
+        now_ = time.time()
+        return sorted(out, key=lambda m: self._penalty.get(m, 0) > now_) or [first]
+
+    def _penalize(self, model: str, kind: str) -> None:
+        if kind in ("server", "quota", "model", "network"):
+            self._penalty[model] = time.time() + (900 if kind == "model" else 300)
+
     def _record(self, ok: bool, model: str, first_ms: float | None = None):
         info = self.models.get(model)
         if ok:
             self._fail_streak = 0
             self.status = "ready"
+            self.last_error_kind = None
             if info and first_ms is not None:
                 info.latencies_ms = (info.latencies_ms + [first_ms])[-50:]
         else:
             self._fail_streak += 1
+            self._last_fail_ts = time.time()
             if info:
                 info.errors += 1
-            if self._fail_streak >= 3:
-                self._open_until = time.time() + 30
+            if self._fail_streak >= 6:
+                self._open_until = time.time() + 15
 
     def build_tools(self, tools) -> list:
         from google.genai import types
@@ -345,12 +410,14 @@ class GeminiProvider(AIProvider):
         parts: list = []
         usage = None
         attempt = 0
+        models = self.chain(model)
+        model = models.pop(0)
         while True:
             try:
                 it = await asyncio.wait_for(client.aio.models.generate_content_stream(
                     model=model, contents=contents, config=types.GenerateContentConfig(**cfg)),
-                    self.config.ai_timeout_s)
-                async for chunk in _timed(it, self.config.ai_timeout_s):
+                    self.config.ai_first_token_timeout_s)
+                async for chunk in _timed(it, self.config.ai_timeout_s, self.config.ai_first_token_timeout_s):
                     if first_ms is None:
                         first_ms = (time.perf_counter() - t0) * 1000
                     usage = chunk.usage_metadata or usage
@@ -368,16 +435,18 @@ class GeminiProvider(AIProvider):
                 raise
             except Exception as e:   # noqa: BLE001
                 pe = e if isinstance(e, ProviderError) else classify(e)
-                # Retry once, only before anything was streamed to the user.
-                if not parts and attempt == 0 and pe.kind in ("server", "network"):
-                    attempt += 1
-                    await asyncio.sleep(1.0)
+                # Only before anything reached the user: switch to the next Gemini model in the chain.
+                if not parts and pe.kind in ("server", "quota", "model", "network") and models:
+                    self._record(False, model)
+                    self._penalize(model, pe.kind)
+                    model = models.pop(0)
                     continue
                 if not parts and attempt == 0 and pe.kind == "invalid" and "thinking" in str(e).lower() \
                         and "thinking_config" in cfg:
                     attempt += 1
                     cfg.pop("thinking_config")
                     continue
+                self._penalize(model, pe.kind)
                 self._record(False, model)
                 self.last_error = str(pe)
                 self.last_error_kind = pe.kind
@@ -385,7 +454,7 @@ class GeminiProvider(AIProvider):
                     self.status = "error"
                 raise pe from None
         self._record(True, model, first_ms)
-        yield {"type": "done", "content": types.Content(role="model", parts=parts),
+        yield {"type": "done", "content": types.Content(role="model", parts=parts), "model": model,
                "usage": usage.model_dump(exclude_none=True) if usage else None,
                "first_token_ms": round(first_ms or 0), "total_ms": round((time.perf_counter() - t0) * 1000)}
 
@@ -393,21 +462,28 @@ class GeminiProvider(AIProvider):
         from google.genai import types
         self._guard()
         client = self.client()
-        model = self.pick_model("fast")
         prompt = ("Transcribe this speech verbatim in its original language (usually Russian, sometimes English, "
                   "Kazakh or others). Keep names, numbers, file names and technical terms exact. "
                   "Output only the transcript. If there is no intelligible speech, output an empty string.")
-        try:
-            r = await asyncio.wait_for(client.aio.models.generate_content(
-                model=model, contents=[types.Part.from_bytes(data=audio, mime_type=mime), prompt],
-                config=types.GenerateContentConfig(max_output_tokens=1024,
-                                                   thinking_config=types.ThinkingConfig(thinking_level="minimal"))),
-                30)
-        except Exception as e:   # noqa: BLE001
-            self._record(False, model)
-            raise classify(e) from None
-        self._record(True, model)
-        return (r.text or "").strip()
+        last = None
+        for model in self.chain(self.pick_model("fast")):
+            cfg = types.GenerateContentConfig(max_output_tokens=1024)
+            if "lite" in model:
+                cfg.thinking_config = types.ThinkingConfig(thinking_level="minimal")
+            try:
+                r = await asyncio.wait_for(client.aio.models.generate_content(
+                    model=model, contents=[types.Part.from_bytes(data=audio, mime_type=mime), prompt], config=cfg), 20)
+            except Exception as e:   # noqa: BLE001
+                last = classify(e)
+                self._record(False, model)
+                self._penalize(model, last.kind)
+                if last.kind in ("server", "quota", "model", "network"):
+                    continue
+                raise last from None
+            self._record(True, model)
+            self.last_transcribe_model = model
+            return (r.text or "").strip()
+        raise last or ProviderFailure("server", "Gemini не смог распознать речь")
 
     async def speak(self, text: str) -> bytes:
         """Return WAV bytes for text using the configured Gemini TTS model."""
@@ -447,12 +523,14 @@ class GeminiProvider(AIProvider):
         return buf.getvalue()
 
 
-async def _timed(it, timeout: float):
-    """Iterate an async stream with a per-chunk timeout."""
+async def _timed(it, timeout: float, first_timeout: float | None = None):
+    """Iterate an async stream with a per-chunk timeout (shorter for the first chunk)."""
     ait = it.__aiter__()
+    first = True
     while True:
         try:
-            yield await asyncio.wait_for(ait.__anext__(), timeout)
+            yield await asyncio.wait_for(ait.__anext__(), first_timeout if first and first_timeout else timeout)
+            first = False
         except StopAsyncIteration:
             return
 
@@ -462,7 +540,7 @@ def classify(e: Exception) -> ProviderError:
         return e
     code = getattr(e, "code", None)
     msg = str(e)
-    if isinstance(e, asyncio.TimeoutError):
+    if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
         return ProviderError("network", "Gemini не ответил вовремя")
     if code in (401, 403):
         return ProviderError("auth", "Ключ Gemini отклонён (нет доступа). Проверьте ключ в настройках.")

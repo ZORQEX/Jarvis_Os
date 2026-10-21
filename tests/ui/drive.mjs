@@ -159,5 +159,34 @@ if (scenario === "agency") {
   await shot("ag-07-dev-inspector");
 }
 
+if (scenario === "two") {
+  const waitDone = async (ms = 240000) => page.waitForFunction(() => { const t = Object.values(window.__jarvis.S.tasks).at(-1);
+    return t && ["completed", "failed", "cancelled"].includes(t.state); }, null, { timeout: ms });
+  await page.click('[data-nav="settings"]');
+  await page.waitForSelector(".pcard");
+  await page.waitForTimeout(400);
+  await shot("two-01-settings");
+  timings.provider_cards = await page.locator(".pcard").count();
+  await page.click('[data-nav="chat"]');
+  let s = Date.now();
+  await say("Привет! Расскажи в двух предложениях, что ты умеешь.", 300);
+  await waitDone(); timings.chat_ms = Date.now() - s;
+  s = Date.now();
+  await say("Напиши письмо поставщику мрамора с просьбой прислать прайс-лист", 300);
+  await waitDone(); timings.letter_ms = Date.now() - s;
+  await page.waitForTimeout(400);
+  await shot("two-02-letter");
+  s = Date.now();
+  await say("Найди в интернете информацию о компании Basecamp и сохрани результаты в отдельный файл", 500);
+  await page.waitForSelector(".approval [data-approve]", { timeout: 180000 });
+  timings.research_until_approval_ms = Date.now() - s;
+  await page.waitForTimeout(300);
+  await shot("two-03-approval");
+  await page.click(".approval [data-approve]");
+  await waitDone(); timings.research_and_file_ms = Date.now() - s;
+  await page.waitForTimeout(600);
+  await shot("two-04-file-saved");
+}
+
 console.log(JSON.stringify({ errors, timings, state: await page.evaluate(() => window.__jarvis.S.core) }, null, 1));
 await browser.close();

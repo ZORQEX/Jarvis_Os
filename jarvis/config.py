@@ -71,10 +71,9 @@ class Config:
     model_main: str = "gemini-3.8-flash"
     model_deep: str = "gemini-4-argon"
     model_tts: str = "gemini-3.8-flash-tts"
-    # OpenAI (developers.openai.com/api/docs/models, checked 2026-10-21; verified at runtime via models.list)
-    openai_model_main: str = "gpt-6.1-sol"
-    openai_model_fast: str = "gpt-6-luna"
-    openai_model_deep: str = "gpt-6-astra"
+    # When a Gemini model is overloaded (503), rate-limited or unavailable, the next one in this chain is tried.
+    gemini_fallbacks: list[str] = field(default_factory=lambda: ["gemini-3.6-flash", "gemini-3.5-flash",
+                                                                 "gemini-3.5-flash-lite"])
     # Claude Code CLI: empty model = the CLI's own default
     claude_model: str = ""
     claude_budget_usd: float = 2.0
@@ -83,6 +82,7 @@ class Config:
     tts_voice: str = "Kore"
     max_tool_rounds: int = 6
     ai_timeout_s: float = 60.0
+    ai_first_token_timeout_s: float = 20.0   # a model that is silent this long is skipped for the next in the chain
     history_turns: int = 12
     privacy_profile: str = "AUTHORIZED_CLOUD"
     approval_ttl_s: int = 900

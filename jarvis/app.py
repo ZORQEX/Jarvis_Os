@@ -55,9 +55,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     from .agency.agency import Agency
     from .agency.tools import AgentGenerate, ClaudeChange, ClaudeInspect, OpenUrl
     from .providers.claude_code import ClaudeCodeProvider
-    from .providers.openai_provider import OpenAIProvider
     from .providers.registry import ProviderManager
-    manager = ProviderManager(db, config, [gemini, OpenAIProvider(config), ClaudeCodeProvider(config, db)])
+    manager = ProviderManager(db, config, [ClaudeCodeProvider(config, db), gemini])
     for t in (AgentGenerate(manager), ClaudeInspect(manager, config), ClaudeChange(manager, config), OpenUrl()):
         registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)

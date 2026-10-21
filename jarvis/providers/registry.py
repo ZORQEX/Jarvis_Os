@@ -30,14 +30,11 @@ def model_registry(config) -> list[ModelEntry]:
     return [
         ModelEntry("gemini", config.model_main, "main", ["general", "web_research", "vision", "desktop_tools",
                                                          "document_analysis", "writing", "translation"], g, True),
+        *[ModelEntry("gemini", m, "fallback", ["general", "writing", "web_research", "vision", "document_analysis"],
+                     g, True, priority=6 + i) for i, m in enumerate(config.gemini_fallbacks)],
         ModelEntry("gemini", config.model_fast, "fast", ["planning", "voice", "general"], g, True),
         ModelEntry("gemini", config.model_deep, "deep", ["document_analysis", "general"], g, True),
         ModelEntry("gemini", config.model_tts, "tts", ["voice"], ["audio"], False),
-        ModelEntry("openai", config.openai_model_main, "main", ["writing", "translation", "document_analysis",
-                                                                "general", "desktop_tools", "web_research", "vision"],
-                   ["text", "image"], True),
-        ModelEntry("openai", config.openai_model_fast, "fast", ["planning", "writing"], ["text"], True),
-        ModelEntry("openai", config.openai_model_deep, "deep", ["document_analysis"], ["text", "image"], True),
         ModelEntry("claude_code", config.claude_model or "default", "code", ["code", "terminal", "filesystem"],
                    ["text"], True),
     ]
@@ -51,6 +48,10 @@ class ProviderManager:
         self.db, self.config = db, config
         self.providers: dict[str, AIProvider] = {p.id: p for p in providers}
         self.models = model_registry(config)
+        # Forget settings of providers that no longer exist (e.g. a removed integration).
+        allset = self.db.get_kv("provider_settings", {}) or {}
+        if set(allset) - set(self.providers):
+            self.db.set_kv("provider_settings", {k: v for k, v in allset.items() if k in self.providers})
 
     # -- settings (user-controlled; no model or provider can change these) -----
     def settings(self, pid: str) -> dict:
