@@ -122,6 +122,10 @@ class GeminiProvider(AIProvider):
         self.status = "unconfigured" if not self.configured() else "unknown"
         self._fail_streak = 0
         self._open_until = 0.0
+        # A new key may belong to another project with its own limits: forget the old key's quota notes.
+        self._penalty.clear()
+        self._exhausted.clear()
+        self._no_hedge_until = 0.0
         for m in self.models.values():
             m.available = None
 

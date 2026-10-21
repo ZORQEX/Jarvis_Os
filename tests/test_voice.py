@@ -361,3 +361,20 @@ async def test_voice_uses_local_recognition_and_never_the_cloud_when_it_works(co
     assert r["text"] == "Сколько будет 2 плюс 2?" and r["task_id"]
     await wait_done(core, r["task_id"])
     assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("4")
+
+
+async def test_slow_answer_gets_a_spoken_hold_phrase(core, speech):
+    from jarvis.voice.tts import ACKS
+    g = ScriptedGemini(core.config, [["Ответ."]])
+    orig = g.stream
+
+    async def slow(*a, **k):
+        await asyncio.sleep(3.0)
+        async for x in orig(*a, **k):
+            yield x
+    g.stream = slow
+    install(core, gemini=g)
+    tid = await core.director.submit("Что такое API?", "voice")
+    await wait_done(core, tid, timeout=8)
+    await wait_for(lambda: len(speech.engine.calls) >= 2)
+    assert speech.engine.calls[0] in ACKS and speech.engine.calls[1].startswith("Ответ")
