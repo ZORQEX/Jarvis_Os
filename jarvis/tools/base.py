@@ -195,6 +195,22 @@ def _secretish(name: str) -> bool:
 # ---------------------------------------------------------------------------
 # Path scoping.
 
+# Never readable, whatever the access level: keys, passwords, browser profiles (cookies), JARVIS's own sessions.
+SECRET_PATHS = [".ssh", ".gnupg", ".password-store", ".local/share/keyrings", ".config/chromium", ".config/google-chrome",
+                ".config/BraveSoftware", ".mozilla", ".local/share/jarvis", ".local/state/jarvis", ".aws", ".kube",
+                ".docker", ".netrc", ".git-credentials", ".config/gh", ".pki", ".config/Signal"]
+
+
+def is_secret_path(p: Path) -> bool:
+    home = Path.home().resolve()
+    if not p.is_relative_to(home):
+        return False
+    rel = p.relative_to(home).as_posix()
+    if any(rel == s or rel.startswith(s + "/") for s in SECRET_PATHS):
+        return True
+    return p.name in (".env", ".envrc") or p.suffix in (".pem", ".key", ".kdbx")
+
+
 def resolve_in_scopes(raw: str, roots: list[Path]) -> Path:
     """Resolve a user/model-supplied path and require it to live inside one of
     the allowed roots (symlinks resolved, so ../ and link escapes are rejected)."""
@@ -204,6 +220,8 @@ def resolve_in_scopes(raw: str, roots: list[Path]) -> Path:
     if not p.is_absolute():
         raise ToolInputError("Нужен полный путь")
     rp = p.resolve()
+    if is_secret_path(rp):
+        raise ToolInputError("Эта папка закрыта для JARVIS: там ключи, пароли или данные входа")
     for root in roots:
         if rp == root or rp.is_relative_to(root):
             return rp
