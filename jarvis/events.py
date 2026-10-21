@@ -49,7 +49,8 @@ class AuditLog:
 
 class EventBus:
     # Event kinds that are UI-only noise and need not be stored.
-    TRANSIENT = {"assistant.delta", "step.progress", "core.state", "voice.level"}
+    TRANSIENT = {"assistant.delta", "step.progress", "core.state", "voice.level", "speech.audio", "speech.end",
+                 "speech.cancelled", "speech.error"}
 
     def __init__(self, db: Database):
         self.db = db
@@ -73,7 +74,7 @@ class EventBus:
             ev["seq"] = cur.lastrowid
         for fn in self.listeners:
             try:
-                fn(kind)
+                fn(kind, ev)
             except Exception:   # noqa: BLE001 — a listener must not break publishing
                 pass
         for q in list(self._subs):

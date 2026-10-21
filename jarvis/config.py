@@ -82,7 +82,13 @@ class Config:
     tts_voice: str = "Kore"
     max_tool_rounds: int = 6
     ai_timeout_s: float = 60.0
-    ai_first_token_timeout_s: float = 12.0   # a model that is silent this long is skipped for the next in the chain
+    ai_first_token_timeout_s: float = 12.0
+    # Voice conversation: the fastest model first, short first-token wait, local TTS.
+    model_voice: str = "gemini-3.5-flash-lite"
+    voice_first_token_timeout_s: float = 6.0
+    stt_hedge_after_s: float = 2.0       # slow transcription → send a duplicate request, use the first answer
+    tts_engine: str = "piper"            # piper (local, fast) | gemini (cloud)
+    piper_voice: str = "ru_RU-denis-medium"   # a model that is silent this long is skipped for the next in the chain
     history_turns: int = 12
     privacy_profile: str = "AUTHORIZED_CLOUD"
     approval_ttl_s: int = 900

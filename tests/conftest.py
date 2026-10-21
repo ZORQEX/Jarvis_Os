@@ -128,6 +128,7 @@ class ScriptedGemini(GeminiProvider):
 
     async def stream(self, model, contents, tools, **kw):
         self.calls.append([c.model_copy(deep=True) for c in contents])
+        self.last_system, self.last_model = kw.get("system"), model
         turn = self.turns.pop(0)
         if isinstance(turn, Exception):
             raise turn

@@ -75,8 +75,10 @@ def test_router_leaves_open_requests_to_ai(text):
 
 
 def test_router_controls_distinguished():
-    assert router.route("стоп").args["op"] == "estop"
-    assert router.route("замолчи").args["op"] == "stop_speech"
+    assert router.route("стоп").args["op"] == "interrupt"            # conversational stop
+    assert router.route("Джарвис, подожди").args["op"] == "interrupt"
+    assert router.route("экстренная остановка").args["op"] == "estop"
+    assert router.route("стоп всё").args["op"] == "estop"
     assert router.route("отмени").args["op"] == "cancel_last"
     assert router.route("пауза").args["op"] == "pause_all"
 
@@ -398,7 +400,7 @@ async def test_remember_not_granted_when_approval_invalid(core):
 
 
 @pytest.mark.parametrize("text,kind,what", [
-    ("останови всё", "control", "estop"), ("хватит", "control", "stop_speech"),
+    ("останови всё", "control", "estop"), ("хватит", "control", "interrupt"),
     ("убавь звук", "tool", "volume_set"), ("звук на максимум", "tool", "volume_set"),
     ("запусти терминал пожалуйста", "tool", "app_open"), ("какая загрузка процессора", "tool", "system_info"),
     ("что с памятью", "tool", "system_info"), ("на пятый стол", "tool", "workspace_switch"),

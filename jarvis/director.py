@@ -47,6 +47,8 @@ class Runtime:
     gate: asyncio.Event = field(default_factory=lambda: _set_event())
     thinking: bool = False
     message_id: str | None = None
+    voice: bool = False          # answer is spoken (voice turn or "speak replies")
+    turn: str | None = None      # voice telemetry id
 
 
 def _set_event() -> asyncio.Event:
@@ -63,6 +65,7 @@ class Director:
         self.policy, self.approvals, self.gw, self.gemini = policy, approvals, gateway, gemini
         self.scheduler, self.config, self.flora = scheduler, config, flora
         self.providers, self.agency = providers, agency
+        self.speech = None           # SpeechManager, set by the composition root
         self.rt: dict[str, Runtime] = {}
         self._last_finish: tuple[float, str] | None = None
         self._state = None
@@ -70,7 +73,7 @@ class Director:
         self.started_at = time.time()
         self.policy.estop = bool(db.get_kv("estop", False))
         scheduler.on_fire = self._on_reminder
-        bus.listeners.append(lambda kind: self._touch() if kind in _STATE_KINDS else None)
+        bus.listeners.append(lambda kind, ev=None: self._touch() if kind in _STATE_KINDS else None)
 
     # ------------------------------------------------------------------ conversations
     def conversation_id(self) -> str:
@@ -118,7 +121,7 @@ class Director:
         return out
 
     # ------------------------------------------------------------------ entry point
-    async def submit(self, text: str, source: str = "text") -> str:
+    async def submit(self, text: str, source: str = "text", turn: str | None = None, speak: bool = False) -> str:
         text = (text or "").strip()
         if not text:
             raise ValueError("empty")
@@ -129,14 +132,19 @@ class Director:
         if route and route.kind == "control":
             self.add_message(cid, "user", text, meta={"source": source})
             reply = await self.control(route.args["op"])
-            if route.args["op"] != "new_conversation":   # the empty new screen is the acknowledgment
+            if self.speech and turn:
+                self.speech.annotate(turn, route="control:" + route.args["op"], transcript=text)
+            if route.args["op"] not in ("new_conversation", "interrupt"):   # silence / empty screen is the answer
                 self.add_message(self.conversation_id(), "assistant", reply, meta={"route": "control", "level": 0})
             return ""
         level = route.level if route else 2
         tid = self.tasks.create(text, cid, route=(route.kind if route else "ai"), level=level)
         self.add_message(cid, "user", text, tid, meta={"source": source})
-        runtime = Runtime()
+        runtime = Runtime(voice=source == "voice" or speak, turn=turn)
         self.rt[tid] = runtime
+        if runtime.voice and self.speech:
+            self.speech.start(tid, turn, max_chars=1200 if route is None else 400)
+            self.speech.annotate(turn, task_id=tid, transcript=text, route=route.kind if route else "ai")
         runtime.task = asyncio.create_task(self._run(tid, cid, text, route), name=f"task-{tid}")
         self._touch()
         return tid
@@ -161,6 +169,8 @@ class Director:
                 await self.agency.run(self, tid, cid, text)
             elif route.kind == "reply":
                 self._finish(tid, cid, self._reply(route.reply), meta={"route": "local", "level": 0})
+            elif route.kind == "answer":
+                self._finish(tid, cid, route.reply, meta={"route": "local", "level": 0, "why": route.why})
             elif route.kind == "tool":
                 await self._run_tool_route(tid, cid, route)
             elif route.kind == "search_open":
@@ -309,9 +319,22 @@ class Director:
                 self._resume_all()
             self._touch()
             return "Экстренная остановка снята. Можно продолжать."
-        if op == "stop_speech":
+        if op in ("stop_speech", "interrupt"):
             self.bus.publish("speech.stop", {})
-            return "Молчу."
+            if self.speech:
+                self.speech.cancel()
+            if op == "stop_speech":
+                return "Молчу."
+            # Drop answers in progress that change nothing on the computer; never interrupt real actions.
+            readonly = {"agent_chat", "agent_generate", "claude_code_inspect", "search_files", "read_file", "system_info",
+                        "window_list", "flora_inbox", "flora_compare"}
+            for tid, r in list(self.rt.items()):
+                t = self.tasks.get(tid)
+                if not t or S(t["state"]) not in (S.RUNNING, S.PLANNING):
+                    continue
+                if all(s["tool_id"] in readonly for s in t["steps"]):
+                    await self.cancel(tid)
+            return ""
         if op == "new_conversation":
             self.new_conversation()
             return "Начинаем новый разговор."

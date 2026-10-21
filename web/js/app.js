@@ -28,8 +28,11 @@ const link = new Link({
 
 const voice = new Voice({
   link,
-  onState: (v) => { S.voice = v; renderStatus(); renderComposer(); renderPrivacy(); },
-  onTranscript: (text) => submit(text, "voice"),
+  onState: (v) => {
+    S.voice = v; renderStatus(); renderComposer(); renderPrivacy();
+    if (v === "interrupted") setTimeout(() => { if (S.voice === "interrupted") voice.set(voice.listening ? "listening" : null); }, 700);
+  },
+  onTurn: () => { if (S.view !== "chat") nav("chat"); },
   onError: (m) => toast(m, "warn"),
 });
 
@@ -64,7 +67,6 @@ function onEvent(ev) {
       if (S.messages.some((x) => x.id === m.id)) return;
       S.messages.push(m);
       if (m.role === "assistant" && m.task_id) delete S.streaming[m.task_id];
-      if (m.role === "assistant" && m.meta?.route !== "control") voice.speak(m.text);
       renderThread();
       break;
     }
@@ -111,6 +113,9 @@ function onEvent(ev) {
     }
     case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : ""); break;
     case "speech.stop": voice.stopSpeaking(); break;
+    case "speech.audio": voice.enqueue(ev); break;
+    case "speech.cancelled": voice.stopSpeaking(tid); break;
+    case "speech.error": toast("Озвучивание не удалось: " + ev.error + " (текст ответа показан)", "warn"); break;
     case "conversation.new": link.request("snapshot").then(applySnapshot).catch(() => {}); break;
     case "ui.navigate": pendingFlora = { tab: ev.tab }; nav(ev.view); break;
     case "providers": S.providers = ev.providers; S.provider = ev.provider; renderStatus(); renderComposer();
@@ -130,16 +135,18 @@ function notifyAttention() {
 }
 
 // ------------------------------------------------------------------ rendering: status
-const STATUS_RU = { IDLE: "Готов", STANDBY: "Экстренная остановка — действия заблокированы", LISTENING: "Слушаю…",
+const STATUS_RU = { INTERRUPTED: "Перебито — слушаю", IDLE: "Готов", STANDBY: "Экстренная остановка — действия заблокированы", LISTENING: "Слушаю…",
   PROCESSING: "Работаю…", THINKING: "Думаю…", EXECUTING: "Выполняю…", SPEAKING: "Говорю…",
   WAITING_APPROVAL: "Нужно ваше решение", PAUSED: "Пауза", MUTED: "Готов · микрофон выключен", COMPLETED: "Готово",
   ERROR: "Не получилось", OFFLINE: "Нет связи с ядром" };
 
 function uiState() {
   if (!S.connected) return "OFFLINE";
-  if (S.voice === "listening") return "LISTENING";
+  if (S.voice === "recording") return "LISTENING";
+  if (S.voice === "interrupted") return "INTERRUPTED";
+  if (S.voice === "transcribing") return "THINKING";
   if (S.voice === "speaking") return "SPEAKING";
-  if (S.voice === "transcribing") return "PROCESSING";
+  if (S.voice === "listening" && ["IDLE", "COMPLETED"].includes(S.core.state)) return "LISTENING";
   const st = S.core.state;
   if (st === "IDLE" && voice.muted) return "MUTED";
   return st;
@@ -151,6 +158,8 @@ function renderStatus() {
   const el = $("#status");
   el.dataset.state = st;
   let label = STATUS_RU[st] || st;
+  if (st === "LISTENING") label = S.voice === "recording" ? "Слушаю…" : "Жду вашу фразу";
+  if (S.voice === "transcribing") label = "Распознаю речь…";
   if (S.core.working && ["EXECUTING", "THINKING", "PROCESSING"].includes(st)) label = `${S.core.working} работает…`;
   if (st === "WAITING_APPROVAL" && S.core.pending_approvals > 1) label += ` (${S.core.pending_approvals})`;
   $(".status-label", el).textContent = label;
@@ -162,7 +171,7 @@ function renderStatus() {
 function renderChips() {
   const chips = [];
   if (S.core.estop) chips.push(`<button class="chip err" data-act="estop_clear">${ICON.stop} Остановлено · снять</button>`);
-  if (S.voice === "listening") chips.push(`<span class="chip live">${ICON.mic} Микрофон записывает</span>`);
+  if (voice.listening) chips.push(`<button class="chip live" data-act="conv">${ICON.mic} ${voice.conversation ? "Разговор: микрофон включён" : "Слушаю одну фразу"}</button>`);
   if (S.providers.length) {
     const up = S.providers.filter((p) => p.health === "CONNECTED");
     const soft = S.providers.filter((p) => p.health === "DEGRADED");
@@ -254,7 +263,8 @@ function turnHtml(t, task, approvals) {
   }
   const body = [];
   if (task) {
-    const visible = task.steps.filter((s) => s.tool_id !== "cloud_send" && !["awaiting_approval", "resumed"].includes(s.state));
+    const visible = task.steps.filter((s) => s.tool_id !== "cloud_send" && !["awaiting_approval", "resumed"].includes(s.state)
+      && (s.tool_id !== "agent_chat" || S.dev || ["failed", "cancelled"].includes(s.state)));   // plain answers need no step row
     if (task.decision) body.push(decisionCard(task.decision, S.dev));
     for (const a of approvals) if (a.status !== "pending") body.push(approvalCard(a));
     if (visible.length) {
@@ -369,7 +379,7 @@ function taskCard(t) {
 }
 
 function renderPrivacy() {
-  const mic = S.voice === "listening" ? `<b class="on">запись идёт</b>` : voice.muted ? "<b>выключен</b>" : `<b>не используется</b>`;
+  const mic = voice.listening ? `<b class="on">${voice.conversation ? "включён (разговор)" : "включён"}</b>` : voice.muted ? "<b>выключен</b>" : `<b>не используется</b>`;
   const cloud = { AUTHORIZED_CLOUD: "по запросу", PRIVATE_LOCAL: "только с согласия", STRICT_OFFLINE: "выключено" }[S.core.privacy] || "—";
   $("#privacy").innerHTML = `
     <div class="line">${voice.muted ? ICON.micOff : ICON.mic} Микрофон ${mic}</div>
@@ -382,17 +392,22 @@ function renderPrivacy() {
 // ------------------------------------------------------------------ composer
 const input = $("#input");
 function renderComposer() {
-  const mic = $("#micBtn");
-  mic.classList.toggle("recording", S.voice === "listening");
-  mic.classList.toggle("busy", S.voice === "transcribing");
+  const mic = $("#micBtn"), conv = $("#convBtn");
   const aiReady = S.provider?.configured && S.core.privacy === "AUTHORIZED_CLOUD";
-  mic.disabled = voice.muted || !voice.supported || !aiReady;
-  mic.title = voice.muted ? "Микрофон выключен" : !S.provider?.configured ? "Голосовой ввод требует подключённого Gemini"
-    : !aiReady ? "Голос распознаётся в облаке — включите режим «Облако разрешено»" : "Голос (Ctrl+Space)";
+  mic.classList.toggle("recording", voice.listening && !voice.conversation);
+  mic.classList.toggle("busy", S.voice === "transcribing");
+  conv.classList.toggle("on", voice.conversation);
+  for (const b of [mic, conv]) b.disabled = voice.muted || !voice.supported || !aiReady;
+  const why = voice.muted ? "Микрофон выключен" : !S.provider?.configured ? "Голос требует подключённого Gemini"
+    : !aiReady ? "Голос распознаётся в облаке — включите режим «Облако разрешено»" : "";
+  mic.title = why || "Сказать одну фразу (Ctrl+Space)";
+  conv.title = why || (voice.conversation ? "Закончить разговор (Ctrl+Shift+Space)" : "Разговор без кнопок (Ctrl+Shift+Space)");
   $("#sendBtn").disabled = !input.value.trim();
-  const hint = S.voice === "listening" ? `Говорите… нажмите <span class="kbd">Ctrl Space</span> или кнопку, чтобы закончить, <span class="kbd">Esc</span> — отмена`
-    : S.voice === "transcribing" ? "Распознаю речь (Gemini)…"
-    : `<span><span class="kbd">Enter</span> отправить</span><span><span class="kbd">Ctrl Space</span> голос</span><span><span class="kbd">Ctrl Shift X</span> стоп</span>`;
+  const hint = S.voice === "recording" ? "Говорите… фраза закончится сама после паузы · <span class=\"kbd\">Esc</span> — отмена"
+    : S.voice === "transcribing" ? "Распознаю речь…"
+    : S.voice === "speaking" ? "JARVIS говорит — начните говорить, чтобы перебить, или <span class=\"kbd\">Esc</span>"
+    : voice.conversation ? "Разговор: просто говорите. Пауза — конец фразы. Скажите «стоп», чтобы перебить."
+    : `<span><span class="kbd">Enter</span> отправить</span><span><span class="kbd">Ctrl Space</span> фраза</span><span><span class="kbd">Ctrl Shift Space</span> разговор</span><span><span class="kbd">Ctrl Shift X</span> экстренный стоп</span>`;
   $("#composerHint").innerHTML = hint;
 }
 
@@ -408,12 +423,13 @@ $("#composer").addEventListener("submit", (e) => {
   input.value = ""; autosize();
   submit(text, "text");
 });
-$("#micBtn").addEventListener("click", () => voice.toggle());
+$("#micBtn").addEventListener("click", () => voice.listenOnce());
+$("#convBtn").addEventListener("click", () => voice.toggleConversation());
 
 async function submit(text, source) {
   if (S.view !== "chat") nav("chat");
   try {
-    await link.request("submit", { text, source }, 15000);
+    await link.request("submit", { text, source, speak: voice.speakReplies }, 15000);
   } catch (e) {
     toast(e.message, "err");
     if (source === "text" && !input.value) { input.value = text; autosize(); }
@@ -449,20 +465,21 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.deny) return link.request("deny", { id: t.dataset.deny }).catch((er) => toast(er.message, "err"));
   if (t.dataset.taskAct) return link.request(t.dataset.taskAct, { task_id: t.dataset.task }).then((r) => r.message && toast(r.message)).catch((er) => toast(er.message, "err"));
   if (t.dataset.act === "estop_clear") return link.request("estop_clear").then((r) => toast(r.message));
+  if (t.dataset.act === "conv") { voice.toggleConversation(); return; }
   if (t.dataset.act === "toggle-mute") { voice.setMuted(!voice.muted); renderStatus(); renderComposer(); return; }
 });
 
 async function estop() {
-  voice.cancel(); voice.stopSpeaking();
+  voice.stopAll();
   try { const r = await link.request("estop"); toast(r.message, "err"); } catch (e) { toast(e.message, "err"); }
 }
 
 document.addEventListener("keydown", (e) => {
   if (e.ctrlKey && e.shiftKey && (e.key === "X" || e.key === "x" || e.code === "KeyX")) { e.preventDefault(); return estop(); }
-  if (e.ctrlKey && e.code === "Space") { e.preventDefault(); if (!$("#micBtn").disabled) voice.toggle(); return; }
+  if (e.ctrlKey && e.shiftKey && e.code === "Space") { e.preventDefault(); if (!$("#convBtn").disabled) voice.toggleConversation(); return; }
+  if (e.ctrlKey && e.code === "Space") { e.preventDefault(); if (!$("#micBtn").disabled) voice.listenOnce(); return; }
   if (e.key === "Escape") {
-    if (voice.recording) { voice.cancel(); return; }
-    if (voice.audio) { voice.stopSpeaking(); return; }
+    if (voice.recording || voice.audio) { voice.stopAll(); return; }
     if ($("#app").classList.contains("side-open")) { toggleSide(); return; }
   }
   if (e.ctrlKey && !e.shiftKey) {
@@ -547,10 +564,15 @@ function renderSettings() {
     </div>
     <div class="panel">
       <h2>Голос</h2>
-      <label class="toggle"><input type="checkbox" id="speakToggle" ${voice.speakReplies ? "checked" : ""} ${p.configured && prof === "AUTHORIZED_CLOUD" ? "" : "disabled"}> Озвучивать ответы голосом Gemini</label>
+      <div class="muted" style="font-size:13.5px">Речь распознаёт Gemini; отвечает голосом локальный синтез (Piper, голос «Денис») —
+        ответ начинает звучать, пока Gemini ещё пишет. Микрофон слушает только когда включён (кнопка или разговор); речь определяется на компьютере,
+        в облако уходят только сами фразы.</div>
+      <label class="toggle"><input type="checkbox" id="speakToggle" ${voice.speakReplies ? "checked" : ""}> Озвучивать ответы и на текстовые запросы</label>
       <label class="toggle"><input type="checkbox" id="muteToggle" ${voice.muted ? "checked" : ""}> Выключить микрофон</label>
-      <div class="faint" style="font-size:12.5px;margin-top:8px">Сейчас голос работает по нажатию (кнопка микрофона или Ctrl+Space). Запись начинается только по вашему действию и сразу закрывается после фразы.
-        Голосовое пробуждение «Джарвис» — следующий этап.</div>
+      <div class="field"><span style="font-size:13.5px">Пауза, после которой фраза считается законченной:</span>
+        <input type="range" id="silenceRange" min="400" max="1500" step="50" value="${voice.silenceMs}" style="flex:1;min-width:160px">
+        <span class="faint" id="silenceVal">${(voice.silenceMs / 1000).toFixed(2).replace(".", ",")} с</span></div>
+      <div id="voiceTurns" style="margin-top:12px"></div>
     </div>
     <div class="panel">
       <h2>Разрешения</h2>
@@ -588,6 +610,11 @@ function renderSettings() {
   }));
   $("#speakToggle", el).addEventListener("change", (e) => { voice.speakReplies = e.target.checked; localStorage.setItem("jarvis.speak", e.target.checked ? "1" : "0"); });
   $("#muteToggle", el).addEventListener("change", (e) => { voice.setMuted(e.target.checked); renderStatus(); renderComposer(); });
+  $("#silenceRange", el).addEventListener("input", (e) => {
+    voice.silenceMs = +e.target.value; localStorage.setItem("jarvis.silenceMs", String(voice.silenceMs));
+    $("#silenceVal", el).textContent = (voice.silenceMs / 1000).toFixed(2).replace(".", ",") + " с";
+  });
+  renderVoiceTurns($("#voiceTurns", el));
   $("#devToggle", el).addEventListener("change", (e) => {
     S.dev = e.target.checked; localStorage.setItem("jarvis.dev", S.dev ? "1" : "0"); turnCache.clear(); $("#thread").innerHTML = "";
   });
@@ -595,6 +622,17 @@ function renderSettings() {
     localStorage.setItem("jarvis.reduceMotion", e.target.checked ? "1" : "0");
     document.documentElement.classList.toggle("anim-off", e.target.checked);
   });
+}
+
+async function renderVoiceTurns(box) {
+  let turns = [];
+  try { turns = await link.request("voice.turns", { limit: 10 }); } catch { return; }
+  if (!turns.length) { box.innerHTML = '<div class="faint" style="font-size:12.5px">Замеры появятся после первых голосовых фраз.</div>'; return; }
+  const s = (v) => v == null ? "—" : (v / 1000).toFixed(1).replace(".", ",");
+  box.innerHTML = `<h2 style="font-size:13.5px;margin:0 0 4px">Задержка последних голосовых ходов, с (от конца вашей фразы)</h2>
+    <table class="tbl"><thead><tr><th>Фраза</th><th>Распознано</th><th>Первое слово ответа</th><th>Первый звук</th><th>Ответ готов</th></tr></thead><tbody>
+    ${turns.map((t) => `<tr><td>${esc((t.transcript || "—").slice(0, 46))}</td><td>${s(t.ms.stt_end)}</td><td>${s(t.ms.ttft)}</td>
+      <td><b>${s(t.ms.first_audio_played ?? t.ms.first_audio_sent)}</b></td><td>${s(t.ms.answer_done)}</td></tr>`).join("")}</tbody></table>`;
 }
 
 // ------------------------------------------------------------------ toasts

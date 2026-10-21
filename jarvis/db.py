@@ -68,6 +68,15 @@ MIGRATIONS: list[str] = [
         cost_usd REAL, latency_ms REAL, ok INTEGER NOT NULL, error_kind TEXT);
     CREATE INDEX usage_provider ON provider_usage(provider, ts);
     """,
+    # 5 — voice turn latency telemetry (epoch seconds per stage)
+    """
+    CREATE TABLE voice_turns(
+        id TEXT PRIMARY KEY, created_at REAL NOT NULL, task_id TEXT, transcript TEXT, route TEXT,
+        stt_model TEXT, llm_model TEXT, tts_engine TEXT, error TEXT,
+        speech_start REAL, speech_end REAL, stt_start REAL, stt_end REAL, request_start REAL, ttft REAL,
+        first_sentence REAL, tts_start REAL, first_audio_sent REAL, first_audio_played REAL, answer_done REAL,
+        speech_done REAL);
+    """,
 ]
 
 

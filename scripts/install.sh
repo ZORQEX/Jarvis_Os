@@ -37,6 +37,15 @@ Categories=Utility;Office;
 StartupWMClass=jarvis-workos
 DESK
 
+# Local speech (Piper, GPL-3.0) in its own virtualenv, used as a separate process. Voice "denis" (CC0 dataset).
+PIPER="$HOME/.local/share/jarvis/piper"
+if [[ ! -x "$PIPER/.venv/bin/python" ]]; then
+  mkdir -p "$PIPER/voices" && (cd "$PIPER" && uv venv -q --python 3.12 .venv && uv pip install -q --python .venv/bin/python "piper-tts==1.8.0")
+fi
+for f in ru_RU-denis-medium.onnx ru_RU-denis-medium.onnx.json; do
+  [[ -s "$PIPER/voices/$f" ]] || curl -fsSL -o "$PIPER/voices/$f" "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/denis/medium/$f"
+done
+
 if [[ ${1:-} == --service ]]; then
   mkdir -p "$(dirname "$UNIT")"
   cat > "$UNIT" <<UNITEOF

@@ -79,19 +79,27 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return None
 
     # --- control -----------------------------------------------------------
-    if re.fullmatch(r"(стоп|stop|остановись|остановить все|останови все|останови всё|прекрати все|экстренная остановка|"
-                    r"emergency stop|стоп все|стоп стоп)", t):
+    if re.fullmatch(r"(экстренная остановка|остановить все|останови все|прекрати все|emergency stop|стоп все|"
+                    r"стоп стоп|отмени все)", t):
         return Route("control", args={"op": "estop"}, why="Экстренная остановка")
-    if re.fullmatch(r"(замолчи|хватит|хватит говорить|помолчи|тише говори|stop talking|shut up|не говори|достаточно)", t):
-        return Route("control", args={"op": "stop_speech"}, why="Остановить речь")
+    # Conversational stop: stop speaking and drop the current answer; nothing else is blocked.
+    if re.fullmatch(r"(стоп|stop|остановись|подожди|погоди|секунду|замолчи|хватит|хватит говорить|помолчи|"
+                    r"тише говори|stop talking|shut up|не говори|достаточно|всё хватит|все хватит)", t):
+        return Route("control", args={"op": "interrupt"}, why="Перебить ответ")
     if re.fullmatch(r"(отмени|отмена|отменить|отмени задачу|отмени это|cancel|cancel task)", t):
         return Route("control", args={"op": "cancel_last"}, why="Отмена задачи")
-    if re.fullmatch(r"(пауза|поставь на паузу|приостанови|подожди|pause)", t):
+    if re.fullmatch(r"(пауза|поставь на паузу|приостанови|pause)", t):
         return Route("control", args={"op": "pause_all"}, why="Пауза")
     if re.fullmatch(r"(продолжи|продолжай|возобнови|resume|continue|сними блокировку|можно продолжать)", t):
         return Route("control", args={"op": "resume_all"}, why="Продолжить")
     if re.fullmatch(r"(новый разговор|начни заново|новая беседа|new chat|new conversation)", t):
         return Route("control", args={"op": "new_conversation"}, why="Новый разговор")
+
+    # --- deterministic calculations (no AI) -------------------------------------
+    from .calc import answer as calc_answer
+    calc = calc_answer(raw)
+    if calc:
+        return Route("answer", reply=calc, why="Локальный расчёт")
 
     # --- simple replies --------------------------------------------------------
     if re.fullmatch(r"(привет|здравствуй|здравствуйте|добрый (день|вечер)|доброе утро|hi|hello|hey)( джарвис)?", t):
@@ -105,10 +113,9 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("reply", reply="tasks", why="Статус задач")
 
     # --- system ----------------------------------------------------------------
-    if re.search(r"(состояние|статус|как (там )?(дела у )?) ?(системы|компьютера|ноутбука)|сколько (свободного )?"
-                 r"|загрузк[аи] процессора|что с (памятью|диском|батареей|процессором)"
-                 r"|сколько (свободного )?"
-                 r"(места|памяти)|заряд|батаре|температур[аы] (процессора|cpu)|нагрузк[аи] (процессора|cpu)|"
+    if re.search(r"(состояние|статус|как (там )?(дела у )?) ?(системы|компьютера|ноутбука)|"
+                 r"сколько (свободного )?(места|памяти)|заряд|батаре|температур[аы] (процессора|cpu)|"
+                 r"(нагрузк[аи]|загрузк[аи]) (процессора|cpu)|что с (памятью|диском|батареей|процессором)|"
                  r"system (status|info)|battery|disk space|how much (memory|space)", t):
         return Route("tool", "system_info", {}, why="Чтение /proc и /sys")
 

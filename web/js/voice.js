@@ -1,151 +1,217 @@
-// Voice: push-to-talk capture and spoken replies.
-// LISTENING is reported only while a real microphone stream is open, and the
-// microphone is released immediately after each utterance.
-
+// Voice: local voice-activity detection, hands-free conversation, streamed speech playback, barge-in.
+// The microphone is open only while listening is on (shown in the UI); only detected speech segments are
+// sent for recognition. LISTENING is reported only while a real microphone stream is open.
 import { setLevel } from "./companion.js";
 
+const now = () => performance.timeOrigin + performance.now();   // epoch ms, same clock as the core
+
 export class Voice {
-  constructor({ onState, onTranscript, onError, link }) {
-    this.onState = onState;          // (voiceState: 'off'|'listening'|'transcribing'|'speaking'|null)
-    this.onTranscript = onTranscript;
-    this.onError = onError;
+  constructor({ link, onState, onError, onTurn }) {
     this.link = link;
-    this.stream = null;
-    this.rec = null;
-    this.chunks = [];
-    this.audio = null;
+    this.onState = onState;
+    this.onError = onError;
+    this.onTurn = onTurn || (() => {});
     this.muted = localStorage.getItem("jarvis.micMuted") === "1";
     this.speakReplies = localStorage.getItem("jarvis.speak") === "1";
-    this.state = null;
-    this.supported = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+    this.silenceMs = +(localStorage.getItem("jarvis.silenceMs") || 650);
+    this.supported = !!(navigator.mediaDevices?.getUserMedia && window.AudioWorkletNode);
+    this.state = null;            // null | listening | recording | transcribing | speaking | interrupted
+    this.conversation = false;    // hands-free: keep listening after each answer
+    this.once = false;            // single utterance (mic button)
+    this.stream = null; this.ctx = null; this.node = null;
+    this.out = null; this.playing = []; this.nextAt = 0;
+    this.turnOf = new Map();      // task_id -> turn id (telemetry)
+    this.dropped = new Set();     // task ids interrupted: ignore late audio
+    this.resetVad();
   }
 
-  set(state) { this.state = state; this.onState(state); }
+  set(s) { if (this.state !== s) { this.state = s; this.onState(s); } }
+  get listening() { return !!this.stream; }
+  get recording() { return this.state === "recording"; }
+  get audio() { return this.playing.length > 0; }
+
+  resetVad() {
+    this.floor = 0.004; this.voiced = 0; this.silent = 0; this.seg = null; this.preroll = []; this.segStart = 0;
+  }
 
   setMuted(m) {
     this.muted = m;
     localStorage.setItem("jarvis.micMuted", m ? "1" : "0");
-    if (m) this.cancel();
+    if (m) this.closeMic();
     this.onState(this.state);
   }
 
-  get recording() { return this.rec?.state === "recording"; }
-
-  async toggle() {
-    if (this.recording) return this.stop();
-    return this.start();
-  }
-
-  async start() {
-    if (this.muted) { this.onError("Микрофон выключен — включите его в панели приватности"); return; }
-    if (!this.supported) { this.onError("Запись звука недоступна в этом окне"); return; }
-    this.stopSpeaking();
+  // ---------------------------------------------------------------- microphone
+  async openMic() {
+    if (this.stream) return true;
+    if (this.muted) { this.onError("Микрофон выключен — включите его в панели приватности"); return false; }
+    if (!this.supported) { this.onError("Запись звука недоступна в этом окне"); return false; }
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
     } catch (e) {
       this.onError(e.name === "NotAllowedError" ? "Нет доступа к микрофону" : "Микрофон не найден");
-      return;
+      return false;
     }
-    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
-    this.rec = new MediaRecorder(this.stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : {});
-    this.chunks = [];
-    this.rec.ondataavailable = (e) => e.data.size && this.chunks.push(e.data);
-    this.rec.onstop = () => this.finish();
-    this.rec.start(250);
-    this.startedAt = performance.now();
-    this.meter();
+    this.ctx = new AudioContext();
+    await this.ctx.audioWorklet.addModule("/static/js/vad-worklet.js");
+    const src = this.ctx.createMediaStreamSource(this.stream);
+    this.node = new AudioWorkletNode(this.ctx, "vad-frames");
+    this.node.port.onmessage = (e) => this.frame(e.data);
+    src.connect(this.node);
+    this.resetVad();
+    this.idleSince = now();
     this.set("listening");
-    // Hard cap: 60 s per utterance.
-    this.capTimer = setTimeout(() => this.stop(), 60000);
+    return true;
   }
 
-  meter() {
-    const ctx = new AudioContext();
-    const src = ctx.createMediaStreamSource(this.stream);
-    const an = ctx.createAnalyser();
-    an.fftSize = 512;
-    src.connect(an);
-    const buf = new Uint8Array(an.fftSize);
-    this.actx = ctx;
-    const tick = () => {
-      if (!this.recording) { setLevel(0); return; }
-      an.getByteTimeDomainData(buf);
-      let sum = 0;
-      for (const v of buf) { const x = (v - 128) / 128; sum += x * x; }
-      const rms = Math.sqrt(sum / buf.length);
-      const lvl = Math.min(1, rms * 6);
-      setLevel(lvl);
-      document.documentElement.style.setProperty("--lvl", lvl.toFixed(3));
-      requestAnimationFrame(tick);
-    };
-    tick();
-  }
-
-  release() {
-    clearTimeout(this.capTimer);
+  closeMic() {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
-    this.actx?.close();
-    this.actx = null;
+    this.node?.disconnect(); this.node = null;
+    this.ctx?.close(); this.ctx = null;
+    this.resetVad();
     setLevel(0);
-    document.documentElement.style.setProperty("--lvl", "0");
+    if (["listening", "recording"].includes(this.state)) this.set(this.audio ? "speaking" : null);
   }
 
-  stop() { if (this.recording) this.rec.stop(); }
-
-  cancel() {
-    if (this.recording) { this.rec.onstop = null; this.rec.stop(); }
-    this.release();
-    this.chunks = [];
-    if (this.state === "listening") this.set(null);
+  async listenOnce() {                      // mic button: one utterance, ends by itself on silence
+    if (this.listening && !this.conversation) { this.closeMic(); return; }
+    this.once = true;
+    await this.openMic();
   }
 
-  async finish() {
-    this.release();
-    const dur = performance.now() - this.startedAt;
-    const blob = new Blob(this.chunks, { type: this.rec.mimeType || "audio/webm" });
-    this.chunks = [];
-    if (dur < 400 || blob.size < 1500) { this.set(null); return; }
+  async toggleConversation() {
+    this.conversation = !this.conversation;
+    if (this.conversation) { this.once = false; await this.openMic() || (this.conversation = false); }
+    else this.closeMic();
+    this.onState(this.state);
+  }
+
+  // ---------------------------------------------------------------- VAD (local, ~20 ms frames)
+  frame({ rms, pcm }) {
+    const speaking = this.audio;
+    // Higher bar while JARVIS talks, so its own voice from the speakers is not taken for the user.
+    const thr = Math.max(0.012, this.floor * 3.2) * (speaking ? 2.4 : 1);
+    const need = speaking ? 14 : 4;          // frames of voice to start (280 ms / 80 ms)
+    setLevel(Math.min(1, rms * 8));
+    if (!this.seg) {
+      this.preroll.push(pcm);
+      if (this.preroll.length > 20) this.preroll.shift();     // keep 400 ms before speech start
+      if (rms > thr) this.voiced++; else { this.voiced = 0; this.floor = this.floor * 0.995 + rms * 0.005; }
+      if (this.voiced >= need) this.startSegment();
+      if (this.conversation && now() - this.idleSince > 180000) {   // 3 min without speech: stop listening
+        this.conversation = false; this.closeMic(); this.onError("Разговор завершён: 3 минуты тишины");
+      }
+      return;
+    }
+    this.seg.push(pcm);
+    if (rms > thr * 0.7) this.silent = 0; else this.silent += 20;
+    const dur = this.seg.length * 20;
+    if ((this.silent >= this.silenceMs && dur > 300) || dur > 30000) this.endSegment();
+  }
+
+  startSegment() {
+    this.segStart = now() - this.preroll.length * 20;
+    this.seg = this.preroll.slice(0);
+    this.preroll = [];
+    this.silent = 0;
+    if (this.audio) this.bargeIn();
+    this.set("recording");
+    this.link.request("voice.warm").catch(() => {});        // warm the cloud connection while the user speaks
+  }
+
+  async endSegment() {
+    const frames = this.seg; this.seg = null; this.voiced = 0;
+    const speechEnd = now() - this.silent;
+    const voicedMs = frames.length * 20 - this.silent;
+    if (voicedMs < 250) { this.set("listening"); return; }
+    const wav = encodeWav(frames);
+    this.idleSince = now();
+    if (this.once && !this.conversation) { this.once = false; this.closeMic(); }
     this.set("transcribing");
     try {
-      const b64 = await blobToB64(blob);
-      const r = await this.link.request("voice.transcribe", { audio_b64: b64, mime: blob.type }, 45000);
-      this.set(null);
-      if (r.text) this.onTranscript(r.text);
-      else this.onError("Не расслышал — попробуйте ещё раз");
+      const r = await this.link.request("voice.transcribe", {
+        audio_b64: await b64(wav), mime: "audio/wav", speech_start: this.segStart / 1000, speech_end: speechEnd / 1000,
+      }, 45000);
+      if (r.task_id && r.turn) this.turnOf.set(r.task_id, r.turn);
+      if (r.turn) this.turnOf.set("notice-" + r.turn, r.turn);
+      this.onTurn(r);
     } catch (e) {
-      this.set(null);
       this.onError(e.message);
     }
+    this.set(this.listening ? "listening" : (this.audio ? "speaking" : null));
   }
 
-  // ---------------------------------------------------------------- speech out
-  async speak(text) {
-    if (!this.speakReplies || !text) return;
-    const clean = text.replace(/[*_`#>]/g, "").replace(/\n+/g, " ").slice(0, 900);
+  // ---------------------------------------------------------------- playback queue
+  async enqueue(ev) {
+    if (this.dropped.has(ev.task_id)) return;
+    if (!this.out) this.out = new AudioContext();
+    if (this.out.state === "suspended") await this.out.resume();
+    let buf;
     try {
-      const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json", "X-Jarvis": "1" },
-        body: JSON.stringify({ text: clean }) });
-      if (!res.ok) throw new Error((await res.json()).error || "TTS недоступен");
-      const url = URL.createObjectURL(await res.blob());
-      this.stopSpeaking();
-      const a = new Audio(url);
-      this.audio = a;
-      a.onplay = () => this.set("speaking");
-      a.onended = a.onpause = () => { URL.revokeObjectURL(url); if (this.audio === a) { this.audio = null; this.set(null); } };
-      await a.play();
-    } catch (e) {
-      this.onError("Озвучивание не удалось: " + e.message + " (текст ответа показан)");
+      const bytes = Uint8Array.from(atob(ev.audio_b64), (c) => c.charCodeAt(0));
+      buf = await this.out.decodeAudioData(bytes.buffer);
+    } catch { return; }
+    if (this.dropped.has(ev.task_id)) return;
+    const src = this.out.createBufferSource();
+    src.buffer = buf;
+    src.connect(this.out.destination);
+    const at = Math.max(this.out.currentTime + 0.02, this.nextAt);
+    src.start(at);
+    this.nextAt = at + buf.duration;
+    const item = { src, task: ev.task_id };
+    this.playing.push(item);
+    src.onended = () => {
+      this.playing = this.playing.filter((x) => x !== item);
+      if (!this.playing.length && this.state === "speaking") this.set(this.listening ? "listening" : null);
+    };
+    if (this.state !== "recording" && this.state !== "transcribing") this.set("speaking");
+    const turn = this.turnOf.get(ev.task_id);
+    if (turn && ev.seq === 1) {
+      const delay = Math.max(0, (at - this.out.currentTime) * 1000);
+      setTimeout(() => this.link.request("voice.metric", { turn, field: "first_audio_played", ts: (now()) / 1000 })
+        .catch(() => {}), delay);
     }
   }
 
-  stopSpeaking() {
-    if (this.audio) { const a = this.audio; this.audio = null; a.pause(); this.set(null); }
+  stopSpeaking(taskId) {
+    const victims = taskId ? this.playing.filter((x) => x.task === taskId) : this.playing;
+    for (const x of victims) { try { x.src.stop(); } catch { } }
+    this.playing = this.playing.filter((x) => !victims.includes(x));
+    if (!this.playing.length) this.nextAt = 0;
+    if (!this.playing.length && this.state === "speaking") this.set(this.listening ? "listening" : null);
+  }
+
+  bargeIn() {                                 // the user started talking over JARVIS
+    for (const x of this.playing) this.dropped.add(x.task);
+    this.stopSpeaking();
+    this.set("interrupted");
+    this.link.request("voice.interrupt").catch(() => {});
+  }
+
+  stopAll() {                                 // Esc / stop button
+    for (const x of this.playing) this.dropped.add(x.task);
+    this.stopSpeaking();
+    if (this.seg) { this.seg = null; this.voiced = 0; }
+    this.link.request("voice.interrupt").catch(() => {});
   }
 }
 
-function blobToB64(blob) {
+function encodeWav(frames) {
+  const n = frames.reduce((a, f) => a + f.length, 0);
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 16000, true);
+  v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
+  let o = 44;
+  for (const f of frames) for (let i = 0; i < f.length; i++, o += 2) v.setInt16(o, Math.max(-1, Math.min(1, f[i])) * 0x7fff, true);
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+function b64(blob) {
   return new Promise((res, rej) => {
     const r = new FileReader();
     r.onload = () => res(String(r.result).split(",")[1]);

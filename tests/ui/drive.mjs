@@ -8,7 +8,9 @@ const [port, tokenFile, outDir, scenario = "smoke", w = "1240", h = "800", schem
 const token = fs.readFileSync(tokenFile, "utf8").trim();
 fs.mkdirSync(outDir, { recursive: true });
 const exe = ["/usr/bin/chromium", "/usr/bin/google-chrome-stable"].find((p) => fs.existsSync(p));
-const browser = await chromium.launch({ executablePath: exe, headless: true, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] });
+const fakeAudio = process.env.FAKE_AUDIO ? [`--use-file-for-fake-audio-capture=${process.env.FAKE_AUDIO}`] : [];
+const browser = await chromium.launch({ executablePath: exe, headless: true,
+  args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required", ...fakeAudio] });
 const ctx = await browser.newContext({ viewport: { width: +w, height: +h }, colorScheme: scheme, deviceScaleFactor: 1.5, locale: "ru-RU" });
 const page = await ctx.newPage();
 const errors = [];
@@ -186,6 +188,30 @@ if (scenario === "two") {
   await waitDone(); timings.research_and_file_ms = Date.now() - s;
   await page.waitForTimeout(600);
   await shot("two-04-file-saved");
+}
+
+if (scenario === "voiceui") {
+  // The fake microphone plays FAKE_AUDIO (a spoken question followed by silence) in a loop.
+  await page.evaluate(() => {
+    window.__voiceLog = [];
+    const J = window.__jarvis;
+    const orig = J.voice.onState;
+    J.voice.onState = (s) => { window.__voiceLog.push([Math.round(performance.now()), s]); orig(s); };
+  });
+  const t0 = Date.now();
+  await page.click("#convBtn");
+  await page.waitForFunction(() => window.__voiceLog.some(([, s]) => s === "speaking"), null, { timeout: 60000 });
+  timings.until_speaking_ms = Date.now() - t0;
+  await page.waitForTimeout(400);
+  await shot("voice-01-speaking");
+  // The loop repeats the question while JARVIS talks: this exercises barge-in.
+  await page.waitForFunction(() => window.__voiceLog.some(([, s]) => s === "interrupted"), null, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(600);
+  await shot("voice-02-after");
+  await page.click("#convBtn");
+  timings.voice_states = await page.evaluate(() => window.__voiceLog.map(([t, s]) => `${t}:${s}`).join(" "));
+  timings.user_msgs = await page.evaluate(() => window.__jarvis.S.messages.filter((m) => m.role === "user").map((m) => m.text));
+  timings.turns = await page.evaluate(async () => (await window.__jarvis.link.request("voice.turns", { limit: 3 })).map((t) => ({ text: t.transcript, ms: t.ms })));
 }
 
 console.log(JSON.stringify({ errors, timings, state: await page.evaluate(() => window.__jarvis.S.core) }, null, 1));

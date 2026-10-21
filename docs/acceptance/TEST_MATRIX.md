@@ -55,3 +55,17 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | LLM planner cannot add a send or lower risk | VERIFIED MOCK | test_llm_planner_cannot_add_send_or_lower_risk |
 | Gmail read/send | NOT IMPLEMENTED | routed to `mail_read`/`email_send` → reported as not connected, no AI call |
 | AI-agency settings page, plan card, developer routing inspector | VERIFIED LOCAL | headless UI run `drive.mjs agency`, 0 console errors |
+
+## Voice conversation (2026-10-21)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Fast path without AI (arithmetic, %, conversions, time/date) | VERIFIED LOCAL | test_voice.py; «25% от 800» first audio 1.8 s |
+| Streamed speech while Gemini writes (sentence buffer → Piper → ordered chunks) | VERIFIED LIVE | scripts/voice_latency.py; first audio 1.9–2.9 s |
+| Hands-free conversation in the window (local VAD, auto end of phrase, keeps listening) | VERIFIED LOCAL (Chromium, fake microphone file) | drive.mjs voiceui: listening→recording→transcribing→speaking→listening |
+| Barge-in while JARVIS speaks | VERIFIED LOCAL (Chromium, fake microphone) | state «interrupted» then recording |
+| «стоп / хватит / подожди» stop speech and cancel answers, not actions or approvals | VERIFIED MOCK | test_interrupt_stops_speech_and_cancels_answer_but_not_actions |
+| Immediate local acknowledgement for long tasks | VERIFIED LIVE | voice_latency.py: audio at STT end (1.3–1.7 s) |
+| Follow-up context («А сколько ему лет?») | VERIFIED LIVE | answered about Elon Musk |
+| Voice → Claude Code routing («открой проект и проверь ошибку») | VERIFIED MOCK (planner) | live STT of the synthetic phrase was garbled |
+| Real microphone on this desktop | NOT VERIFIED | needs the user's voice and a one-time microphone permission |

@@ -307,7 +307,8 @@ class GeminiProvider(AIProvider):
             if on_thinking:
                 on_thinking(True)
             calls, done = [], None
-            async for ev in self.stream(model, contents, decls, system=system):
+            async for ev in self.stream(model, contents, decls, system=system,
+                                        first_timeout=self.config.voice_first_token_timeout_s if role == "voice" else None):
                 if ev["type"] == "text":
                     if on_thinking:
                         on_thinking(False)
@@ -349,6 +350,8 @@ class GeminiProvider(AIProvider):
                          (time.perf_counter() - t0) * 1000, {"rounds": rounds})
 
     def pick_model(self, role: str) -> str:
+        if role == "voice":
+            return self.config.model_voice
         order = {"main": ["main", "fast"], "fast": ["fast", "main"], "deep": ["deep", "main", "fast"]}[role]
         by_role = {m.role: m for m in self.models.values()}
         for r in order:
@@ -400,7 +403,7 @@ class GeminiProvider(AIProvider):
         return [types.Tool(function_declarations=decls)] if decls else []
 
     async def stream(self, model: str, contents: list, tools: list, system: str = SYSTEM_PROMPT,
-                     thinking_level: str | None = "low") -> AsyncIterator[dict]:
+                     thinking_level: str | None = "low", first_timeout: float | None = None) -> AsyncIterator[dict]:
         """Yields {'type':'text','text':..} / {'type':'call','call':FunctionCall} / {'type':'done','content':Content,
         'usage':..}. Raises ProviderError."""
         from google.genai import types
@@ -420,10 +423,13 @@ class GeminiProvider(AIProvider):
         model = models.pop(0)
         while True:
             try:
+                ftt = first_timeout or self.config.ai_first_token_timeout_s
+                c2 = dict(cfg)
+                if "lite" in model and "thinking_config" in c2:
+                    c2["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
                 it = await asyncio.wait_for(client.aio.models.generate_content_stream(
-                    model=model, contents=contents, config=types.GenerateContentConfig(**cfg)),
-                    self.config.ai_first_token_timeout_s)
-                async for chunk in _timed(it, self.config.ai_timeout_s, self.config.ai_first_token_timeout_s):
+                    model=model, contents=contents, config=types.GenerateContentConfig(**c2)), ftt)
+                async for chunk in _timed(it, self.config.ai_timeout_s, ftt):
                     if first_ms is None:
                         first_ms = (time.perf_counter() - t0) * 1000
                     usage = chunk.usage_metadata or usage
@@ -476,9 +482,12 @@ class GeminiProvider(AIProvider):
             cfg = types.GenerateContentConfig(max_output_tokens=1024)
             if "lite" in model:
                 cfg.thinking_config = types.ThinkingConfig(thinking_level="minimal")
-            try:
-                r = await asyncio.wait_for(client.aio.models.generate_content(
+
+            async def once():
+                return await asyncio.wait_for(client.aio.models.generate_content(
                     model=model, contents=[types.Part.from_bytes(data=audio, mime_type=mime), prompt], config=cfg), 20)
+            try:
+                r = await _hedged(once, self.config.stt_hedge_after_s)
             except Exception as e:   # noqa: BLE001
                 last = classify(e)
                 self._record(False, model)
@@ -527,6 +536,26 @@ class GeminiProvider(AIProvider):
             w.setframerate(rate)
             w.writeframes(data)
         return buf.getvalue()
+
+
+async def _hedged(make, after: float):
+    """Tail-latency guard: if the first request is slow, start an identical second one; take whichever wins."""
+    first = asyncio.ensure_future(make())
+    done, _ = await asyncio.wait({first}, timeout=after)
+    if done:
+        return first.result()
+    second = asyncio.ensure_future(make())
+    pending = {first, second}
+    err = None
+    while pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for t in done:
+            if t.exception() is None:
+                for p in pending:
+                    p.cancel()
+                return t.result()
+            err = t.exception()
+    raise err
 
 
 async def _timed(it, timeout: float, first_timeout: float | None = None):

@@ -54,7 +54,6 @@ class Server:
         r.add_get("/api/events", self.api_events)
         r.add_post("/api/control", self.api_control)
         r.add_post("/api/submit", self.api_submit)
-        r.add_post("/api/tts", self.api_tts)
         r.add_get("/artifact", self.artifact)
         r.add_get("/static/{path:.+}", self.static)
         self.app.on_startup.append(self.on_startup)
@@ -104,15 +103,77 @@ class Server:
     # ------------------------------------------------------------------ lifecycle
     async def on_startup(self, app):
         self.core.scheduler.start()
+        if self.core.director.speech:
+            asyncio.create_task(self._prewarm_speech())
         self._fwd = asyncio.create_task(self._forward())
         asyncio.create_task(self._check_providers())
 
+    async def _prewarm_speech(self):
+        try:
+            await self.core.director.speech.engine.prewarm()
+        except Exception as e:   # noqa: BLE001 — speech is optional; text keeps working
+            self.core.audit.write("speech.prewarm_failed", error=repr(e)[:200])
+
     async def on_cleanup(self, app):
         self._fwd.cancel()
+        if self.core.director.speech:
+            await self.core.director.speech.engine.stop()
         await self.core.scheduler.stop()
         for ws in list(self.sockets):
             await ws.close()
         self.core.audit.write("core.stop")
+
+    async def _warm(self) -> bool:
+        """Called when the user starts speaking: keep the Gemini HTTPS connection warm (no model quota used)."""
+        now_ = time.time()
+        if now_ - getattr(self, "_warmed_at", 0) < 20 or not self.core.gemini.configured():
+            return False
+        self._warmed_at = now_
+        try:
+            pager = await self.core.gemini.client().aio.models.list(config={"page_size": 1})
+            async for _ in pager:
+                break
+            return True
+        except Exception:   # noqa: BLE001
+            return False
+
+    async def _voice_turn(self, data: dict) -> dict:
+        """One spoken request: STT → Director (same path as typed text) → streamed speech."""
+        d = self.core.director
+        if d.privacy_profile() != "AUTHORIZED_CLOUD":
+            raise ValueError("Распознавание голоса идёт через Gemini — в текущем режиме приватности оно выключено")
+        audio = base64.b64decode(data.get("audio_b64", ""), validate=True)
+        if not 1000 < len(audio) < 10 * 1024 * 1024:
+            raise ValueError("Запись слишком короткая или слишком длинная")
+        mime = str(data.get("mime", "audio/wav")).split(";")[0]
+        if mime not in ("audio/webm", "audio/ogg", "audio/wav", "audio/mp4"):
+            raise ValueError("Неподдерживаемый формат записи")
+        sp = d.speech
+        turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
+        if sp:
+            sp.mark(turn, "stt_start")
+        try:
+            text = await self.core.gemini.transcribe(audio, mime)
+        except Exception as e:   # noqa: BLE001
+            if sp:
+                sp.annotate(turn, error=str(e)[:200])
+                sp.say("notice-" + (turn or "x"), "Не удалось распознать речь. Повтори, пожалуйста.", turn)
+            raise ValueError("Не удалось распознать речь: " + str(e)[:150])
+        if sp:
+            sp.mark(turn, "stt_end")
+            sp.annotate(turn, stt_model=getattr(self.core.gemini, "last_transcribe_model", None), transcript=text)
+        self.core.audit.write("voice.transcribed", bytes=len(audio), chars=len(text), turn=turn)
+        if not text.strip():
+            if sp:
+                from .voice.tts import NOT_HEARD
+                sp.say("notice-" + (turn or "x"), NOT_HEARD, turn)
+            return {"text": "", "turn": turn}
+        task_id = None
+        if data.get("submit", True):
+            if sp:
+                sp.mark(turn, "request_start")
+            task_id = await d.submit(text, "voice", turn=turn)
+        return {"text": text, "task_id": task_id, "turn": turn}
 
     async def _check_providers(self):
         """Startup health: model lists for API providers (free), sign-in status for Claude Code (no usage)."""
@@ -216,17 +277,6 @@ class Server:
         tid = await self.core.director.submit(str(body.get("text", "")), source=body.get("source", "api"))
         return web.json_response({"ok": True, "task_id": tid})
 
-    async def api_tts(self, req):
-        body = await req.json()
-        text = str(body.get("text", ""))[:1500]
-        if self.core.director.privacy_profile() != "AUTHORIZED_CLOUD":
-            return web.json_response({"error": "Озвучивание через облако выключено режимом приватности"}, status=403)
-        try:
-            wav = await self.core.gemini.speak(text)
-        except Exception as e:   # noqa: BLE001
-            return web.json_response({"error": str(e)}, status=502)
-        return web.Response(body=wav, content_type="audio/wav")
-
     # ------------------------------------------------------------------ websocket
     async def ws(self, req):
         ws = web.WebSocketResponse(heartbeat=20, max_msg_size=12 * 1024 * 1024)
@@ -255,7 +305,8 @@ class Server:
                                                         if k in ("type", "id", "task_id", "profile", "op")})
         try:
             if typ == "submit":
-                res = {"task_id": await d.submit(str(data.get("text", "")), data.get("source", "text"))}
+                res = {"task_id": await d.submit(str(data.get("text", "")), data.get("source", "text"),
+                                                 speak=bool(data.get("speak")))}
             elif typ == "approve":
                 edited = data.get("edited")
                 res = {"approval": d.decide(data["id"], True, edited if isinstance(edited, dict) else None,
@@ -279,19 +330,17 @@ class Server:
                 self.core.policy.session_grants.discard(str(data.get("tool_id")))
                 res = {"session_grants": sorted(self.core.policy.session_grants)}
             elif typ == "voice.transcribe":
-                if d.privacy_profile() != "AUTHORIZED_CLOUD":
-                    raise ValueError("Распознавание голоса идёт через Gemini — в текущем режиме приватности оно выключено")
-                audio = base64.b64decode(data.get("audio_b64", ""), validate=True)
-                if not 1000 < len(audio) < 10 * 1024 * 1024:
-                    raise ValueError("Запись слишком короткая или слишком длинная")
-                mime = str(data.get("mime", "audio/webm")).split(";")[0]
-                if mime not in ("audio/webm", "audio/ogg", "audio/wav", "audio/mp4"):
-                    raise ValueError("Неподдерживаемый формат записи")
-                t0 = time.perf_counter()
-                text = await self.core.gemini.transcribe(audio, mime)
-                self.core.audit.write("voice.transcribed", bytes=len(audio), chars=len(text),
-                                      ms=round((time.perf_counter() - t0) * 1000))
-                res = {"text": text, "ms": round((time.perf_counter() - t0) * 1000)}
+                res = await self._voice_turn(data)
+            elif typ == "voice.interrupt":
+                res = {"message": await d.control("interrupt")}
+            elif typ == "voice.metric":
+                if d.speech and data.get("field") == "first_audio_played":
+                    d.speech.mark(str(data.get("turn")), "first_audio_played", float(data.get("ts") or time.time()))
+                res = {}
+            elif typ == "voice.warm":
+                res = {"warmed": await self._warm()}
+            elif typ == "voice.turns":
+                res = d.speech.turns(int(data.get("limit", 20))) if d.speech else []
             elif typ == "tool.run":
                 # UI buttons (e.g. "open" on a file row). Same gateway/policy as everything else.
                 if data.get("tool") not in UI_TOOLS:
