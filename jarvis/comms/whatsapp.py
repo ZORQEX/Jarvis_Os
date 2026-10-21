@@ -86,13 +86,53 @@ class WhatsAppProvider(Provider):
         from playwright.async_api import async_playwright
         self.profile.mkdir(parents=True, exist_ok=True)
         os.chmod(self.profile, 0o700)
-        self.pw = await async_playwright().start()
-        self.ctx = await self.pw.chromium.launch_persistent_context(
+        try:
+            self.pw = self.pw or await async_playwright().start()
+            try:
+                self.ctx = await self._launch(exe)
+            except Exception as e:   # noqa: BLE001
+                if "ProcessSingleton" not in str(e) and "already in use" not in str(e):
+                    raise
+                # A browser left over from a previous JARVIS run still holds OUR profile: stop only that one.
+                await self._kill_stale()
+                self.ctx = await self._launch(exe)
+            self.page = self.ctx.pages[0] if self.ctx.pages else await self.ctx.new_page()
+            await self.page.goto(URL, wait_until="domcontentloaded", timeout=45000)
+        except CommsError:
+            raise
+        except Exception as e:   # noqa: BLE001 — nothing was typed yet: safe to retry later
+            await self._close()
+            raise CommsError("WhatsApp Web не запустился", "network", f"{e.__class__.__name__}: {str(e)[:200]}",
+                             retryable=True) from None
+        self._touch()
+
+    async def _launch(self, exe: str):
+        return await self.pw.chromium.launch_persistent_context(
             str(self.profile), executable_path=exe, headless=True, user_agent=UA, locale="ru-RU",
             viewport={"width": 1280, "height": 900}, args=["--disable-extensions", "--no-first-run"])
-        self.page = self.ctx.pages[0] if self.ctx.pages else await self.ctx.new_page()
-        await self.page.goto(URL, wait_until="domcontentloaded", timeout=45000)
-        self._touch()
+
+    async def _kill_stale(self) -> None:
+        """Stop Chromium processes started with JARVIS's own WhatsApp profile (never the user's browser)."""
+        import signal
+        marker = f"--user-data-dir={self.profile}"
+        for pid_dir in Path("/proc").iterdir():
+            if not pid_dir.name.isdigit():
+                continue
+            try:
+                cmd = (pid_dir / "cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if any(c.decode("utf-8", "replace") == marker for c in cmd):
+                try:
+                    os.kill(int(pid_dir.name), signal.SIGTERM)
+                except OSError:
+                    pass
+        await asyncio.sleep(1.5)
+        for f in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+            try:
+                (self.profile / f).unlink()
+            except OSError:
+                pass
 
     async def _close(self) -> None:
         for obj, meth in ((self.ctx, "close"), (self.pw, "stop")):
