@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import re
 import shutil
@@ -277,7 +278,7 @@ class WhatsAppProvider(Provider):
         async with self._lock:
             await self._ensure()
             await self._open_chat(contact)             # failures up to here: nothing was typed → retryable
-            before = await self._out_count()
+            before = (await self._last_out(body) or {}).get("count", 0)
             comp = await self._first(SEL_COMPOSER, 5)
             await comp.click()
             lines = body.split("\n")
@@ -302,38 +303,41 @@ class WhatsAppProvider(Provider):
             raise CommsError("WhatsApp не показал отправленное сообщение — статус неизвестен", "unknown", str(st))
 
     async def _debug_snapshot(self, st) -> None:
-        """Local-only evidence when the outcome is unclear (private data dir, never uploaded, overwritten each time)."""
+        """Local-only evidence when the outcome is unclear: the markup around OUR message only (no screenshot of the
+        chat list), in the private data dir, overwritten each time."""
         try:
-            path = self.profile.parent / "whatsapp-last-unknown.png"
-            await self.page.screenshot(path=str(path))
+            path = self.profile.parent / "whatsapp-last-unknown.json"
+            path.write_text(json.dumps(st, ensure_ascii=False)[:20000], "utf-8")
             os.chmod(path, 0o600)
         except Exception:   # noqa: BLE001
             pass
 
-    # Outgoing bubbles: WhatsApp Web marks them with a message id starting with "true_" (older builds: .message-out).
-    _OUT_JS = """() => [...document.querySelectorAll('#main [data-id^="true_"], #main .message-out')]
-        .filter((el, i, all) => !all.some((o) => o !== el && o.contains(el)))"""
-
-    async def _out_count(self) -> int:
-        return await self.page.evaluate(f"(() => ({self._OUT_JS})().length)()")
-
     async def _last_out(self, body: str) -> dict | None:
+        """Find the message we typed by its text in the open chat and read its status ticks.
+        Measured 2026-10-21: the old `.message-out` class no longer exists in WhatsApp Web, so markup classes are not
+        relied on — only the text we sent and the status icon/label next to it."""
         return await self.page.evaluate("""(want) => {
-          const outs = (""" + self._OUT_JS + """)();
-          if (!outs.length) return null;
-          const el = outs[outs.length - 1];
-          const text = (el.querySelector('.copyable-text, span.selectable-text')?.innerText || el.innerText || '');
-          const iconEl = [...el.querySelectorAll('[data-icon]')].reverse()
-              .find((i) => /check|time|clock|pending|status/.test(i.getAttribute('data-icon') || ''));
-          const icon = (iconEl?.getAttribute('data-icon') || '') + ' ' + (iconEl?.getAttribute('aria-label') ||
-              el.querySelector('[aria-label*="Отправлено"], [aria-label*="Доставлено"], [aria-label*="Прочитано"], ' +
-                               '[aria-label*="Sent"], [aria-label*="Delivered"], [aria-label*="Read"], ' +
-                               '[aria-label*="Ожидание"], [aria-label*="Pending"]')?.getAttribute('aria-label') || '');
-          const s = icon.toLowerCase();
+          const norm = (x) => (x || '').replace(/\\s+/g, ' ').trim();
+          const w = norm(want);
+          const root = document.querySelector('#main') || document.body;
+          let hits = [...root.querySelectorAll('span, div')]
+            .filter((e) => !e.closest('footer') && !e.isContentEditable && norm(e.innerText) === w);   // not the input box
+          hits = hits.filter((e) => !hits.some((o) => o !== e && e.contains(o)));      // innermost only
+          if (!hits.length) return { count: 0, status: 'none' };
+          const RX = /check|time|clock|pending|status|отправлен|доставлен|прочитан|ожидани|sent|delivered|read/i;
+          let el = hits[hits.length - 1], marks = [], bubble = el;
+          for (let i = 0; i < 12 && bubble.parentElement && bubble !== root; i++) {
+            bubble = bubble.parentElement;
+            marks = [...bubble.querySelectorAll('[data-icon], [aria-label]')]
+              .map((m) => ((m.getAttribute('data-icon') || '') + ' ' + (m.getAttribute('aria-label') || '')).trim())
+              .filter((s) => RX.test(s));
+            if (marks.length) break;
+          }
+          const s = marks.join(' | ').toLowerCase();
           const status = /ack|read|прочитан/.test(s) ? 'read' : /dblcheck|delivered|доставлен/.test(s) ? 'delivered'
                        : /check|sent|отправлен/.test(s) ? 'sent' : /time|clock|pending|ожидани/.test(s) ? 'pending' : 'unknown';
-          const norm = (x) => x.replace(/\\s+/g, ' ').trim();
-          return { count: outs.length, status, icon: icon.trim(), matches: norm(text).includes(norm(want).slice(0, 60)) };
+          return { count: hits.length, status, marks: marks.slice(0, 6), matches: true,
+                   html: status === 'unknown' ? bubble.outerHTML.slice(0, 6000) : undefined };
         }""", body)
 
     async def verify(self, contact: Contact, body: str, receipt: Receipt) -> tuple[str, str]:
