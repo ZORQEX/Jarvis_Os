@@ -203,6 +203,10 @@ class SpeechManager:
         if s and not s.got_delta:
             s.say(random.choice(ACKS))
 
+    def speak_now(self, task_id: str, text: str, turn_id: str | None = None) -> None:
+        """Speak a phrase now and keep the stream open (the final answer is spoken after it)."""
+        self.start(task_id, turn_id).say(text)
+
     def say(self, task_id: str, text: str, turn_id: str | None = None) -> None:
         s = self.start(task_id, turn_id)
         s.say(text)

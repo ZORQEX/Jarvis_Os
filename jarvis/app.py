@@ -33,6 +33,7 @@ class Core:
     scheduler: Scheduler
     director: Director
     recovered: list[str]
+    comms: object = None          # CommsHub
 
 
 def build(paths: Paths | None = None, config: Config | None = None, extra_tools: list | None = None) -> Core:
@@ -78,8 +79,35 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     engine = FallbackTTS(piper, GeminiTTS(gemini)) if config.tts_engine == "piper" and piper.available() \
         else GeminiTTS(gemini)
     director.speech = SpeechManager(db, bus, engine)
+    comms = build_comms(paths, config, db, bus, audit, registry, policy, gemini, director)
     recovered = tasks.recover_after_restart()
     approvals.expire_old()
     audit.write("core.start", recovered_tasks=len(recovered))
     return Core(paths, config, db, bus, audit, tasks, policy, approvals, registry, gateway, gemini, scheduler,
-                director, recovered)
+                director, recovered, comms)
+
+
+def build_comms(paths, config, db, bus, audit, registry, policy, gemini, director):
+    """Communication agent: Telegram, WhatsApp, e-mail behind one provider contract and one outbox."""
+    import hashlib
+    import os
+
+    from . import secrets
+    from .comms.agent import CommsAgent
+    from .comms.email import EmailProvider
+    from .comms.hub import CommsHub
+    from .comms.telegram import TelegramProvider
+    from .comms.tools import ContactSave, MessageCancel, MessageDeliver, MessageSend, TrustRuleAdd
+    from .comms.whatsapp import WhatsAppProvider
+    home = os.environ.get("JARVIS_HOME")
+    store = secrets.Namespaced("dev-" + hashlib.sha256(home.encode()).hexdigest()[:8] + ":" if home else "")
+    providers = [TelegramProvider(store), WhatsAppProvider(db, paths.data / "whatsapp"), EmailProvider(db, store)]
+    hub = CommsHub(db, bus, audit, providers)
+    for t in (MessageSend(hub), MessageDeliver(hub), MessageCancel(hub), TrustRuleAdd(hub), ContactSave(hub)):
+        registry.tools[t.spec.id] = t
+    policy.hooks.append(hub.policy_hook)
+    director.comms = CommsAgent(hub, gemini, config)
+    director.hub = hub
+    hub.outbox.deliver = director.deliver_job
+    hub.outbox.on_missed = director.on_missed_message
+    return hub

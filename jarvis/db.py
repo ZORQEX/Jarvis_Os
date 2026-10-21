@@ -77,6 +77,23 @@ MIGRATIONS: list[str] = [
         first_sentence REAL, tts_start REAL, first_audio_sent REAL, first_audio_played REAL, answer_done REAL,
         speech_done REAL);
     """,
+    # 6 — communications: outbox (sent + scheduled messages), address book, trusted-automation rules
+    """
+    CREATE TABLE comm_jobs(
+        id TEXT PRIMARY KEY, group_id TEXT, task_id TEXT, step_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        channel TEXT NOT NULL, to_id TEXT NOT NULL, to_name TEXT NOT NULL, to_address TEXT,
+        subject TEXT, body TEXT NOT NULL, due_at REAL,
+        status TEXT NOT NULL CHECK(status IN ('scheduled','sending','sent','failed','cancelled','unknown','missed')),
+        digest TEXT NOT NULL, auth TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT, error_detail TEXT, remote_id TEXT, sent_at REAL, verified TEXT, replaced_by TEXT);
+    CREATE INDEX comm_jobs_status ON comm_jobs(status, due_at);
+    CREATE TABLE contacts(
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT, phone TEXT, telegram TEXT,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL);
+    CREATE TABLE trust_rules(
+        id TEXT PRIMARY KEY, channel TEXT NOT NULL, to_id TEXT NOT NULL, to_name TEXT NOT NULL,
+        created_at REAL NOT NULL, revoked_at REAL);
+    """,
 ]
 
 

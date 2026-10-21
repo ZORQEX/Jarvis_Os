@@ -27,6 +27,9 @@ def clean_for_speech(text: str) -> str:
     t = re.sub(r"https?://\S+", " ", t)
     t = re.sub(r"[*_`#>|]+", "", t)
     t = re.sub(r"\[уточнить[^\]]*\]", "уточнить", t)
+    t = re.sub(r"\b([01]?\d|2[0-3]):00\b", r"\1 ноль-ноль", t)            # 13:00 → «тринадцать ноль-ноль»
+    t = re.sub(r"\b([01]?\d|2[0-3]):0(\d)\b", r"\1 ноль \2", t)
+    t = re.sub(r"\b([01]?\d|2[0-3]):([1-5]\d)\b", r"\1 \2", t)
     t = re.sub(r"\s+", " ", t)
     return t.strip()
 

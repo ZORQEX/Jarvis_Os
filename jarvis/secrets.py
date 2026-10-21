@@ -70,3 +70,23 @@ def clear(account: str) -> None:
     if _have_tool():
         subprocess.run(["secret-tool", "clear", "service", SERVICE, "account", account],
                        capture_output=True, timeout=10)
+
+
+class Namespaced:
+    """Account credentials of one JARVIS home. A development/test home (JARVIS_HOME) gets its own entries, so it can
+    never pick up — and accidentally share — the real Telegram/WhatsApp/mail session of the user's JARVIS."""
+
+    def __init__(self, prefix: str = ""):
+        self.prefix = prefix
+
+    def get(self, account: str) -> str | None:
+        return get(self.prefix + account)
+
+    def store(self, account: str, value: str, label: str) -> None:
+        store(self.prefix + account, value, label + (f" [{self.prefix.rstrip(':')}]" if self.prefix else ""))
+
+    def clear(self, account: str) -> None:
+        clear(self.prefix + account)
+
+    def source(self, account: str) -> str | None:
+        return source(self.prefix + account)

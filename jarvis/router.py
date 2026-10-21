@@ -67,6 +67,31 @@ def _ordinal(tok: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+COMMS_CHANNEL = (r"(телеграм\w*|телеграмм\w*|телег[аеиу]|\bтг\b|telegram|ват[сц]ап\w*|вотсап\w*|вацап\w*|whats ?app|"
+                 r"на почту|по почте|почтой|на (e-?mail|имейл|емейл|мейл)|электронн\w+ почт\w*)")
+COMMS_VERB = r"\b(отправ\w*|напиши|написать|напишите|пошли|послать|перешли|сообщи|скинь|черкни|запланируй)\b"
+
+
+def is_comms(t: str) -> bool:
+    """Messages to people (send / schedule / status / cancel / edit / trust). Pure text drafting stays elsewhere."""
+    if re.search(COMMS_VERB, t) and re.search(COMMS_CHANNEL, t):
+        return True
+    if re.search(r"\b(отправь|пошли|отправить|запланируй)\b.*\bсообщени", t):
+        return True
+    if re.search(r"\b(напиши|отправь|пошли)\s+\w+(у|ю|е|и)\s*[:,—-]", t):     # «напиши Ивану: …»
+        return True
+    if re.search(r"сообщени\w*.*(запланир|отложен)|(запланир|отложен)\w*.*сообщени|"
+                 r"что (ты )?(сегодня )?отправил|что не (удалось|получилось) отправить|какие (письма|сообщения)", t):
+        return True
+    if re.search(r"\b(отмени|измени|поменяй|перенеси)\b.*\b(сообщени|письм|отправк)", t):
+        return True
+    if re.search(r"подтверждени\w* (больше )?не (спрашивай|нужно|надо)|без подтверждения отправляй", t):
+        return True
+    if re.search(r"\bзапомни\b.*\b(почт|адрес|номер|телефон|e-?mail|имейл|телеграм)", t):
+        return True
+    return False
+
+
 def strip_wake(text: str) -> str:
     return WAKE.sub("", text.strip())
 
@@ -76,7 +101,8 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     raw = strip_wake(text)
     t = norm(text)
     if not t:
-        return None
+        # "Джарвис." alone → "Да?"
+        return Route("answer", reply="Да?", why="Обращение по имени") if WAKE.match(text) else None
 
     # --- control -----------------------------------------------------------
     if re.fullmatch(r"(экстренная остановка|остановить все|останови все|прекрати все|emergency stop|стоп все|"
@@ -94,6 +120,10 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("control", args={"op": "resume_all"}, why="Продолжить")
     if re.fullmatch(r"(новый разговор|начни заново|новая беседа|new chat|new conversation)", t):
         return Route("control", args={"op": "new_conversation"}, why="Новый разговор")
+
+    # --- communication: messages, mail, scheduled sends ----------------------------
+    if is_comms(t):
+        return Route("comms", args={"text": raw}, why="Сообщения: Telegram, WhatsApp, почта", level=1)
 
     # --- deterministic calculations (no AI) -------------------------------------
     from .calc import answer as calc_answer

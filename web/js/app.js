@@ -74,6 +74,7 @@ function applySnapshot(d) {
 let floraMod = null, pendingFlora = null;
 function onEvent(ev) {
   floraMod?.onEvent(ev);
+  commsMod?.onEvent(ev);
   const tid = ev.task_id;
   switch (ev.kind) {
     case "message": {
@@ -487,6 +488,13 @@ document.addEventListener("click", async (e) => {
       .catch((er) => { toast(er.message, "err"); t.disabled = false; });
   }
   if (t.dataset.deny) return link.request("deny", { id: t.dataset.deny }).catch((er) => toast(er.message, "err"));
+  if (t.dataset.revise) {
+    const card = t.closest("[data-approval]");
+    const body = $("[data-rev-body]", card)?.value, subject = $("[data-rev-subject]", card)?.value;
+    t.disabled = true;
+    return link.request("comms.revise", { approval_id: t.dataset.revise, body, subject: subject ?? null })
+      .then(() => toast("Изменил — подтвердите ещё раз")).catch((er) => { toast(er.message, "err"); t.disabled = false; });
+  }
   if (t.dataset.taskAct) return link.request(t.dataset.taskAct, { task_id: t.dataset.task }).then((r) => r.message && toast(r.message)).catch((er) => toast(er.message, "err"));
   if (t.dataset.act === "estop_clear") return link.request("estop_clear").then((r) => toast(r.message));
   if (t.dataset.act === "conv") { voice.toggleConversation(); return; }
@@ -507,7 +515,7 @@ document.addEventListener("keydown", (e) => {
     if ($("#app").classList.contains("side-open")) { toggleSide(); return; }
   }
   if (e.ctrlKey && !e.shiftKey) {
-    const m = { Digit1: "chat", Digit2: "tasks", Digit3: "flora", Comma: "settings" }[e.code];
+    const m = { Digit1: "chat", Digit2: "tasks", Digit3: "flora", Digit4: "comms", Comma: "settings" }[e.code];
     if (m) { e.preventDefault(); nav(m); return; }
     if (e.code === "KeyK") { e.preventDefault(); nav("chat"); input.focus(); }
   }
@@ -521,7 +529,7 @@ function toggleSide() {
 }
 
 // ------------------------------------------------------------------ views
-const VIEWS = { chat: "#viewChat", tasks: "#viewTasks", flora: "#viewFlora", settings: "#viewSettings" };
+const VIEWS = { chat: "#viewChat", tasks: "#viewTasks", flora: "#viewFlora", comms: "#viewComms", settings: "#viewSettings" };
 function nav(v) {
   S.view = v;
   $("#app").dataset.view = v;
@@ -531,6 +539,18 @@ function nav(v) {
   if (v === "tasks") renderTasksView();
   if (v === "settings") renderSettings();
   if (v === "flora") renderFlora();
+  if (v === "comms") renderComms();
+}
+
+let commsMod = null;
+async function renderComms() {
+  const el = $("#viewComms");
+  try {
+    commsMod = commsMod || await import("./comms.js");
+    await commsMod.render(el, { link, toast });
+  } catch (e) {
+    el.innerHTML = `<div class="page"><h1>Сообщения</h1><p class="lead">Модуль не загрузился: ${esc(e.message)}</p></div>`;
+  }
 }
 
 async function renderTasksView() {
@@ -699,4 +719,4 @@ function renderAll() { renderStatus(); renderThread(); renderSide(); renderCompo
 
 nav("chat");
 renderAll();
-window.__jarvis = { S, link, voice };   // for automated UI tests
+window.__jarvis = { S, link, voice, render: () => { turnCache.clear(); renderThread(); } };   // for automated UI tests

@@ -470,13 +470,61 @@ class GeminiProvider(AIProvider):
                "usage": usage.model_dump(exclude_none=True) if usage else None,
                "first_token_ms": round(first_ms or 0), "total_ms": round((time.perf_counter() - t0) * 1000)}
 
-    async def transcribe(self, audio: bytes, mime: str, lang_hint: str = "ru") -> str:
+    async def structured(self, system: str, user: str, schema: dict, first_model: str | None = None,
+                         timeout: float = 6.0, max_tokens: int = 1024) -> dict:
+        """One JSON answer that must match `schema` (structured output). Fast model first, same fallback chain."""
+        import json as _json
         from google.genai import types
         self._guard()
         client = self.client()
+        last: ProviderError | None = None
+        for i, model in enumerate(self.chain(first_model or self.config.model_voice)):
+            tmo = timeout if i == 0 else max(timeout, 10.0)     # the fast model gets a short leash
+            cfg = dict(system_instruction=system, response_mime_type="application/json",
+                       response_json_schema=schema, max_output_tokens=max_tokens, temperature=0.0)
+            if "lite" in model:
+                cfg["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
+            t0 = time.perf_counter()
+            try:
+                r = await asyncio.wait_for(client.aio.models.generate_content(
+                    model=model, contents=[user], config=types.GenerateContentConfig(**cfg)), tmo)
+                data = _json.loads(r.text or "")
+                if not isinstance(data, dict):
+                    raise ValueError("not an object")
+                self._record(True, model, (time.perf_counter() - t0) * 1000)
+                self.last_structured_model = model
+                return data
+            except asyncio.CancelledError:
+                raise
+            except ValueError:
+                last = ProviderError("invalid", "Gemini вернул неразборчивый ответ")
+                self._record(False, model)
+                continue
+            except Exception as e:   # noqa: BLE001
+                pe = classify(e)
+                self._record(False, model)
+                if pe.kind in ("server", "quota", "model", "network"):
+                    self._penalize(model, pe.kind)
+                    last = pe
+                    continue
+                raise pe from None
+        raise last or ProviderError("server", "Gemini не ответил")
+
+    async def transcribe(self, audio: bytes, mime: str, lang_hint: str = "ru", names: list[str] | None = None) -> str:
+        from google.genai import types
+        self._guard()
+        client = self.client()
+        # Measured on command clips: the context line turns «отправь диван на WhatsApp» into «отправь Ивану в WhatsApp»
+        # without changing ordinary questions.
         prompt = ("Transcribe this speech verbatim in its original language (usually Russian, sometimes English, "
                   "Kazakh or others). Keep names, numbers, file names and technical terms exact. "
-                  "Output only the transcript. If there is no intelligible speech, output an empty string.")
+                  "Output only the transcript. If there is no intelligible speech, output an empty string. "
+                  "Context: the speaker talks to a desktop voice assistant named «Джарвис»: questions, conversation and "
+                  "commands such as «открой …», «отправь <кому> в Telegram / WhatsApp / на почту: <текст>», "
+                  "«напиши <кому> …», «отмени сообщение …». Recipients are usually Russian first names in the dative "
+                  "case. Write service names as Telegram, WhatsApp; times like 13:00. Do not add words that were not spoken.")
+        if names:
+            prompt += " Names the user often messages: " + ", ".join(names[:15]) + "."
         last = None
         for model in self.chain(self.pick_model("fast")):
             cfg = types.GenerateContentConfig(max_output_tokens=1024)

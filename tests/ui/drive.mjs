@@ -190,6 +190,52 @@ if (scenario === "two") {
   await shot("two-04-file-saved");
 }
 
+if (scenario === "comms") {
+  // Honest states without accounts: the view, the connect forms, and a send command that must NOT pretend.
+  await page.click('[data-nav="comms"]');
+  await page.waitForSelector("#caccounts .pcard", { timeout: 5000 });
+  await page.waitForTimeout(300);
+  await shot("comms-01-view");
+  timings.cards = await page.$$eval("#caccounts .pcard", (els) => els.map((e) => e.innerText.split("\n").slice(0, 2).join(" | ")));
+  await page.click('[data-nav="chat"]');
+  let s = Date.now();
+  await say("Отправь Ивану в Telegram: привет", 50);
+  await page.waitForFunction(() => /не подключён/.test(document.querySelector("#thread")?.innerText || ""), null, { timeout: 15000 });
+  timings.not_connected_reply_ms = Date.now() - s;
+  await page.waitForTimeout(300);
+  await shot("comms-02-not-connected");
+  // Render check of the confirmation card for a message (UI only; no send happens here).
+  await page.evaluate(() => {
+    const { S } = window.__jarvis;
+    const m = S.messages[S.messages.length - 1];
+    const a = { id: "a_ui", task_id: m.task_id, tool_id: "message_send", status: "pending", risk: "high",
+      args: { deliveries: [{ channel: "telegram", to_id: "u:1:1", to_name: "Иван Петров", to_address: "@ivan" }],
+              body: "Привет, буду через час.", due_at: Date.now() / 1000 + 3600 },
+      summary: { title: "Отправка сообщения", action: "Запланировать: Иван Петров (@ivan) в Telegram", impact: "Сообщение уйдёт от вашего имени.",
+                 side_effects: "external" } };
+    S.approvals[a.id] = a;
+    window.__jarvis.render();
+  });
+  await page.waitForSelector(".msgcard", { timeout: 3000 });
+  await page.click(".revise summary");
+  await page.waitForTimeout(200);
+  await page.locator(".msgcard").scrollIntoViewIfNeeded();
+  await shot("comms-03-confirm-card");
+}
+
+if (scenario === "commsqr") {
+  // WhatsApp linking: JARVIS opens WhatsApp Web in its own profile and shows the real QR code (not scanned here).
+  await page.click('[data-nav="comms"]');
+  await page.waitForSelector('[data-ca="wa-link"]', { timeout: 5000 });
+  const s = Date.now();
+  await page.click('[data-ca="wa-link"]');
+  await page.waitForSelector("img.qr", { timeout: 60000 });
+  timings.qr_visible_ms = Date.now() - s;
+  await page.locator("img.qr").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  await shot("comms-04-whatsapp-qr");
+}
+
 if (scenario === "voiceui") {
   // The fake microphone plays FAKE_AUDIO (a spoken question followed by silence) in a loop.
   await page.evaluate(() => {

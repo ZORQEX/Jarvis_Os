@@ -103,6 +103,8 @@ class Server:
     # ------------------------------------------------------------------ lifecycle
     async def on_startup(self, app):
         self.core.scheduler.start()
+        if self.core.comms:
+            asyncio.get_running_loop().create_task(self.core.comms.start())
         if self.core.director.speech:
             asyncio.create_task(self._prewarm_speech())
         self._fwd = asyncio.create_task(self._forward())
@@ -119,6 +121,8 @@ class Server:
         if self.core.director.speech:
             await self.core.director.speech.engine.stop()
         await self.core.scheduler.stop()
+        if self.core.comms:
+            await self.core.comms.stop()
         for ws in list(self.sockets):
             await ws.close()
         self.core.audit.write("core.stop")
@@ -153,7 +157,8 @@ class Server:
         if sp:
             sp.mark(turn, "stt_start")
         try:
-            text = await self.core.gemini.transcribe(audio, mime)
+            names = self.core.comms.vocabulary() if self.core.comms else None
+            text = await self.core.gemini.transcribe(audio, mime, names=names)
         except Exception as e:   # noqa: BLE001
             if sp:
                 sp.annotate(turn, error=str(e)[:200])
@@ -298,6 +303,9 @@ class Server:
             self.sockets.discard(ws)
         return ws
 
+    async def _comms(self, typ, data):
+        return await _comms_action(self, typ, data)
+
     async def _handle(self, ws, data: dict):
         rid = data.get("req_id")
         d = self.core.director
@@ -391,6 +399,8 @@ class Server:
                     await p.health_check()
                 self._publish_providers()
                 res = {"providers": d.providers.describe()}
+            elif str(typ).startswith("comms.") and self.core.comms:
+                res = await self._comms(typ, data)
             elif typ == "flora.action" and d.flora:
                 res = await d.flora.ui_action(d, data)
             else:
@@ -403,6 +413,71 @@ class Server:
                                              ensure_ascii=False))
             except (ConnectionResetError, RuntimeError):
                 pass
+
+
+COMMS_UI = {"comms.state", "comms.telegram.begin", "comms.telegram.finish", "comms.telegram.logout",
+            "comms.email.connect", "comms.email.logout", "comms.whatsapp.link", "comms.whatsapp.logout",
+            "comms.cancel", "comms.revise", "comms.rule.revoke", "comms.contact.save", "comms.contact.delete",
+            "comms.announce", "comms.jobs"}
+
+
+async def _comms_action(server, typ: str, data: dict) -> dict:
+    """Account connection is always user-driven from the window. Passwords, codes and sessions pass through here
+    to the provider / OS keyring only; they are never audited, logged or shown to any AI model."""
+    core, d = server.core, server.core.director
+    hub = core.comms
+    if typ not in COMMS_UI:
+        raise ValueError("Неизвестный запрос связи")
+    tg, wa, em = hub.providers.get("telegram"), hub.providers.get("whatsapp"), hub.providers.get("email")
+    if typ == "comms.telegram.begin":
+        res = await tg.begin_login(str(data.get("api_id", "")), str(data.get("api_hash", "")), str(data.get("phone", "")))
+        core.audit.write("comms.telegram_code_requested")
+    elif typ == "comms.telegram.finish":
+        res = await tg.finish_login(data.get("code"), data.get("password"))
+        if res.get("stage") == "done":
+            core.audit.write("comms.account_connected", channel="telegram")
+    elif typ == "comms.telegram.logout":
+        await tg.logout()
+        core.audit.write("comms.account_disconnected", channel="telegram")
+        res = {}
+    elif typ == "comms.email.connect":
+        res = await em.connect(str(data.get("address", "")), str(data.get("password", "")),
+                               data.get("smtp_host") or None, int(data["smtp_port"]) if data.get("smtp_port") else None,
+                               data.get("imap_host"))
+        core.audit.write("comms.account_connected", channel="email")
+    elif typ == "comms.email.logout":
+        await em.logout()
+        core.audit.write("comms.account_disconnected", channel="email")
+        res = {}
+    elif typ == "comms.whatsapp.link":
+        res = await wa.begin_link()
+        core.audit.write("comms.whatsapp_link_started")
+    elif typ == "comms.whatsapp.logout":
+        await wa.logout()
+        core.audit.write("comms.account_disconnected", channel="whatsapp")
+        res = {}
+    elif typ == "comms.cancel":
+        res = {"task_id": await d.run_ui_tool("message_cancel", {"job_ids": [str(data.get("job_id"))]})}
+    elif typ == "comms.revise":
+        await d.comms.revise(d, str(data.get("approval_id")), data.get("body"), data.get("subject"))
+        res = {}
+    elif typ == "comms.rule.revoke":
+        res = {"revoked": hub.revoke_rule(str(data.get("id")))}
+    elif typ == "comms.contact.save":
+        res = {"contact": hub.book.save(str(data.get("name", "")), data.get("email") or None, data.get("phone") or None,
+                                        data.get("telegram") or None)}
+    elif typ == "comms.contact.delete":
+        res = {"deleted": hub.book.delete(str(data.get("id")))}
+    elif typ == "comms.announce":
+        core.db.set_kv("comms_announce", bool(data.get("on")))
+        res = {}
+    elif typ == "comms.jobs":
+        res = {"jobs": hub.outbox.list(limit=int(data.get("limit", 100)))}
+    else:   # comms.state
+        res = {}
+    hub.publish_status()
+    return {**res, "providers": hub.describe(), "rules": hub.rules(), "contacts": hub.book.all(),
+            "announce": bool(core.db.get_kv("comms_announce", True))}
 
 
 async def audio_output(fix: bool = False) -> dict:

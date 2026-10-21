@@ -314,6 +314,21 @@ function packet(p) {
   </dl>`;
 }
 
+const CH_RU = { telegram: "Telegram", whatsapp: "WhatsApp", email: "Почта" };
+
+function messagePacket(a, open) {
+  const x = a.args || {};
+  const to = (x.deliveries || []).map((d) => `${esc(CH_RU[d.channel] || d.channel)} → <b>${esc(d.to_name)}</b>${d.to_address ? ` <span class="faint">${esc(d.to_address)}</span>` : ""}`).join("<br>");
+  const when = x.due_at ? new Date(x.due_at * 1000).toLocaleString("ru-RU", { weekday: "short", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : "сразу после подтверждения";
+  const email = (x.deliveries || []).some((d) => d.channel === "email");
+  return `<dl class="msgcard"><dt>Кому</dt><dd>${to}</dd><dt>Когда</dt><dd>${esc(when)}</dd>
+    ${x.subject ? `<dt>Тема</dt><dd>${esc(x.subject)}</dd>` : ""}<dt>Текст</dt><dd class="body">${esc(x.body)}</dd></dl>
+    ${open ? `<details class="revise" style="margin:0 14px 8px"><summary class="faint" style="cursor:pointer;font-size:12.5px">Изменить текст</summary>
+      ${email ? `<input class="input" data-rev-subject value="${esc(x.subject || "")}" aria-label="Тема письма">` : ""}
+      <textarea data-rev-body rows="3" aria-label="Текст сообщения">${esc(x.body)}</textarea>
+      <button class="btn" data-revise="${esc(a.id)}" style="margin-top:6px">Сохранить и спросить снова</button></details>` : ""}`;
+}
+
 export function approvalCard(a) {
   const s = a.summary || {};
   const open = a.status === "pending";
@@ -335,6 +350,7 @@ export function approvalCard(a) {
     <div class="what">${esc(s.action || s.title)}</div>
     <div class="why">${esc(s.impact || [s.reason, effects].filter(Boolean).join(" · "))}</div>
     ${a.tool_id === "flora_send" ? packet(a.args) : ""}
+    ${a.tool_id === "message_send" ? messagePacket(a, open) : ""}
     ${open ? editable.map((k) => `<textarea data-edit="${esc(k)}" aria-label="Изменить: ${esc(k)}">${esc(a.args[k])}</textarea>`).join("") : ""}
     ${open ? `<div class="actions">
       <button class="btn warn" data-approve="${esc(a.id)}">${ICON.check} Разрешить</button>

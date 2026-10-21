@@ -615,3 +615,20 @@ button.row:hover { background: var(--surface-2); }
 .companion[data-state="INTERRUPTED"] .halo { opacity: .6; }
 .status[data-state="INTERRUPTED"] .status-dot { background: var(--warn); }
 .status[data-state="LISTENING"] .status-dot { background: var(--err); }
+
+/* ---------------------------------------------------------------- messages (comms) */
+.cpill { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); white-space: nowrap; }
+.cpill.ok { background: var(--ok-soft); color: var(--ok); }
+.cpill.warn { background: var(--warn-soft); color: var(--warn); }
+.cpill.err { background: var(--err-soft); color: var(--err); }
+.pcard .ph .cpill { margin-left: auto; }
+.cerr { color: var(--err); font-size: 12.5px; margin-top: 2px; }
+.comms .tbl td:nth-child(3) { overflow-wrap: anywhere; }
+.qr { width: 228px; height: 228px; image-rendering: pixelated; background: #fff; border-radius: 8px; padding: 6px; align-self: flex-start; }
+.msgcard { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13.5px; margin: 2px 14px 10px; }
+.msgcard dt { color: var(--text-3); }
+.msgcard dd { margin: 0; overflow-wrap: anywhere; }
+.msgcard .body { white-space: pre-wrap; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; }
+.revise textarea, .revise input { width: 100%; margin-top: 6px; }
+.pcard .input { flex: none; min-width: 0; width: 100%; }
+.pcard details .input { display: block; }

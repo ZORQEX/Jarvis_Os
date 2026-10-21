@@ -25,12 +25,17 @@ class PolicyEngine:
     def __init__(self):
         self.estop = False
         self.session_grants: set[str] = set()   # tool ids the user allowed for this run
+        self.hooks: list = []    # explicit user rules (e.g. trusted messaging) that may answer "ask" — never "deny"
 
     def evaluate(self, spec: ToolSpec, args: dict) -> Decision:
         if spec.risk == Risk.FORBIDDEN:
             return Decision("deny", "Действие запрещено политикой безопасности")
         if self.estop and spec.side_effects != "none":
             return Decision("deny", "Включена экстренная остановка — действия с последствиями заблокированы")
+        for hook in self.hooks:
+            d = hook(spec, args)
+            if d is not None and d.action == "allow":
+                return d
         if spec.risk == Risk.HIGH:
             return Decision("ask", "Высокий риск: нужно явное подтверждение")
         if spec.risk == Risk.MODERATE:

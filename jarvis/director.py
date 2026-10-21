@@ -66,6 +66,8 @@ class Director:
         self.scheduler, self.config, self.flora = scheduler, config, flora
         self.providers, self.agency = providers, agency
         self.speech = None           # SpeechManager, set by the composition root
+        self.comms = None            # CommsAgent
+        self.hub = None              # CommsHub
         self.rt: dict[str, Runtime] = {}
         self._last_finish: tuple[float, str] | None = None
         self._state = None
@@ -127,7 +129,25 @@ class Director:
             raise ValueError("empty")
         text = text[:8000]
         cid = self.conversation_id()
-        route = rt.route(text, self.ctx(cid))
+        # "Да" / "Нет" to the message JARVIS just asked to confirm (voice or typed in the window; never via the API).
+        if self.comms and source in ("voice", "text"):
+            from .comms.agent import VOICE_APPROVABLE, yes_no
+            yn = yes_no(text)
+            pend = [a for a in self.approvals.pending() if a["tool_id"] in VOICE_APPROVABLE] if yn is not None else []
+            if len(pend) == 1:
+                self.add_message(cid, "user", text, pend[0]["task_id"], meta={"source": source, "decision": yn})
+                if self.speech and turn:
+                    self.speech.annotate(turn, route="approval", transcript=text, task_id=pend[0]["task_id"])
+                r = self.rt.get(pend[0]["task_id"])
+                if r and source == "voice":
+                    r.voice, r.turn = True, turn or r.turn
+                self.audit.write("approval.by_" + source, approval_id=pend[0]["id"], approve=yn)
+                self.decide(pend[0]["id"], yn)
+                return pend[0]["task_id"]
+        ctx = self.ctx(cid)
+        route = rt.route(text, ctx)
+        if self.comms and (route is None or route.kind not in ("control",)) and self.comms.answers_pending(text, ctx):
+            route = rt.Route("comms", args={"text": text}, why="Ответ на уточнение JARVIS", level=1)
         # Control commands act immediately and are not tasks themselves.
         if route and route.kind == "control":
             self.add_message(cid, "user", text, meta={"source": source})
@@ -175,6 +195,11 @@ class Director:
                 await self._run_tool_route(tid, cid, route)
             elif route.kind == "search_open":
                 await self._run_search_open(tid, cid, route)
+            elif route.kind == "comms":
+                if self.comms is None:
+                    self._finish(tid, cid, "Модуль связи не подключён в этой сборке.", meta={"route": "local"})
+                else:
+                    await self.comms.handle(self, tid, cid, text)
             elif route.kind == "flora":
                 if self.flora is None:
                     self._finish(tid, cid, "Сценарий «Флора» ещё не подключён в этой сборке.",
@@ -482,6 +507,50 @@ class Director:
                 self.rt.pop(tid, None)
                 self._touch()
         runtime.task = asyncio.create_task(go())
+
+    # ------------------------------------------------------------------ scheduled messages
+    async def deliver_job(self, job: dict) -> None:
+        """Outbox executor callback: a scheduled message is due. Runs as a visible task through the Gateway."""
+        from .comms.base import CHANNEL_TO
+        cid = self.conversation_id()
+        who = f"{job['to_name']} {CHANNEL_TO.get(job['channel'], '')}"
+        tid = self.tasks.create(f"Отправка по расписанию: {who}", cid, route="comms", level=0)
+        self.rt[tid] = Runtime(voice=bool(self.db.get_kv("comms_announce", True)))
+        try:
+            self.tasks.transition(tid, S.RUNNING, objective="Наступило время отправки")
+            out = await self.gw.execute(tid, "message_deliver", {"job_id": job["id"]},
+                                        "Наступило время отправки (подтверждено вами при планировании)")
+            j = self.hub.outbox.get(job["id"])
+            if j["status"] == "sending":      # policy/validation stopped it before any send attempt
+                j = self.hub.outbox.update(j["id"], status="failed", last_error=out.error or "Не отправлено")
+            if out.status == "ok":
+                text, failed = f"Сообщение {who} отправлено.", False
+                if out.verification and out.verification.status == "unverified":
+                    text += f" Подтверждения от сервиса пока нет: {out.verification.detail}."
+            elif j["status"] == "scheduled":
+                text, failed = (f"Не удалось отправить сообщение {who}: {j['last_error']} "
+                                f"Повторю в {time.strftime('%H:%M', time.localtime(j['due_at']))}."), True
+            else:
+                text, failed = f"Сообщение {who} не отправлено: {j.get('last_error') or out.error}.", True
+            if self.speech and self.rt[tid].voice:
+                self.speech.start(tid, None, 400)
+            self._finish(tid, cid, text, meta={"route": "comms", "job_id": job["id"], "scheduled_delivery": True},
+                         failed=failed)
+            try:
+                from .tools.base import run_cmd
+                await run_cmd(["notify-send", "-a", "JARVIS", "--", "JARVIS", text], timeout=3)
+            except Exception:   # noqa: BLE001
+                pass
+        finally:
+            self.rt.pop(tid, None)
+            self._touch()
+
+    def on_missed_message(self, job: dict) -> None:
+        from .comms.base import CHANNEL_TO
+        self.add_message(self.conversation_id(), "assistant",
+                         f"⚠ Сообщение {job['to_name']} {CHANNEL_TO.get(job['channel'], '')} не отправлено: "
+                         f"{job['last_error']}. Текст: «{job['body'][:200]}». Скажите, если отправить сейчас.",
+                         meta={"route": "comms", "job_id": job["id"]})
 
     # ------------------------------------------------------------------ reminders
     def _on_reminder(self, r: dict, late: bool) -> None:
