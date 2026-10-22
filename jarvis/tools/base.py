@@ -157,7 +157,7 @@ class CmdResult:
 
 
 async def run_cmd(argv: list[str], timeout: float = 10.0, max_out: int = 200_000,
-                  env: dict | None = None, detach: bool = False) -> CmdResult:
+                  env: dict | None = None, detach: bool = False, cwd: str | None = None) -> CmdResult:
     t0 = time.perf_counter()
     safe_env = {k: v for k, v in os.environ.items() if not _secretish(k)}
     if env:
@@ -171,7 +171,7 @@ async def run_cmd(argv: list[str], timeout: float = 10.0, max_out: int = 200_000
         return CmdResult(argv, 0, "", "", (time.perf_counter() - t0) * 1000)
     proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL,
                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                                                env=safe_env, start_new_session=True)
+                                                env=safe_env, start_new_session=True, cwd=cwd)
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except (asyncio.TimeoutError, asyncio.CancelledError) as e:

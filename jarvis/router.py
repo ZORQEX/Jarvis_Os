@@ -78,6 +78,8 @@ def is_comms(t: str) -> bool:
     """Messages to people (send / schedule / status / cancel / edit / trust). Pure text drafting stays elsewhere."""
     if re.search(COMMS_VERB, t) and re.search(COMMS_CHANNEL, t):
         return True
+    if re.search(COMMS_VERB + r"|\bподготовь\b", t) and re.search(r"[\w.+-]+@[\w-]+(\.|\s)[a-z]{2,}", t):
+        return True                         # «отправь письмо на ivan@mail.ru. Тема: …» — an explicit e-mail address
     if re.search(r"\b(отправь|пошли|отправить|запланируй)\b.*\bсообщени", t):
         return True
     if re.search(r"\b(напиши|отправь|пошли)\s+\w+(у|ю|е|и)\s*[:,—-]", t):     # «напиши Ивану: …»
@@ -120,10 +122,13 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     if re.fullmatch(r"(экстренная остановка|остановить все|останови все|прекрати все|emergency stop|стоп все|"
                     r"стоп стоп|отмени все)", t):
         return Route("control", args={"op": "estop"}, why="Экстренная остановка")
-    # Conversational stop: stop speaking and drop the current answer; nothing else is blocked.
-    if re.fullmatch(r"(стоп|stop|остановись|подожди|погоди|секунду|замолчи|хватит|хватит говорить|помолчи|"
-                    r"тише говори|stop talking|shut up|не говори|достаточно|всё хватит|все хватит)", t):
-        return Route("control", args={"op": "interrupt"}, why="Перебить ответ")
+    # «Стоп»: stop speaking AND stop the work in progress (a site build, a Claude Code job) — never a message that is
+    # being sent right now. «Замолчи / хватит»: only silence and drop the answer; jobs keep running.
+    if re.fullmatch(r"(стоп|stop|остановись|останови|прекрати|остановить|стоп джарвис|джарвис стоп)", t):
+        return Route("control", args={"op": "interrupt"}, why="Остановить")
+    if re.fullmatch(r"(подожди|погоди|секунду|замолчи|хватит|хватит говорить|помолчи|тише говори|stop talking|"
+                    r"shut up|не говори|достаточно|всё хватит|все хватит)", t):
+        return Route("control", args={"op": "quiet"}, why="Перебить ответ")
     if re.fullmatch(r"(отмени|отмена|отменить|отмени задачу|отмени это|cancel|cancel task)", t):
         return Route("control", args={"op": "cancel_last"}, why="Отмена задачи")
     if re.fullmatch(r"(пауза|поставь на паузу|приостанови|pause)", t):
@@ -148,8 +153,9 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("reply", reply="greeting", why="Приветствие")
     if re.fullmatch(r"(что ты умеешь|помощь|help|какие команды|что ты можешь)", t):
         return Route("reply", reply="help", why="Справка")
-    if re.fullmatch(r"(который час|сколько времени|какое (сегодня )?число|какой сегодня день|what time is it|"
-                    r"какая сегодня дата|время)", t):
+    if re.fullmatch(r"((скажи|подскажи)( мне)? )?(который( сейчас)? час|сколько( сейчас)? (времени|время)|"
+                    r"какое( сейчас)? время|какое (сегодня )?число|какой (сегодня )?день( недели)?|"
+                    r"какое сегодня число|what time is it|какая сегодня дата|время)( сейчас)?", t):
         return Route("reply", reply="time", why="Время и дата")
     if re.search(r"(статус|состояние) задач|что ты (сейчас )?делаешь|какие задачи|task status", t):
         return Route("reply", reply="tasks", why="Статус задач")
@@ -260,6 +266,12 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("flora", args={"text": raw}, why="Проект «Флора» (демо-данные)", level=1)
 
     # --- open -------------------------------------------------------------------------
+    # An exact path («открой файл /tmp/x.txt», «открой ~/Документы/a.pdf») is opened as written — never turned into a
+    # search for a mangled name; a missing file is reported as missing.
+    pm = re.match(r"\s*(?:открой|покажи|open)\s+(?:мне\s+)?(?:файл\w*\s+|документ\w*\s+|папк\w*\s+|file\s+|folder\s+)?"
+                  r"[«\"']?((?:~|/)[^«»\"'\n]+?)[»\"']?\s*[.!]?\s*$", raw, re.I)
+    if pm:
+        return Route("tool", "open_path", {"path": os.path.expanduser(pm.group(1).strip())}, why="Точный путь")
     m = re.fullmatch(r"(?:открой|запусти|включи|покажи|open|launch|start|run)\s+(.+)", t)
     if m:
         target = re.sub(r"^(?:приложение|программу|app)\s+", "", m.group(1)).strip()

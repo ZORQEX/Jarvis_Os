@@ -49,6 +49,7 @@ class Runtime:
     message_id: str | None = None
     voice: bool = False          # answer is spoken (voice turn or "speak replies")
     turn: str | None = None      # voice telemetry id
+    children: set = field(default_factory=set)   # actions the conversation started through tools (stopped with the task)
 
 
 def _set_event() -> asyncio.Event:
@@ -170,8 +171,10 @@ class Director:
             reply = await self.control(route.args["op"])
             if self.speech and turn:
                 self.speech.annotate(turn, route="control:" + route.args["op"], transcript=text)
-            if route.args["op"] not in ("new_conversation", "interrupt"):   # silence / empty screen is the answer
+            if reply and route.args["op"] != "new_conversation":   # silence / empty screen is the answer
                 self.add_message(self.conversation_id(), "assistant", reply, meta={"route": "control", "level": 0})
+                if self.speech and source == "voice" and route.args["op"] == "interrupt":
+                    self.speech.say("notice-" + (turn or "x"), reply, turn)
             return ""
         level = route.level if route else 2
         tid = self.tasks.create(text, cid, route=(route.kind if route else "ai"), level=level)
@@ -227,11 +230,15 @@ class Director:
             self.add_message(cid, "assistant", "Задача отменена.", tid, meta={"route": "control"})
         except Exception as e:   # noqa: BLE001 — a task crash must never take down the service
             self.audit.write("task.crash", task_id=tid, error=repr(e))
-            self._safe_transition(tid, S.FAILED, error=f"Внутренняя ошибка: {e.__class__.__name__}")
-            self.add_message(cid, "assistant", "Произошла внутренняя ошибка, задача остановлена. Подробности в журнале.",
-                             tid, meta={"route": "error"})
+            why = "ИИ не ответил вовремя" if isinstance(e, (asyncio.TimeoutError, TimeoutError)) else \
+                f"Внутренняя ошибка: {e.__class__.__name__}"
+            self._safe_transition(tid, S.FAILED, error=why)
+            self.add_message(cid, "assistant", f"Не получилось: {why.lower() if why.startswith('ИИ') else why}. "
+                             "Задача остановлена, подробности в журнале.", tid, meta={"route": "error"})
         finally:
-            self.rt.pop(tid, None)
+            r = self.rt.pop(tid, None)
+            for child in list(r.children if r else ()):
+                child.cancel()           # nothing the task started keeps running after it ended
             st = self.tasks.state(tid)
             self._last_finish = (time.time(), "error" if st == S.FAILED else "ok")
             self._touch()
@@ -360,21 +367,33 @@ class Director:
                 self._resume_all()
             self._touch()
             return "Экстренная остановка снята. Можно продолжать."
-        if op in ("stop_speech", "interrupt"):
+        if op in ("stop_speech", "interrupt", "quiet"):
             self.bus.publish("speech.stop", {})
             if self.speech:
                 self.speech.cancel()
             if op == "stop_speech":
                 return "Молчу."
-            # Drop answers in progress that change nothing on the computer; never interrupt real actions.
             readonly = {"agent_chat", "agent_generate", "claude_code_inspect", "search_files", "read_file", "system_info",
-                        "window_list", "flora_inbox", "flora_compare"}
+                        "window_list", "flora_inbox", "flora_compare", "folder_list", "shell_read", "contact_find"}
+            stopped = []
             for tid in list(self.rt):
                 t = self.tasks.get(tid)
-                if not t or S(t["state"]) not in (S.RUNNING, S.PLANNING):
+                if not t or S(t["state"]) not in (S.RUNNING, S.PLANNING, S.WAITING_APPROVAL):
                     continue
                 if all(s["tool_id"] in readonly for s in t["steps"]):
+                    await self.cancel(tid)            # an answer in progress: just dropped, nothing to report
+                    continue
+                if op != "interrupt":
+                    continue                          # «замолчи»: the job keeps running
+                # «Стоп»: stop the job too — but never a message that is leaving right now (it would end «unknown»).
+                sending = any(s["state"] == "running" and self.gw.registry.tools.get(s["tool_id"]) is not None
+                              and self.gw.registry.tools[s["tool_id"]].spec.side_effects == "external"
+                              for s in t["steps"])
+                if not sending:
                     await self.cancel(tid)
+                    stopped.append(t["request"])
+            if stopped:
+                return "Остановил: " + "; ".join(r[:80] for r in stopped) + "."
             return ""
         if op == "new_conversation":
             self.new_conversation()
@@ -382,6 +401,12 @@ class Director:
         if op == "cancel_last":
             act = [t for t in self.tasks.active()]
             if not act:
+                cid = self.conversation_id()
+                ctx = self.ctx(cid)
+                if self.comms and self.comms.pending(ctx):      # «отмена» to «Кому отправить?» / «Что написать?»
+                    ctx.pop("comms_pending", None)
+                    self.save_ctx(cid, ctx)
+                    return "Хорошо, не отправляю."
                 return "Нечего отменять."
             return await self.cancel(act[-1]["id"])
         if op == "cancel":
@@ -409,6 +434,8 @@ class Director:
             for a in self.approvals.pending():
                 if a["task_id"] == tid:
                     self.approvals.decide(a["id"], False)
+            for child in list(r.children):
+                child.cancel()           # e.g. a Claude Code run the conversation started: its process is killed
             r.task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(r.task), 3)
@@ -606,6 +633,16 @@ class Director:
     # ------------------------------------------------------------------ reminders
     def _on_reminder(self, r: dict, late: bool) -> None:
         cid = self.conversation_id()
+        if r.get("command"):
+            if late:      # JARVIS was off: an action is never run long after its time — it is reported instead
+                self.add_message(cid, "assistant", f"⏱ Пропущено действие (было на {fmt_time(r['due_at'])}): "
+                                 f"{r['command']}. Скажите, если сделать сейчас.",
+                                 meta={"route": "reminder", "reminder_id": r["id"]})
+                return
+            # Run it exactly as if the user said it now: same planning, permissions and confirmations.
+            spawn(self.submit(r["command"], source="scheduled",
+                              speak=bool(self.db.get_kv("comms_announce", True))), "scheduled-action")
+            return
         text = (f"⏰ Пропущенное напоминание (было на {fmt_time(r['due_at'])}): {r['text']}" if late
                 else f"⏰ Напоминание: {r['text']}")
         self.add_message(cid, "assistant", text, meta={"route": "reminder", "reminder_id": r["id"]})

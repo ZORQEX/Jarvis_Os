@@ -169,3 +169,114 @@ async def test_session_cost_is_recorded_per_answer_not_cumulative(tmp_path):
     proc.stdout.feed_eof()
     await reader
     assert costs == [0.004, 0.0032, 0.0011]
+
+
+async def test_a_waiting_question_never_takes_over_the_tools_of_the_current_one(tmp_path):
+    """Measured race: a scheduled task waiting for the conversation replaced the executor of the running task, and
+    then cleared it mid-answer («Сейчас нет задачи…»). The executor now belongs to the turn holding the lock."""
+    import asyncio as aio
+    from jarvis.config import Config
+    from jarvis.providers.claude_chat import ClaudeChatProvider
+
+    class In:
+        def write(self, b):
+            pass
+
+        async def drain(self):
+            pass
+
+    class P:
+        returncode, pid = None, 0
+
+        def __init__(self):
+            self.stdin, self.stdout = In(), aio.StreamReader()
+    c = ClaudeChatProvider(Config(), None, tmp_path)
+    c.proc = P()
+    c.reader = aio.create_task(c._read(c.proc))
+    ex1, ex2 = object(), object()
+    t1 = aio.create_task(c._send("первый", execute=ex1))
+    await aio.sleep(0.01)
+    t2 = aio.create_task(c._send("второй", execute=ex2))
+    await aio.sleep(0.01)
+    assert c.current_execute is ex1                       # the waiting question changed nothing
+    c.proc.stdout.feed_data(b'{"type":"result","subtype":"success","result":"1"}\n')
+    await aio.wait_for(t1, 2)
+    await aio.sleep(0.01)
+    assert c.current_execute is ex2                       # now it is the second question's turn
+    c.proc.stdout.feed_data(b'{"type":"result","subtype":"success","result":"2"}\n')
+    await aio.wait_for(t2, 2)
+    assert c.current_execute is None
+    c.proc.stdout.feed_eof()
+    await c.reader
+
+
+async def test_a_conversation_step_gets_the_results_it_depends_on(core, fake):
+    """Measured: research → analyze → «покажи подборку» answered from an unrelated file, because the last
+    (conversation) step never saw the research results."""
+    from jarvis.agency.decision import Decision, Step
+    g = fake([["Подборка: диван «Лофт», стол «Скандинавия»."]])
+    agency = core.director.agency
+    tid = core.tasks.create("тест", core.director.conversation_id())
+    from jarvis.agency.agency import StepOut
+    d = Decision(task_id=tid, objective="x", classification="mixed", risk="low", sensitivity="INTERNAL", mode="multi_ai",
+                 steps=[Step(id="s1", action="research", instruction="найди", status="done"),
+                        Step(id="s2", action="chat", instruction="Покажи подборку", depends_on=["s1"], executor="claude")])
+    outs = {"s1": StepOut(True, "Тренды 2026: диван «Лофт» (источник: https://ex.example)", [], "claude")}
+    out = await agency._attempt(core.director, tid, core.director.conversation_id(), d, d.steps[1], outs, True, "m1")
+    assert out.ok and "Тренды 2026" in g.calls[0]["user"] and "Покажи подборку" in g.calls[0]["user"]
+
+
+async def test_stop_also_stops_an_action_the_conversation_started(core, fake):
+    """Measured: a Claude Code job started by the conversation kept running after «стоп» / the end of its task."""
+    import asyncio as aio
+    from conftest import wait_for
+    started, cancelled = aio.Event(), []
+    from jarvis.tools.base import Risk, Tool, ToolResult, ToolSpec
+
+    class Slow(Tool):
+        spec = ToolSpec(id="slow_job", title="Долгая работа", description="x", params={"type": "object"},
+                        risk=Risk.LOW, side_effects="local", timeout_s=60)
+
+        async def run(self, args, ctx):
+            started.set()
+            try:
+                await aio.sleep(60)
+            except aio.CancelledError:
+                cancelled.append(1)
+                raise
+            return ToolResult({}, "ok")
+    core.registry.tools["slow_job"] = Slow()
+    fake([[("slow_job", {}), "Готово."]])
+    tid = await core.director.submit("Сделай долгую работу")
+    await aio.wait_for(started.wait(), 5)
+    await core.director.cancel(tid)
+    await wait_for(lambda: cancelled == [1], timeout=5)
+    assert core.tasks.get(tid)["state"] == "cancelled"
+
+
+async def test_stop_word_stops_a_running_job_but_quiet_keeps_it(core, fake):
+    """«Стоп» stops the work in progress (spec: the current task stops); «замолчи» only silences."""
+    import asyncio as aio
+    from jarvis.tools.base import Risk, Tool, ToolResult, ToolSpec
+    began = aio.Event()
+
+    class Build(Tool):
+        spec = ToolSpec(id="slow_build", title="Сборка", description="x", params={"type": "object"},
+                        risk=Risk.LOW, side_effects="local", timeout_s=60)
+
+        async def run(self, args, ctx):
+            began.set()
+            await aio.sleep(60)
+            return ToolResult({}, "ok")
+    core.registry.tools["slow_build"] = Build()
+    fake([[("slow_build", {}), "Готово."], [("slow_build", {}), "Готово."]])
+    tid = await core.director.submit("Собери проект")
+    await aio.wait_for(began.wait(), 5)
+    await core.director.submit("замолчи", "voice")
+    await aio.sleep(0.2)
+    assert core.tasks.get(tid)["state"] == "running"                  # «замолчи» does not stop the job
+    await core.director.submit("Стоп.", "voice")
+    await wait_done(core, tid)
+    assert core.tasks.get(tid)["state"] == "cancelled"
+    assert all(s["state"] != "running" for s in core.tasks.steps(tid))      # no step left «выполняется»
+    assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("Остановил: Собери проект")

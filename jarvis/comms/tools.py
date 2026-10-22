@@ -269,3 +269,44 @@ class ContactSave(_CommsTool):
     async def verify(self, args, result, ctx):
         ok = self.hub.db.one("SELECT 1 FROM contacts WHERE id=?", (result.data["contact"]["id"],)) is not None
         return Verification("verified" if ok else "failed", self.spec.verification)
+
+
+class ContactFind(_CommsTool):
+    """«Найди контакт …»: looks the name up through the user's own connected accounts (read-only, nothing is sent)."""
+
+    def __init__(self, hub):
+        super().__init__(hub)
+        self.spec = ToolSpec(
+            id="contact_find", title="Найти контакт",
+            description=("Find a person among the user's contacts in the connected Telegram / WhatsApp / e-mail "
+                         "address book. Read-only, nothing is sent. platform: telegram | whatsapp | email (omit = all "
+                         "connected). To SEND a message, the user says «отправь <кому> в <сервис>: текст» — JARVIS's "
+                         "message module confirms the recipient and the text first."),
+            params={"type": "object", "required": ["name"], "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 120},
+                "platform": {"type": "string", "enum": ["telegram", "whatsapp", "email"]}}},
+            risk=Risk.LOW, side_effects="none", timeout_s=60, model_callable=True,
+            verification="Совпадения получены из подключённых сервисов в момент запроса")
+
+    def describe(self, args):
+        return f"Найти контакт «{args['name']}»" + (f" ({args['platform']})" if args.get("platform") else "")
+
+    async def run(self, args, ctx):
+        found, errors = [], []
+        for pid, p in self.hub.providers.items():
+            if args.get("platform") and pid != args["platform"]:
+                continue
+            if not p.connected():
+                errors.append(f"{pid}: не подключён")
+                continue
+            try:
+                for c in (await p.search(args["name"]))[:8]:
+                    found.append({"platform": pid, "name": c.name, "address": c.address, "source": c.source})
+            except Exception as e:   # noqa: BLE001 — one service failing must not hide the others
+                errors.append(f"{pid}: {str(e)[:120]}")
+        names = "; ".join(f"{f['name']} ({f['platform']})" for f in found[:10]) or "ничего не нашёл"
+        return ToolResult({"matches": found, "errors": errors}, f"Контакты: {names}.", untrusted=True)
+
+    async def verify(self, args, result, ctx):
+        return Verification("verified", f"Найдено: {len(result.data['matches'])}")
+

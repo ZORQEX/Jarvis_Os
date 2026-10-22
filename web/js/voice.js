@@ -42,7 +42,7 @@ export class Voice {
 
   resetVad() {
     this.floor = 0.004; this.voiced = 0; this.silent = 0; this.seg = null; this.preroll = []; this.segStart = 0;
-    this.probe = null; this.voiceFrames = 0;
+    this.probe = null; this.voiceFrames = 0; this.recent = [];
   }
 
   setMuted(m) {
@@ -118,7 +118,12 @@ export class Voice {
       this.preroll.push(pcm);
       if (this.preroll.length > 20) this.preroll.shift();     // keep 400 ms before speech start
       if (rms > thr) this.voiced++; else { this.voiced = 0; this.floor = this.floor * 0.995 + rms * 0.005; }
-      if (this.voiced >= need) this.startSegment();
+      // While JARVIS talks, a short «Стоп» must still cut in: its consonants leave gaps, so it never had 200 ms of
+      // voice in a row (measured: 6 frames at most). Count loud frames in the last 300 ms instead (8 of 15).
+      this.recent.push(rms > thr);
+      if (this.recent.length > 15) this.recent.shift();
+      const loud = this.recent.reduce((n, v) => n + (v ? 1 : 0), 0);
+      if (speaking ? loud >= 8 : this.voiced >= need) this.startSegment();
       if (this.conversation && now() - this.idleSince > 180000) {   // 3 min without speech: stop listening
         this.conversation = false; this.closeMic(); this.onError("Разговор завершён: 3 минуты тишины");
       }

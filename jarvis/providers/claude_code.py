@@ -42,7 +42,10 @@ SYSTEM = ("Ты работаешь как исполнитель внутри а
           "Не используй sudo и системные пакетные менеджеры. Устанавливать зависимости и инструменты (npm, pip, uv) и "
           "скачивать файлы можно, только если это явно разрешено для задачи; иначе сделай без них (например, сайт на "
           "чистом HTML/CSS/JS) или остановись и напиши, что именно требуется. Проверь результат (запусти, открой, "
-          "прогони тесты, если они есть). В конце дай краткий отчёт по-русски: что сделано, какие файлы созданы или "
+          "прогони тесты, если они есть). Если просят ЗАПУСТИТЬ сайт или программу так, чтобы она продолжала "
+          "работать, запускай её полностью отвязанной от себя, например: setsid -f python3 -m http.server 8000 "
+          "--bind 127.0.0.1 >/dev/null 2>&1 </dev/null (свободный порт подбери сам), проверь curl'ом, что отвечает, "
+          "и сообщи адрес — не держи такой процесс внутри своей сессии и не жди его. В конце дай краткий отчёт по-русски: что сделано, какие файлы созданы или "
           "изменены, как открыть или запустить результат, какие проверки запускались и с каким результатом. "
           "Если для задачи разрешён браузер (инструменты mcp__browser__…), работай с сайтами через него. Никогда не "
           "входи в аккаунты, не вводи пароли и платёжные данные, ничего не покупай и не отправляй формы от имени "
@@ -224,9 +227,24 @@ class ClaudeCodeProvider(AIProvider):
                                 first = first or (time.perf_counter() - t0) * 1000
                     elif t == "result":
                         result = d
+                        return              # the answer is complete: never wait for EOF (a server it started may hold it)
             await asyncio.wait_for(read(), self.config.claude_timeout_s)
-            err = (await proc.stderr.read()).decode("utf-8", "replace")[:500]
-            await proc.wait()
+            try:
+                await asyncio.wait_for(proc.wait(), 10)
+            except asyncio.TimeoutError:
+                # Measured: «создай сайт и запусти» kept `claude -p` alive for 15 min waiting for its own server. The
+                # result is in; stop Claude Code's own process group (a server started with setsid keeps running).
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+            err = ""
+            if result is None or result.get("is_error"):
+                try:
+                    err = (await asyncio.wait_for(proc.stderr.read(), 2)).decode("utf-8", "replace")[:500]
+                except asyncio.TimeoutError:
+                    err = ""
         except (asyncio.CancelledError, asyncio.TimeoutError) as e:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -236,7 +254,7 @@ class ClaudeCodeProvider(AIProvider):
             if isinstance(e, asyncio.TimeoutError):
                 raise ProviderFailure("network", f"Claude Code не уложился в {self.config.claude_timeout_s:.0f} с") from None
             raise
-        if result is None or result.get("is_error") or proc.returncode not in (0, None):
+        if result is None or result.get("is_error") or (proc.returncode not in (0, None, -9) and result is None):
             msg = (result or {}).get("result") or err or f"код выхода {proc.returncode}"
             low = msg.casefold()
             kind = "auth" if ("login" in low or "auth" in low) else "quota" if ("limit" in low or "budget" in low) \

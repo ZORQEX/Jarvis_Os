@@ -100,11 +100,16 @@ async def test_screen_goes_to_claude(core, both):
     ("Создай файл и запусти тесты в proj", "change_code"),
     ("Установи зависимость requests в proj", "change_code"),
     ("Покажи последние коммиты git в proj", "inspect_code"),
-    ("Создай файл заметки.txt в папке proj", "files"),
 ])
 async def test_computer_work_goes_to_claude_code(core, both, text, action):
     d = await plan(core, text)
     assert chain(d) == [(action, "claude_code")]
+
+
+async def test_a_single_file_action_goes_to_the_conversation_with_quick_tools(core, both):
+    # «создай папку / запиши в файл» takes a second through folder_create / file_write, not a Claude Code run
+    assert chain(await plan(core, "Создай файл заметки.txt в папке proj")) == [("chat", "claude")]
+    assert chain(await plan(core, "Джарвис, создай на рабочем столе папку JARVIS_TEST.")) == [("chat", "claude")]
 
 
 async def test_install_is_an_explicit_permission(core, both):

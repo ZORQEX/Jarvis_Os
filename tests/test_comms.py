@@ -639,3 +639,43 @@ async def test_whatsapp_self_without_known_number_asks_instead_of_guessing(core)
     with pytest.raises(CommsError) as e:
         await wa.search("себе")
     assert e.value.kind == "not_found" and "номер" in str(e.value)
+
+
+async def test_contact_find_reads_connected_services_and_sends_nothing(core, hub):
+    t = core.registry.tools["contact_find"]
+    assert t.spec.model_callable and t.spec.side_effects == "none"
+    r = await t.run({"name": "Иван"}, None)
+    assert any(m["name"] == "Иван Петров" for m in r.data["matches"])
+    assert hub.outbox.list() == []
+
+
+def test_email_with_explicit_address_subject_and_text():
+    from jarvis.comms.agent import local_parse
+    from jarvis.router import route
+    t = "Отправь письмо на test@example.com. Тема: JARVIS Test. Текст: Это тестовая проверка JARVIS."
+    d = local_parse(t)
+    assert d["recipients"] == [{"name": "test@example.com", "platform": "email"}]
+    assert d["subject"] == "JARVIS Test" and d["message"] == "Это тестовая проверка JARVIS."
+    assert route(t, {}).kind == "comms"
+
+
+def test_a_number_inside_a_new_question_never_picks_a_recipient():
+    """Measured on the real JARVIS: «Сколько будет 25 умножить на 4?» answered «Кому отправить?» with option 2."""
+    from jarvis.comms.agent import CommsAgent
+    opts = [{"to_name": f"Мама {i}"} for i in range(1, 6)]
+    assert CommsAgent._pick("25", opts) is None
+    assert CommsAgent._pick("2", opts) == 2 and CommsAgent._pick("второй", opts) == 2
+
+
+async def test_pending_choice_ignores_unrelated_sentences_and_cancel_clears_it(core, hub):
+    from conftest import wait_for
+    hub.providers["whatsapp"].people = [("chat:Мама 1", "Мама 1", "чат"), ("chat:Мама 2", "Мама 2", "чат")]
+    tid = await core.director.submit("Отправь маме в WhatsApp: привет")
+    await wait_for(lambda: core.director.comms.pending(core.director.ctx(core.director.conversation_id())))
+    ctx = core.director.ctx(core.director.conversation_id())
+    assert not core.director.comms.answers_pending("Сколько будет 25 умножить на 4?", ctx)
+    assert core.director.comms.answers_pending("вторая", ctx)
+    await core.director.submit("отмена")
+    assert not core.director.comms.pending(core.director.ctx(core.director.conversation_id()))
+    assert core.director.messages(core.director.conversation_id())[-1]["text"] == "Хорошо, не отправляю."
+    assert hub.outbox.list() == []

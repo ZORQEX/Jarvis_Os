@@ -126,8 +126,15 @@ def local_parse(text: str) -> dict | None:
     t = raw.lower().replace("ё", "е")
     if re.search(r"(какие|что).*(запланир)", t):
         return {"action": "list_scheduled", "recipients": [], "message": "", "subject": "", "when": ""}
-    if not re.search(r"\b(отправь|напиши|пошли|скажи|передай|черкни)\b", t):
+    if not re.search(r"\b(отправь|напиши|пошли|скажи|передай|черкни|подготовь)\b", t):
         return None
+    # «Отправь письмо на ivan@mail.ru. Тема: Встреча. Текст: Буду в 10.» — address, subject and text as written.
+    em = re.search(r"([\w.+-]+@[\w-]+\.[\w.-]*[a-z])\W*?(?:тема|subject)\s*[:—-]\s*(.+?)[.\s]*\s(?:текст|сообщение|"
+                   r"содержание|body)\s*[:—-]\s*(.+)$", raw, re.I | re.S)
+    if em:
+        msg = em.group(3).strip()
+        return {"action": "send", "message": msg[:1].upper() + msg[1:], "subject": em.group(2).strip(" .—-:"), "when": "",
+                "time_unclear": False, "recipients": [{"name": em.group(1), "platform": "email"}], "_retold": False}
     chan = "|".join(PLATFORMS.values())
     retold = False
     m = (re.search(r"[:—](?!\d)\s*(.+)$", raw)
@@ -235,6 +242,10 @@ class CommsAgent:
         if stage == "platform":
             return parse_platform(text) is not None
         if stage in ("recipient", "cancel_pick", "edit_pick"):
+            # An answer to «кому из них?» is short («второй», «Мама Active», «всем»). A whole sentence or a
+            # question is a new request — measured: «Сколько будет 25 умножить на 4?» picked option 2.
+            if len(re.findall(r"\w+", text)) > 5 or text.strip().endswith("?"):
+                return False
             return self._pick(text, p["options"]) is not None or bool(re.search(r"\b(все|всех|обоим|обе|оба)\b", text.lower()))
         return False
 
@@ -698,7 +709,8 @@ class CommsAgent:
     def _pick(text: str, options: list[dict]) -> int | None:
         t = text.lower()
         for k, n in ORD.items():
-            if re.search(rf"\b{k}", t) and n <= len(options):
+            pat = rf"\b{k}\b" if k.isdigit() else rf"\b{k}"      # «2» alone, never the start of «25»
+            if re.search(pat, t) and n <= len(options):
                 return n
         scores = [match_score(t, o.get("to_name", "")) for o in options]
         if scores and max(scores) > 0 and scores.count(max(scores)) == 1:

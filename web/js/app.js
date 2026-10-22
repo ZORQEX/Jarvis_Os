@@ -128,6 +128,13 @@ function onEvent(ev) {
     }
     case "core.state": S.core = ev; renderStatus(); renderSide(); break;
     case "reminder.created": S.reminders.push(ev.reminder); renderSide(); break;
+    case "reminder.updated": {                       // cancelled or moved
+      S.reminders = S.reminders.filter((r) => r.id !== ev.reminder.id);
+      if (ev.reminder.status === "scheduled") S.reminders.push(ev.reminder);
+      S.reminders.sort((a, b) => a.due_at - b.due_at);
+      renderSide();
+      break;
+    }
     case "reminder.fired": {
       S.reminders = S.reminders.filter((r) => r.id !== ev.reminder.id);
       toast(`⏰ ${ev.body}`, ev.late ? "warn" : "");
@@ -296,7 +303,8 @@ function heroHtml() {
 function turnHtml(t, task, approvals) {
   const parts = [];
   if (t.user) {
-    const src = t.user.meta?.source === "voice" ? `<span class="src" title="Голосом">${ICON.mic}</span>` : "";
+    const src = t.user.meta?.source === "voice" ? `<span class="src" title="Голосом">${ICON.mic}</span>`
+      : t.user.meta?.source === "scheduled" ? `<span class="src" title="По расписанию">${ICON.clock}</span>` : "";
     parts.push(`<div class="msg-user">${src}${esc(t.user.text)}</div>`);
   }
   const body = [];
@@ -390,7 +398,7 @@ function renderSide() {
     : `<div class="empty-note">Нет активных задач</div>`;
   const rem = S.reminders.filter((r) => r.status === "scheduled");
   $("#remindersSection").hidden = !rem.length;
-  $("#reminders").innerHTML = rem.map((r) => `<div class="task"><div class="top">${ICON.clock}
+  $("#reminders").innerHTML = rem.map((r) => `<div class="task"><div class="top">${r.command ? ICON.spark : ICON.clock}
       <span class="req">${esc(r.text)}</span><span class="pill">${fmtWhen(r.due_at)}</span></div></div>`).join("");
   renderPrivacy();
 }
@@ -564,7 +572,7 @@ async function renderComms() {
 
 // Action history: only lasting changes on the computer (sites, code, files, programs, notes). Messages, volume,
 // windows and questions are not kept — the server records an entry only from verified step results.
-const KIND_RU = { change: "Изменения на компьютере", note: "Заметка", install: "Установка программ", publish: "Публикация в интернете" };
+const KIND_RU = { change: "Изменения на компьютере", note: "Заметка", file: "Файлы", install: "Установка программ", publish: "Публикация в интернете" };
 function dayLabel(ts) {
   const d = new Date(ts * 1000), t = new Date(), y = new Date(Date.now() - 864e5);
   if (d.toDateString() === t.toDateString()) return "Сегодня";

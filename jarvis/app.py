@@ -10,7 +10,7 @@ from .events import AuditLog, EventBus
 from .gateway import Gateway, Registry
 from .policy import Approvals, PolicyEngine
 from .providers.claude_chat import ClaudeChatProvider
-from .scheduler import ReminderCreate, Scheduler
+from .scheduler import ReminderCreate, ScheduledChange, Scheduler, TaskSchedule
 from .tasks import TaskStore
 from .tools.desktop import AppOpen, Notify, Screenshot, VolumeSet, WindowList, WorkspaceSwitch
 from .tools.files import CreateNote, OpenPath, ReadFile, SearchFiles
@@ -48,9 +48,12 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     approvals = Approvals(db, bus, audit, config.approval_ttl_s)
     scheduler = Scheduler(db, bus, audit)
     tools = [SystemInfo(), SearchFiles(), ReadFile(), OpenPath(), CreateNote(), AppOpen(config.apps), WindowList(),
-             WorkspaceSwitch(), VolumeSet(), Screenshot(), Notify(), ReminderCreate(scheduler), CloudConsent()]
+             WorkspaceSwitch(), VolumeSet(), Screenshot(), Notify(), ReminderCreate(scheduler), CloudConsent(),
+             TaskSchedule(scheduler), ScheduledChange(scheduler)]
+    from .tools.fileops import FileTrash, FileWrite, FolderCreate, FolderList, ShellRead
     from .tools.install import SystemInstall
     tools.append(SystemInstall())               # system programs: the user types the password in the system dialog
+    tools += [FolderCreate(), FileWrite(config), FolderList(), FileTrash(), ShellRead()]   # quick file actions
     tools += extra_tools or []
     registry = Registry(tools)
     gateway = Gateway(registry, policy, approvals, tasks, bus, audit, config)
@@ -110,13 +113,14 @@ def build_comms(paths, config, db, bus, audit, registry, policy, ai, director):
     from .comms.email import EmailProvider
     from .comms.hub import CommsHub
     from .comms.telegram import TelegramProvider
-    from .comms.tools import ContactSave, MessageCancel, MessageDeliver, MessageSend, TrustRuleAdd
+    from .comms.tools import ContactFind, ContactSave, MessageCancel, MessageDeliver, MessageSend, TrustRuleAdd
     from .comms.whatsapp import WhatsAppProvider
     home = os.environ.get("JARVIS_HOME")
     store = secrets.Namespaced("dev-" + hashlib.sha256(home.encode()).hexdigest()[:8] + ":" if home else "")
     providers = [TelegramProvider(store), WhatsAppProvider(db, paths.data / "whatsapp"), EmailProvider(db, store)]
     hub = CommsHub(db, bus, audit, providers)
-    for t in (MessageSend(hub), MessageDeliver(hub), MessageCancel(hub), TrustRuleAdd(hub), ContactSave(hub)):
+    for t in (MessageSend(hub), MessageDeliver(hub), MessageCancel(hub), TrustRuleAdd(hub), ContactSave(hub),
+              ContactFind(hub)):
         registry.tools[t.spec.id] = t
     policy.hooks.append(hub.policy_hook)
     hub.full_access = lambda: policy.full_access

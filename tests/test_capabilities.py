@@ -146,3 +146,102 @@ async def test_publish_without_github_says_how_to_connect(core, home, monkeypatc
 def test_new_abilities_are_offered_to_the_conversation(core):
     names = {t.spec.id for t in core.registry.model_tools()}
     assert {"computer_task", "system_install", "site_publish"} <= names
+
+
+# ---------------------------------------------------------------- quick file actions and read-only terminal
+def _home_core(core, home, monkeypatch):
+    import pathlib
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: home))
+    core.config.claude_home_wide = True
+
+
+async def test_quick_file_tools_create_write_list_and_trash(core, home, monkeypatch):
+    _home_core(core, home, monkeypatch)
+    reg = core.registry.tools
+    ctx = _ctx(core)
+    a = reg["folder_create"].validate({"path": "~/Desktop/JARVIS_TEST"}, ctx)
+    assert a["path"] == str(home / "Desktop" / "JARVIS_TEST")
+    r = await reg["folder_create"].run(a, ctx)
+    assert (home / "Desktop" / "JARVIS_TEST").is_dir() and (await reg["folder_create"].verify(a, r, ctx)).status == "verified"
+    w = reg["file_write"].validate({"path": "~/Desktop/JARVIS_TEST/test.txt", "text": "JARVIS SYSTEM TEST"}, ctx)
+    r = await reg["file_write"].run(w, ctx)
+    assert (home / "Desktop/JARVIS_TEST/test.txt").read_text() == "JARVIS SYSTEM TEST"
+    assert (await reg["file_write"].verify(w, r, ctx)).status == "verified"
+    with pytest.raises(ToolInputError, match="уже есть"):           # never silently replaces a file
+        reg["file_write"].validate({"path": "~/Desktop/JARVIS_TEST/test.txt", "text": "x"}, ctx)
+    l = reg["folder_list"].validate({"path": "~/Desktop/JARVIS_TEST"}, ctx)
+    r = await reg["folder_list"].run(l, ctx)
+    assert [e["name"] for e in r.data["entries"]] == ["test.txt"]
+    assert reg["file_trash"].spec.risk.value == "high"               # deleting always asks
+    for bad in ("~/.ssh/x", "/etc/passwd"):
+        with pytest.raises(ToolInputError):
+            reg["file_write"].validate({"path": bad, "text": "x"}, ctx)
+
+
+async def test_terminal_is_read_only(core, home, monkeypatch):
+    _home_core(core, home, monkeypatch)
+    t = core.registry.tools["shell_read"]
+    ctx = _ctx(core)
+    (home / "a").mkdir()
+    (home / "a" / "f.txt").write_text("x")
+    a = t.validate({"command": "ls -la ~/a"}, ctx)
+    r = await t.run(a, ctx)
+    assert r.data["exit_code"] == 0 and "f.txt" in r.data["stdout"]
+    for bad in ("rm -rf ~/a", "ls | sh", "find ~ -delete", "cat ~/.ssh/id_rsa", "git push", "env", "bash -c ls",
+                "ls > out.txt", "sudo ls"):
+        with pytest.raises(ToolInputError):
+            t.validate({"command": bad}, ctx)
+
+
+# ---------------------------------------------------------------- scheduled actions
+async def test_scheduled_action_runs_at_its_time_like_a_typed_command(core):
+    from conftest import wait_for
+    reg = core.registry.tools
+    ctx = _ctx(core)
+    a = reg["task_schedule"].validate({"command": "который час", "minutes": 0.1}, ctx)
+    r = await reg["task_schedule"].run(a, ctx)
+    rid = r.data["id"]
+    assert core.scheduler.get(rid)["command"] == "который час"
+    core.scheduler.reschedule(rid, __import__("time").time() - 1)          # its time has come
+    core.scheduler.start()
+    try:
+        await wait_for(lambda: core.scheduler.get(rid)["status"] == "fired", timeout=5)
+        await wait_for(lambda: any(m["meta"].get("source") == "scheduled" for m in
+                                   core.director.messages(core.director.conversation_id())), timeout=5)
+        msgs = core.director.messages(core.director.conversation_id())
+        assert msgs[-1]["role"] == "assistant" and "Сейчас" in msgs[-1]["text"]     # really executed
+    finally:
+        await core.scheduler.stop()
+
+
+async def test_cancel_and_move_the_latest_scheduled_action(core):
+    import time as _t
+    reg = core.registry.tools
+    ctx = _ctx(core)
+    r = await reg["task_schedule"].run(reg["task_schedule"].validate(
+        {"command": "создай файл cancel_test.txt", "minutes": 10}, ctx), ctx)
+    c = reg["scheduled_change"].validate({"op": "cancel"}, ctx)          # «отмени эту задачу» = the latest
+    assert c["id"] == r.data["id"]
+    out = await reg["scheduled_change"].run(c, ctx)
+    assert (await reg["scheduled_change"].verify(c, out, ctx)).status == "verified"
+    assert core.scheduler.get(r.data["id"])["status"] == "cancelled"
+    r2 = await reg["task_schedule"].run(reg["task_schedule"].validate(
+        {"command": "создай файл edit_test.txt", "minutes": 20}, ctx), ctx)
+    m = reg["scheduled_change"].validate({"op": "move", "minutes": 5}, ctx)
+    out = await reg["scheduled_change"].run(m, ctx)
+    due = core.scheduler.get(r2.data["id"])["due_at"]
+    assert abs(due - (_t.time() + 300)) < 5 and (await reg["scheduled_change"].verify(m, out, ctx)).status == "verified"
+
+
+async def test_an_action_missed_while_jarvis_was_off_is_reported_not_run(core):
+    import time as _t
+    from conftest import wait_for
+    rid = core.scheduler.add("создай файл x.txt", _t.time() - 3600, None, command="создай файл x.txt")["id"]
+    core.scheduler.start()
+    try:
+        await wait_for(lambda: core.scheduler.get(rid)["status"] == "missed", timeout=5)
+        await wait_for(lambda: "Пропущено действие" in core.director.messages(core.director.conversation_id())[-1]["text"])
+        assert not any(t["request"] == "создай файл x.txt" for t in core.tasks.recent(20))
+    finally:
+        await core.scheduler.stop()

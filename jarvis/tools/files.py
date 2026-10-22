@@ -24,6 +24,17 @@ def _norm(s: str) -> str:
     return s.casefold().replace("ё", "е")
 
 
+def access_roots(config) -> list[Path]:
+    """Folders a file may be read or opened from: the search folders plus everywhere JARVIS may work (the home
+    folder when allowed) — what JARVIS can create, it can also open. Secret folders stay closed (resolve_in_scopes)."""
+    from ..agency.planner import claude_roots
+    out = list(config.read_roots)
+    for r in claude_roots(config):
+        if r not in out:
+            out.append(r)
+    return out
+
+
 class SearchFiles(Tool):
     spec = ToolSpec(
         id="search_files", title="Поиск файлов",
@@ -146,7 +157,7 @@ class ReadFile(Tool):
 
     def validate(self, args, ctx):
         a = super().validate(args, ctx)
-        p = resolve_in_scopes(a["path"], ctx.config.read_roots)
+        p = resolve_in_scopes(a["path"], access_roots(ctx.config))
         if not p.is_file():
             raise ToolInputError(f"Файл не найден: {p}")
         a["path"] = str(p)
@@ -212,7 +223,7 @@ class OpenPath(Tool):
 
     def validate(self, args, ctx):
         a = super().validate(args, ctx)
-        p = resolve_in_scopes(a["path"], ctx.config.read_roots)
+        p = resolve_in_scopes(a["path"], access_roots(ctx.config))
         if not p.exists():
             raise ToolInputError(f"Не найдено: {p}")
         if p.is_file():

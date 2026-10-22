@@ -101,6 +101,10 @@ MIGRATIONS: list[str] = [
         status TEXT NOT NULL CHECK(status IN ('done','failed')), summary TEXT, folder TEXT, files TEXT, details TEXT);
     CREATE INDEX actions_time ON actions(created_at DESC);
     """,
+    # 8 — scheduled actions: a reminder may carry a command that JARVIS runs at its time (same policy as typed)
+    """
+    ALTER TABLE reminders ADD COLUMN command TEXT;
+    """,
 ]
 
 
