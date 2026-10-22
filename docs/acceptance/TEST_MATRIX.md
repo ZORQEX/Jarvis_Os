@@ -1,6 +1,6 @@
 # Test matrix — milestone 1 + Flora (2026-10-20)
 
-Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 253 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
+Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 266 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -163,4 +163,26 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Browser control for Claude Code tasks the user allows: Microsoft Playwright MCP 0.0.83 (pinned), headless, in-memory profile (no user logins/cookies) | VERIFIED LIVE | example.com read, summary + screenshot saved in 17 s ($0.17) |
 | Site publishing (`site_publish`): GitHub Pages via the user's account; device-code login from Settings (no password/token seen); secret-looking files refuse publishing; push with a per-command credential helper; checks the public link | VERIFIED LOCAL + LIVE (login code shown) | test_capabilities.py; Settings → «Подключить GitHub» → code XXXX-XXXX shown, login cancelled cleanly; real publishing needs the user's GitHub login |
 | «Установи программу X» goes to the conversation (picks packages → system_install), project dependencies still to Claude Code | VERIFIED LOCAL + LIVE | planner check; dev JARVIS run |
+
+## Full-system QA (2026-10-22) — driven end to end (`tests/ui/qa.mjs`), real Claude, real accounts (self only)
+
+| Area | Status | Evidence (measured) |
+|---|---|---|
+| Conversation, streaming, context | VERIFIED LIVE | first text 0.8–4.7 s (Sonnet, median ~2.4 s); «А кто придумал этот термин?» answered in context |
+| Voice cycle mic → STT → Claude → text + speech | VERIFIED LIVE (synthetic voice through Chromium's fake microphone; the real microphone needs the user) | «25 × 4»: transcript 0.85 s after speech end, text + first sound 1.0 s; long answer streams text and speech |
+| Spoken answer speed (steady) | VERIFIED LIVE | first text ~1.0 s, first sound 1.2–1.7 s after the request (+0.9 s recognition); first question after a model switch 2.5 s |
+| Speech on the real device | VERIFIED LIVE | PipeWire stream `jarvis-workos` playing 0.3 s after the request, 100 %, not muted |
+| «Стоп» while JARVIS speaks | FIXED → VERIFIED | short «Стоп» had ≤ 6 loud frames in a row (needed 10): now 8 of 15; interrupted at once |
+| «Стоп» during a long job | FIXED → VERIFIED | task cancelled in 27 ms, Claude Code process killed, core back to IDLE |
+| Files: folder on the desktop, file, write, open, list | FIXED → VERIFIED | 3.1–4.7 s each (was 9–17 s via Claude Code and no ~/Desktop); contents checked on disk |
+| Read-only terminal | VERIFIED LOCAL + LIVE | shell_read allow-list; `rm -rf`, pipes, secrets refused |
+| Website: create, add catalog, button, dark theme (same project) | VERIFIED LIVE | 151–175 s per job; catalog first failed (executor race, fixed), retest added 10 cards |
+| «Создай сайт, запусти и открой» | FIXED → VERIFIED LIVE | first: cut at 600 s; then Claude session limit (external); then 151 s, served on 127.0.0.1:8000, opened |
+| Browser: «найди информацию о мебели» | FIXED → VERIFIED LIVE | the final step now gets the research results (before: answered from an unrelated file) |
+| Telegram / WhatsApp / e-mail (to self) | VERIFIED LIVE | Telegram 0.3 s, WhatsApp 5.3 s, e-mail 4.1 s found in «Отправленные»; contact search via contact_find |
+| Message to another person | VERIFIED LIVE | asks which «Мама» / confirmation card; declined, nothing sent |
+| Pending «Кому отправить?» hijacked by «Сколько будет 25 × 4?» | FIXED (P0) | option «2» matched the start of «25» and a send card appeared (declined, nothing sent) |
+| Scheduled actions: create, run on time, survive restart, cancel, move | ADDED → VERIFIED LIVE | fired 02:37:51 to the second after a restart; cancelled one never ran; moved one ran at the new time (43 s later while the conversation was busy) |
+| Permissions: delete, dangerous command, send | VERIFIED LIVE | Trash deletion asks (HIGH); `rm -rf ~/Documents` not run |
+| Honest errors | VERIFIED LIVE | missing file → «Файл не найден»; session limit and failures reported, never «Готово» |
 
