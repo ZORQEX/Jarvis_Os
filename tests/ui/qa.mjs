@@ -146,6 +146,21 @@ sections.voice_speed = async () => {
   SOURCE = "text";
 };
 
+sections.regress = async () => {
+  await run("R1 Беседа", "Джарвис, расскажи кратко, что такое искусственный интеллект.");
+  await run("R2 Контекст", "А кто придумал этот термин?");
+  await run("R3 Время локально", "Сколько сейчас времени?");
+  await run("R4 Нет файла", "Открой файл /JARVIS_THIS_FILE_DOES_NOT_EXIST.txt");
+  await run("R5 Папка", "Создай на рабочем столе папку JARVIS_REGRESS.");
+  await run("R6 Файл", "Запиши в неё файл notes.txt с текстом Регрессия пройдена.");
+  await run("R7 Содержимое", "Что лежит в этой папке?");
+  await run("R8 Терминал", "Покажи в терминале, сколько свободного места на диске.");
+  await run("R9 План", "Запланируй через 15 минут создать файл late.txt в той же папке.");
+  await run("R10 Отмена плана", "Отмени эту задачу.");
+  await run("R11 Удаление (подтверждаю)", "Удали папку JARVIS_REGRESS с рабочего стола.");
+  await run("R12 Арифметика", "Сколько будет 25 умножить на 4?");
+};
+
 sections.full = async () => {
   console.log("access:", JSON.stringify(await J(async () => await window.__jarvis.link.request("access.set", { level: "full" }))));
 };

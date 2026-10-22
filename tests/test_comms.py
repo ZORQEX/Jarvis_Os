@@ -670,7 +670,7 @@ def test_a_number_inside_a_new_question_never_picks_a_recipient():
 async def test_pending_choice_ignores_unrelated_sentences_and_cancel_clears_it(core, hub):
     from conftest import wait_for
     hub.providers["whatsapp"].people = [("chat:Мама 1", "Мама 1", "чат"), ("chat:Мама 2", "Мама 2", "чат")]
-    tid = await core.director.submit("Отправь маме в WhatsApp: привет")
+    await core.director.submit("Отправь маме в WhatsApp: привет")
     await wait_for(lambda: core.director.comms.pending(core.director.ctx(core.director.conversation_id())))
     ctx = core.director.ctx(core.director.conversation_id())
     assert not core.director.comms.answers_pending("Сколько будет 25 умножить на 4?", ctx)

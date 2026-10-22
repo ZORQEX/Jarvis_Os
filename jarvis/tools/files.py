@@ -223,6 +223,9 @@ class OpenPath(Tool):
 
     def validate(self, args, ctx):
         a = super().validate(args, ctx)
+        raw = Path(os.path.expanduser(a["path"]))
+        if raw.is_absolute() and not raw.exists():
+            raise ToolInputError(f"Файл не найден: {a['path']}")
         p = resolve_in_scopes(a["path"], access_roots(ctx.config))
         if not p.exists():
             raise ToolInputError(f"Не найдено: {p}")
