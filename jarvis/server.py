@@ -345,6 +345,9 @@ class Server:
             ev = await q.get()
             dead = []
             owner = self._speech_owner.get(ev.get("task_id") or "") if str(ev.get("kind", "")).startswith("speech.") else None
+            if owner == "overlay" and ev.get("kind") == "speech.end":
+                # «…а ещё…» without «Джарвис» counts from when JARVIS stopped talking, not from the question.
+                self._wake_until = max(self._wake_until, time.time() + 12)
             payload = json.dumps({"type": "event", **ev, **({"owner": owner} if owner else {})}, ensure_ascii=False, default=str)
             for ws in list(self.sockets):
                 try:

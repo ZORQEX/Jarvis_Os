@@ -253,9 +253,11 @@ async def test_code_change_requires_approval_and_deny_runs_nothing(core, both):
     assert not both["claude_code"].requests
 
 
-async def test_code_change_without_folder_asks_instead_of_guessing(core, both):
+async def test_code_change_without_folder_goes_to_the_conversation(core, both):
+    # No folder named: the conversation (with the chat's context and all tools) finds the project or asks itself;
+    # a Claude Code job still shows its folder on the confirmation card before anything changes.
     d = await plan(core, "Исправь ошибку в коде")
-    assert d.steps[0].status == "blocked" and "папку" in d.steps[0].reason
+    assert [s.action for s in d.steps] == ["chat"]
 
 
 async def test_claude_cannot_work_outside_allowed_folders(core, both):

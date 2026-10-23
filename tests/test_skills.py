@@ -142,3 +142,21 @@ def test_state_line_lists_skills(core):
     from jarvis.agency.agency import jarvis_state_line
     make_skill(skills_root(core.config))
     assert "навыки: echo_upper" in jarvis_state_line(core.director)
+
+
+# ---------------------------------------------------------------- routing: a word «код» is not a code job
+@pytest.mark.parametrize("text", ["Научись делать QR-код из любого текста и сделай QR-код со ссылкой https://example.com",
+                                  "Сделай QR-код с текстом Привет", "Выполни в терминале команду df -h"])
+async def test_requests_without_a_project_go_to_the_conversation_with_tools(core, text):
+    d = await core.director.agency.plan(core.director, core.tasks.create(text, None), text)
+    assert [s.action for s in d.steps] == ["chat"]
+
+
+async def test_a_named_project_still_goes_to_claude_code(core, home):
+    proj = home / "Projects" / "site"
+    proj.mkdir(parents=True)
+    core.config.code_workspaces = [str(home / "Projects")]
+    text = "посмотри код в проекте site и найди ошибку"
+    d = await core.director.agency.plan(core.director, core.tasks.create(text, None), text)
+    assert d.steps[0].action == "inspect_code", d.steps[0].action
+    # (in tests Claude Code is not installed, so the step is planned but blocked — the point is: not «chat»)

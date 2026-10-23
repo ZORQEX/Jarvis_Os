@@ -86,6 +86,10 @@ Tests: `uv run pytest -q` → 336 passed, 6 skipped; `node tests/ui/workos.mjs` 
 | Answers to the companion are spoken only by it (no double voice with the main window); it yields the mic to the window's conversation mode | VERIFIED LOCAL | test_speech_of_the_companion_is_marked; voice.presence |
 | Starts at login, Super+Shift+J brings it back, Super+H opens JARVIS (Omarchy integration applied, backups kept) | IMPLEMENTED (login autostart takes effect at next login) | ~/.config/hypr/hyprland.conf sources config/omarchy/hypr-jarvis.conf |
 | WhatsApp «напиши маме…»: a «what's new» popover covered the search box | VERIFIED LIVE (search, nothing sent) | real profile: «Мама ❤️» found; tests/test_whatsapp_dom.py |
+| «Научись делать QR-код…» → skill built by Claude Code (venv, wrapper, manifest, scanned), used at once; next request reuses it | VERIFIED LIVE | dev core: S1 71.6 s (skill_list → skill_create → skill_run → open_path), S2 3.9 s |
+| A word like «код» / «терминал» without a project folder is not a code job: goes to the conversation with all tools | VERIFIED LOCAL | test_requests_without_a_project_go_to_the_conversation_with_tools (before: read-only look into ~/Documents) |
+| Companion cost with the mic always on | VERIFIED LIVE | 8.3% of a core / 371 MB → 4.2% / 262 MB (no idle redraws, 100 ms frame batches, 16 kHz, browser audio processing off while waiting; mic ignored while it speaks) |
+| WhatsApp send after the popover fix | VERIFIED LIVE | «Отправь себе в WhatsApp: …» → sent, verified in the chat |
 | No limits on thinking time / budget / steps (stop any time) | VERIFIED LOCAL | test_no_time_budget_or_turn_limits_by_default |
 | Skills: JARVIS builds, keeps and runs its own tools (GitHub/pip/npm/cargo), confirmed once, verified by manifest | VERIFIED MOCK | tests/test_skills.py (Claude Code scripted) |
 

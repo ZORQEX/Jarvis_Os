@@ -163,7 +163,10 @@ def open_overlay(cfg: Config, paths: Paths) -> bool:
     argv = [b, f"--app={url}", f"--user-data-dir={paths.data / 'overlay-profile'}", "--no-first-run",
             "--no-default-browser-check", "--disable-features=Translate,MediaRouter", "--disable-sync",
             "--password-store=basic", "--ozone-platform=wayland", "--autoplay-policy=no-user-gesture-required",
-            "--use-fake-ui-for-media-stream"]
+            "--use-fake-ui-for-media-stream",
+            # A 64 px always-on window: one renderer, no GPU process, no background services (measured memory/CPU).
+            "--renderer-process-limit=1", "--disable-gpu", "--disable-background-networking",
+            "--disable-component-update", "--disable-domain-reliability", "--disable-breakpad", "--no-pings"]
     env_prefix = ["env", "PULSE_PROP=application.id=jarvis-workos application.name=JARVIS media.role=assistant"]
     rules = f"[float; pin; size {ORB} {ORB}; move {x} {y}; noborder; noshadow; rounding {ORB // 2}]"
     prev = subprocess.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True).stdout

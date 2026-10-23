@@ -221,6 +221,12 @@ sections.voice = async () => {
   console.log(JSON.stringify({ turns, msgs, states, audio, events }, null, 1));
 };
 
+sections.skills = async () => {
+  // Self-development: JARVIS has no QR tool; it must build a skill (find + install + wrap + test) and use it.
+  await run("S1. Новый навык и его применение", "Научись делать QR-код из любого текста и сделай QR-код со ссылкой https://example.com", { timeout: 1800000 });
+  await run("S2. Навык уже есть", "Сделай QR-код с текстом Привет от JARVIS", { timeout: 600000 });
+};
+
 await sections[section]();
 await page.screenshot({ path: `${outDir}/${section}.png` });
 const state = await J(() => window.__jarvis.S.core);

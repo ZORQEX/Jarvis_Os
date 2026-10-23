@@ -26,7 +26,10 @@ class VadFrames extends AudioWorkletProcessor {
         if (this.n === this.frame.length) {
           let e = 0;
           for (let k = 0; k < this.n; k++) e += this.frame[k] * this.frame[k];
-          this.port.postMessage({ rms: Math.sqrt(e / this.n), pcm: this.frame.slice(0) });
+          // Frames go out in batches of 5 (100 ms): one message instead of five (measured: the per-frame messages
+          // were most of the renderer's work while an always-on mic waits for «Джарвис»).
+          (this.batch ||= []).push({ rms: Math.sqrt(e / this.n), pcm: this.frame.slice(0) });
+          if (this.batch.length >= 5) { this.port.postMessage({ batch: this.batch }); this.batch = []; }
           this.n = 0;
         }
       }

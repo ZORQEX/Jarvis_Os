@@ -11,6 +11,9 @@ export class Voice {
     // Wake listening (desktop companion): the mic stays open, every phrase is recognised on this computer and only
     // the ones starting with «Джарвис» (or a direct follow-up) are acted on — the core drops the rest unseen.
     this.wake = wake;
+    // Waiting for «Джарвис» the browser's echo/noise processing is off (measured ~2% of a core all the time); instead
+    // the mic is ignored while JARVIS itself speaks here, so it never hears its own answer as a command.
+    this.apm = !wake;
     this.client = client;
     this.onOutput = onOutput || (() => {});
     this.outputChecked = 0;
@@ -62,17 +65,19 @@ export class Voice {
     if (this.muted) { this.onError("Микрофон выключен — включите его в панели приватности"); return false; }
     if (!this.supported) { this.onError("Запись звука недоступна в этом окне"); return false; }
     try {
+      const apm = this.apm ?? true;           // echo cancellation / noise suppression / gain (WebRTC processing)
       this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+        audio: { echoCancellation: apm, noiseSuppression: apm, autoGainControl: apm, channelCount: 1 } });
     } catch (e) {
       this.onError(e.name === "NotAllowedError" ? "Нет доступа к микрофону" : "Микрофон не найден");
       return false;
     }
-    this.ctx = new AudioContext();
+    // 16 kHz straight from the browser's own resampler: the worklet handles 3× fewer samples than at 48 kHz.
+    try { this.ctx = new AudioContext({ sampleRate: 16000 }); } catch { this.ctx = new AudioContext(); }
     await this.ctx.audioWorklet.addModule("/static/js/vad-worklet.js");
     const src = this.ctx.createMediaStreamSource(this.stream);
     this.node = new AudioWorkletNode(this.ctx, "vad-frames");
-    this.node.port.onmessage = (e) => this.frame(e.data);
+    this.node.port.onmessage = (e) => { if (e.data.batch) for (const f of e.data.batch) { if (this.node) this.frame(f); } else this.frame(e.data); };
     src.connect(this.node);
     this.resetVad();
     this.idleSince = now();
@@ -107,11 +112,16 @@ export class Voice {
   // ---------------------------------------------------------------- VAD (local, ~20 ms frames)
   frame({ rms, pcm }) {
     const speaking = this.audio;
+    if (this.wake && (speaking || now() - this.lastAudioEnd < 500)) { this.preroll = []; this.voiced = 0; return; }
     // Slightly higher bar while JARVIS talks (echo cancellation removes most of its own voice), so the user can
     // still cut in with a normal voice: 1.7× threshold for 200 ms (was 2.4× for 280 ms — too hard to interrupt).
     const thr = Math.max(0.012, this.floor * 3.2) * (speaking ? 1.7 : 1);
     const need = speaking ? 10 : 4;          // frames of voice to start (200 ms / 80 ms)
-    setLevel(Math.min(1, rms * 8));
+    // The level drives the companion's halo (a style change per frame). Waiting for «Джарвис» it is shown only while a
+    // phrase is being recorded: an idle always-on mic must not redraw 50 times a second (measured: ~4% of a core).
+    if (!this.wake || this.seg) { this.lvlTick = (this.lvlTick || 0) + 1; if (this.lvlTick % 2 === 0) setLevel(Math.min(1, rms * 8)); }
+    else if (this.lvlShown) { setLevel(0); }
+    this.lvlShown = !this.wake || !!this.seg;
     // While JARVIS waits for an answer the single-phrase mic stays open (up to 45 s), so «да» is never too late.
     const waiting = this.holdOpen() && now() - this.idleSince < 45000;
     if (!this.seg && this.closeWhenQuiet && !speaking && !waiting && this.state !== "transcribing" && this.state !== "synthesizing"
