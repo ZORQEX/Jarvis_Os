@@ -74,6 +74,11 @@ COMMS_CHANNEL = (r"(телеграм\w*|телеграмм\w*|телег[аеи�
 COMMS_VERB = r"\b(отправ\w*|напиши|написать|напишите|пошли|послать|перешли|сообщи|скинь|черкни|запланируй)\b"
 
 
+CONNECT_CHANNELS = (("telegram", r"телеграм\w*|телег[аеиу]\b|\bтг\b|telegram"),
+                    ("whatsapp", r"ват[сц]ап\w*|вотсап\w*|вацап\w*|whats ?app"),
+                    ("email", r"почт\w*|e-?mail|имейл\w*|емейл\w*|мейл\w*|gmail|джимейл\w*"))
+
+
 def is_comms(t: str) -> bool:
     """Messages to people (send / schedule / status / cancel / edit / trust). Pure text drafting stays elsewhere."""
     if re.search(COMMS_VERB, t) and re.search(COMMS_CHANNEL, t):
@@ -137,6 +142,15 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("control", args={"op": "resume_all"}, why="Продолжить")
     if re.fullmatch(r"(новый разговор|начни заново|новая беседа|new chat|new conversation)", t):
         return Route("control", args={"op": "new_conversation"}, why="Новый разговор")
+
+    # --- connect a messenger: JARVIS opens the connect card itself (and starts the WhatsApp QR) ----------
+    m = re.match(r"(?:подключи(?:сь)?|подключить|подсоедини(?:сь)?|привяжи|войди|залогинься|авторизуйся)\b(.*)$", t)
+    if m:
+        found = sorted((mm.start(), ch) for ch, pat in CONNECT_CHANNELS
+                       for mm in [re.search(pat, m.group(1))] if mm)
+        chans = list(dict.fromkeys(ch for _, ch in found))
+        if chans:
+            return Route("connect", args={"channels": chans}, why="Подключение сервиса", level=0)
 
     # --- communication: messages, mail, scheduled sends ----------------------------
     if is_comms(t) or is_comms_followup(t, ctx):

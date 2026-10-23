@@ -54,6 +54,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     from .tools.install import SystemInstall
     tools.append(SystemInstall())               # system programs: the user types the password in the system dialog
     tools += [FolderCreate(), FileWrite(config), FolderList(), FileTrash(), ShellRead()]   # quick file actions
+    from .tools.window import WindowShow
+    tools.append(WindowShow(bus))               # show a workspace of the JARVIS window (the server sets presence)
     tools += extra_tools or []
     registry = Registry(tools)
     gateway = Gateway(registry, policy, approvals, tasks, bus, audit, config)
@@ -126,6 +128,33 @@ def build_comms(paths, config, db, bus, audit, registry, policy, ai, director):
     hub.full_access = lambda: policy.full_access
     director.comms = CommsAgent(hub, ai, config)
     director.hub = hub
+    wt = registry.get("window_show")
+    if wt:          # a shown messenger workspace tells the model exactly what it needs (no invented steps)
+        views = {"telegram": "telegram", "whatsapp": "whatsapp", "mail": "email"}
+
+        def hint(view: str) -> str:
+            ch = views.get(view)
+            if not ch:
+                return ""
+            p = hub.provider(ch)
+            st = p.status()
+            if st.state == "connected":
+                return f"{p.title} подключён к JARVIS."
+            where = {"telegram": " Страница для api_id и api_hash: https://my.telegram.org/apps (открой её через open_url).",
+                     "email": " Пароль приложения Gmail: https://myaccount.google.com/apppasswords (открой через open_url).",
+                     }.get(ch, "")
+            return f"{p.title} не подключён ({st.detail or st.state}). Что нужно в этом разделе: {st.requirement}{where}"
+
+        async def start(view: str) -> str:
+            if views.get(view) != "whatsapp":
+                return ""
+            p = hub.provider("whatsapp")
+            if p.connected() or not hasattr(p, "begin_link"):
+                return ""
+            await p.begin_link()
+            hub.publish_status()
+            return "QR-код WhatsApp появляется в этом разделе — его нужно отсканировать телефоном."
+        wt.hint, wt.starter = hint, start
     hub.outbox.deliver = director.deliver_job
     hub.outbox.on_missed = director.on_missed_message
     return hub

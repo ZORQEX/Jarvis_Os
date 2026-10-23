@@ -19,6 +19,13 @@ from .tools.base import Risk, Tool, ToolResult, ToolSpec, Verification
 
 COMPLETED_FLASH_S = 2.5
 UI_READ_TOOLS = ("folder_list", "search_files", "read_file")   # read-only tools a workspace may call directly
+CONNECT_VIEW = {"telegram": "telegram", "whatsapp": "whatsapp", "email": "mail"}
+CONNECT_SAY = {"telegram": "телеграм", "whatsapp": "ватсап", "email": "почту"}
+CONNECT_HINT = {
+    "telegram": "введите api_id, api_hash и номер телефона, Telegram пришлёт код",
+    "whatsapp": "на телефоне: WhatsApp → Настройки → Связанные устройства → Привязка устройства, и наведите камеру на код",
+    "email": "введите адрес и пароль приложения",
+}
 _STATE_KINDS = {"approval.created", "approval.updated", "step.updated", "task.updated", "task.created"}
 
 
@@ -200,6 +207,37 @@ class Director:
         self.rt[tid].task = asyncio.create_task(self._run(tid, cid, label, route, announce=True))
         return tid
 
+    async def open_connection(self, tid: str, cid: str, channel: str) -> str:
+        """Act instead of explaining: show the service's workspace with its connect card and start what JARVIS can
+        start itself (the WhatsApp QR code). Credentials and codes are still typed by the person in the window."""
+        p = self.hub.provider(channel)
+        if p.connected():
+            return f"{p.title} уже подключён."
+        out = await self.execute(tid, cid, "window_show", {"view": CONNECT_VIEW[channel], "connect": True},
+                                 "Показать, где подключить")
+        where = f"Открыл раздел {p.title}" if out.status == "ok" else f"Окно JARVIS не открылось ({out.error})"
+        if out.status == "ok" and out.result.data.get("connect_started"):
+            return f"{where} и запускаю QR-код — {CONNECT_HINT['whatsapp']}."
+        expired = channel == "telegram" and p.status().state == "error"
+        return f"{where}: {'сессия больше недействительна, ' if expired else ''}{CONNECT_HINT[channel]}."
+
+    async def _run_connect(self, tid: str, cid: str, route: rt.Route) -> None:
+        if self.hub is None:
+            return self._finish(tid, cid, "Модуль связи не подключён в этой сборке.", meta={"route": "local"})
+        chans = route.args["channels"]
+        done = [c for c in chans if self.hub.provider(c).connected()]
+        todo = [c for c in chans if c not in done]
+        parts = []
+        if todo:
+            parts.append(await self.open_connection(tid, cid, todo[0]))
+        if done:
+            names = ", ".join(self.hub.provider(c).title for c in done)
+            parts.append(f"{names} уже {'подключён' if len(done) == 1 else 'подключены'}.")
+        if len(todo) > 1:
+            rest = ", ".join(self.hub.provider(c).title for c in todo[1:])
+            parts.append(f"Следом — {rest}: скажите «подключи {CONNECT_SAY[todo[1]]}».")
+        self._finish(tid, cid, " ".join(parts), meta={"route": "local", "level": 0, "why": route.why})
+
     async def run_ui_read(self, tool: str, args: dict) -> dict:
         """Read-only browsing from a workspace (Files): the same gateway — validation, policy, audit, step record —
         but no chat message, since opening a folder is not a conversation turn. Route «ui_read» marks these tasks so
@@ -237,6 +275,8 @@ class Director:
                     self._finish(tid, cid, "Модуль связи не подключён в этой сборке.", meta={"route": "local"})
                 else:
                     await self.comms.handle(self, tid, cid, text)
+            elif route.kind == "connect":
+                await self._run_connect(tid, cid, route)
             elif route.kind == "ui":
                 # «Перейди в задачи»: the window switches its workspace; nothing runs on the computer.
                 self.bus.publish("ui.navigate", {"view": route.args["view"]})

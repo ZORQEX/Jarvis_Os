@@ -33,5 +33,9 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
 - Russian UI first; money uses narrow no-break space (`140 400 ₽`).
 - Idle UI must not run infinite animations (measured: 25% → 1.9% CPU of one core after removing them).
 - Label status honestly: VERIFIED LIVE / LOCAL / MOCK, IMPLEMENTED UNVERIFIED, NOT IMPLEMENTED.
+- Act, don't explain: never tell the user to open / click / go somewhere JARVIS can open itself (apps → app_open,
+  sites → open_url, window sections → window_show, connect a service → window_show connect=true). When only the person
+  can do the next step (QR, password, code), JARVIS does everything up to it and asks for that one step.
+  Rules live at the top of `providers/claude_chat.CHAT_SYSTEM`; each turn carries a `[Состояние JARVIS: …]` line.
 - Window: the companion is one global instance (never inside a workspace); its mode comes only from
   `core/agent-state.js`. A workspace tool is «ready» only when the core can do it now (`registry.toolStatus`).

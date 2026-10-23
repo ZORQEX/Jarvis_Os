@@ -31,6 +31,10 @@ DEFAULT_APPS: dict[str, tuple[list[str], str, str]] = {
     "monitor": (["xdg-terminal-exec", "btop"], r"kitty|alacritty|btop", "Монитор ресурсов"),
     "localsend": (["localsend"], r"localsend", "LocalSend"),
     "xournal": (["xournalpp"], r"xournal", "Xournal++"),
+    # System settings: Omarchy's own controls (TUIs in a terminal window with app id org.omarchy.<name>).
+    "audio": (["omarchy-launch-audio"], r"wiremix", "Настройки звука"),
+    "wifi": (["omarchy-launch-wifi"], r"impala", "Wi-Fi"),
+    "bluetooth": (["omarchy-launch-bluetooth"], r"bluetui", "Bluetooth"),
     # Messaging opens as Omarchy web apps (the user's own browser session; JARVIS does not touch it).
     "whatsapp": (["omarchy-launch-webapp", "https://web.whatsapp.com/"], r"whatsapp", "WhatsApp"),
     "telegram": (["omarchy-launch-webapp", "https://web.telegram.org/a/"], r"telegram", "Telegram"),
@@ -55,6 +59,14 @@ APP_ALIASES: dict[str, str] = {
     "localsend": "localsend", "локалсенд": "localsend",
     "xournal": "xournal", "ксорнал": "xournal",
     "ватсап": "whatsapp", "вотсап": "whatsapp", "вацап": "whatsapp", "whatsapp": "whatsapp", "whats app": "whatsapp",
+    "ватсап веб": "whatsapp", "вотсап веб": "whatsapp", "whatsapp web": "whatsapp", "веб ватсап": "whatsapp",
+    "веб-ватсап": "whatsapp", "ватсап web": "whatsapp", "веб версию ватсапа": "whatsapp", "веб-версию ватсапа": "whatsapp",
+    "телеграм веб": "telegram", "telegram web": "telegram", "веб телеграм": "telegram", "веб-телеграм": "telegram",
+    "настройки звука": "audio", "звуковые настройки": "audio", "микшер": "audio", "микшер звука": "audio",
+    "настройки аудио": "audio", "аудио": "audio", "звук и микрофон": "audio",
+    "вайфай": "wifi", "вай-фай": "wifi", "wifi": "wifi", "wi-fi": "wifi", "настройки вайфая": "wifi",
+    "настройки wifi": "wifi", "настройки вай-фай": "wifi", "сеть": "wifi",
+    "блютуз": "bluetooth", "bluetooth": "bluetooth", "настройки блютуз": "bluetooth", "настройки блютуза": "bluetooth",
     "телеграм": "telegram", "телеграмм": "telegram", "телегу": "telegram", "telegram": "telegram", "тг": "telegram",
     "почту": "mail", "почта": "mail", "gmail": "mail", "джимейл": "mail", "почтовый ящик": "mail",
 }

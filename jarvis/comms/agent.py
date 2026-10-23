@@ -380,10 +380,9 @@ class CommsAgent:
             if hasattr(p, "warm") and p.connected():
                 spawn(p.warm(), "whatsapp-warm")     # get WhatsApp Web ready while the user hears the question
             if not p.connected():
-                st = p.status()
-                return director._finish(tid, cid, f"{p.title} не подключён — отправить не могу. {st.requirement} "
-                                                  "Подключить можно в разделе «Сообщения» (значок самолётика слева).",
-                                        meta=self._meta(intent))
+                shown = await director.open_connection(tid, cid, plat)
+                return director._finish(tid, cid, f"{p.title} не подключён — отправить пока не могу. {shown} "
+                                                  "Как подключится — повторите команду.", meta=self._meta(intent))
             if due and not p.caps.get("can_schedule"):
                 return director._finish(tid, cid, UNSUPPORTED, meta=self._meta(intent))
             try:

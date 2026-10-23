@@ -204,10 +204,20 @@ async def test_email_with_subject_and_text_confirmation(core, hub):
 # ---------------------------------------------------------------- honesty and safety
 async def test_not_connected_is_reported_and_nothing_is_faked(core, hub):
     hub.providers["telegram"].on = False
+    core.director.gw.registry.get("window_show").presence = lambda: True          # the JARVIS window is open
+    q = core.bus.subscribe()
     intents(core, {"action": "send", "recipients": [{"name": "Иван Петров", "platform": "telegram"}], "message": "Привет"})
     tid = await core.director.submit("Отправь Ивану Петрову в Telegram: Привет")
     await wait_done(core, tid)
-    assert "не подключён" in last_text(core) and "Подключите тест" in last_text(core)
+    # Acts instead of explaining where the setting is: the Telegram connect card is shown.
+    assert "не подключён" in last_text(core) and "Открыл раздел Telegram" in last_text(core)
+    assert "самолётик" not in last_text(core)
+    navs = []
+    while not q.empty():
+        ev = q.get_nowait()
+        if ev["kind"] == "ui.navigate":
+            navs.append(ev["view"])
+    assert navs == ["telegram"]
     assert not core.approvals.pending() and not hub.outbox.list()
 
 

@@ -57,6 +57,23 @@ def compact_history(msgs: list[dict], keep: int = 6, per_msg: int = 600) -> tupl
 CONVERSATIONAL = {"chat", "write", "translate"}
 BROWSER_RE = re.compile(r"(зайди|открой|перейди|загляни)\w*\s+(на\s+)?(сайт|страниц)|в браузере|через браузер|"
                         r"заполни\w*\s+(\w+\s+)?форм|нажми\w*\s+(на\s+)?кнопк|https?://|\b[\w-]+\.(ru|com|org|net|io|kz|su|рф)\b")
+def jarvis_state_line(director) -> str:
+    """«[Состояние JARVIS: WhatsApp — подключён; почта — подключена; Telegram — нужен вход]» — so the model acts on what is
+    really available (opens the connect card for what is not) instead of guessing or explaining."""
+    hub = getattr(director, "hub", None)
+    if hub is None:
+        return ""
+    bits = []
+    for p in hub.providers.values():
+        try:
+            st = p.status().state
+        except Exception:   # noqa: BLE001 — a broken provider must not break the conversation
+            continue
+        word = {"connected": "подключено", "connecting": "подключается"}.get(st, "нужен вход" if st == "error" else "не подключено")
+        bits.append(f"{p.title} — {word}")
+    return f"[Состояние JARVIS: {'; '.join(bits)}]\n" if bits else ""
+
+
 WRITE_GUIDE = ("\nПодготовь только черновик (ничего не отправляется). Пиши естественно и готово к отправке. "
                "Не выдумывай факты: цифр, дат и условий, которых нет в данных, не пиши. Если не хватает "
                "чего-то действительно важного (имя получателя, цена, срок), поставь не больше 2–3 пометок "
@@ -396,9 +413,10 @@ class Agency:
             if r:
                 r.thinking = v
                 director._touch()
+        state = jarvis_state_line(director)
         t0 = time.perf_counter()
         try:
-            res = await p.run_tool_loop(system, hist, instruction or s.instruction, self.registry.model_tools(), execute,
+            res = await p.run_tool_loop(system, hist, state + (instruction or s.instruction), self.registry.model_tools(), execute,
                                         on_delta, self.config.max_tool_rounds, lambda: director.policy.estop,
                                         lambda c, n, m: director._checkpoint(tid, c, n, m), thinking,
                                         role="voice" if voice else "main", conversation=cid)

@@ -52,6 +52,8 @@ def core(home, cfg, monkeypatch):
         return CmdResult(list(a[0]) if a else [], 0, "", "", 0.0)
     monkeypatch.setattr(scheduler, "run_cmd", no_desktop)
     c = build(Paths.detect(), cfg)
+    wt = c.director.gw.registry.get("window_show")     # tests never open a real JARVIS window on the desktop
+    wt.opener, wt.wait_s = (lambda: None), 0.2
     yield c
     c.db.close()
 

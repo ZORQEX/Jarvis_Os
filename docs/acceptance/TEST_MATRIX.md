@@ -58,6 +58,21 @@ Tests: `uv run pytest -q` → 289 passed, 6 skipped; `node --test tests/ui/unit/
 | Idle cost | VERIFIED LOCAL | idlecpu.mjs: task 0.14 % (previous UI 0.22 %), 0 frames idle |
 | Long chat (600 messages) | VERIFIED LOCAL | full render 4–6 ms script, next message 64–74 ms incl. layout |
 
+## Act, don't explain (2026-10-23)
+Tests: `uv run pytest -q` → 309 passed, 6 skipped. Live: 5 questions to the real Claude on an isolated core whose
+desktop launchers were replaced by loggers (nothing opened on the screen).
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| «Подключи Telegram / WhatsApp / почту» → the connect card is shown, WhatsApp QR started; no AI | VERIFIED LOCAL | test_workspaces.py (connect phrases, QR start, window opened if closed) |
+| Sending to a service that is not connected → JARVIS opens its connect card (not «зайдите в раздел…») | VERIFIED MOCK | test_not_connected_is_reported_and_nothing_is_faked |
+| «Открой WhatsApp Web / Telegram Web / настройки звука / вайфай / блютуз» → opened locally, no AI | VERIFIED LOCAL | router tests; Omarchy launchers audio/wifi/bluetooth |
+| «Что нужно, чтоб ты увидел страницу WhatsApp?» → window_show whatsapp + QR started, one step asked | VERIFIED LIVE | live run 4.6 s; before: a how-to answer with no action |
+| «Как подключить Telegram?» → Telegram section + my.telegram.org/apps opened | VERIFIED LIVE | live run (open_url logged) |
+| «Как подключить почту?» → Mail section + Google app-passwords page opened | VERIFIED LIVE | live run (open_url logged) |
+| «Где посмотреть мои задачи?» → Task Center shown | VERIFIED LIVE | live run |
+| Weather → answered from web search with Russian «Источники:» | VERIFIED LIVE | live run 13 s |
+
 ## Performance (this laptop)
 - Core cold start to /health: 223 ms. Launcher returns in ~280 ms. Page ready ~100 ms.
 - Core idle: 0.0% CPU, ~39 MB PSS. Window (Chromium, 10 processes): ~380 MB PSS, idle 1.9% of one core

@@ -158,3 +158,120 @@ async def test_task_detail_and_file_roots_over_websocket(core):
         await ws.close()
     finally:
         await tc.close()
+
+
+# ---------------------------------------------------------------- act, don't explain
+@pytest.mark.parametrize("text,chans", [
+    ("подключи телеграм", ["telegram"]),
+    ("Подключись к WhatsApp, к Телеграму и так далее, чтоб ты мог отправлять сообщения", ["whatsapp", "telegram"]),
+    ("подключи почту", ["email"]),
+    ("войди в телегу", ["telegram"]),
+])
+def test_connect_phrases(text, chans):
+    r = router.route(text)
+    assert r and r.kind == "connect" and r.args["channels"] == chans
+
+
+@pytest.mark.parametrize("text", ["подключи вайфай", "подключись к интернету"])
+def test_connect_needs_a_service(text):
+    r = router.route(text)
+    assert r is None or r.kind != "connect"
+
+
+@pytest.mark.parametrize("text,app", [("открой ватсап веб", "whatsapp"), ("открой WhatsApp Web", "whatsapp"),
+                                      ("открой веб-версию ватсапа", "whatsapp"), ("открой телеграм веб", "telegram")])
+def test_web_versions_open_without_ai(text, app):
+    r = router.route(text)
+    assert r and r.kind == "tool" and r.tool == "app_open" and r.args == {"app": app}
+
+
+def navigations(q):
+    out = []
+    while not q.empty():
+        ev = q.get_nowait()
+        if ev["kind"] == "ui.navigate":
+            out.append(ev["view"])
+    return out
+
+
+async def test_connect_opens_the_card_instead_of_explaining(core):
+    core.director.gw.registry.get("window_show").presence = lambda: True
+    q = core.bus.subscribe()
+    tid = await core.director.submit("подключи телеграм")
+    t = await wait_done(core, tid)
+    text = core.director.messages(core.director.conversation_id())[-1]["text"]
+    assert t["state"] == "completed" and text.startswith("Открыл раздел Telegram") and "api_id" in text
+    assert navigations(q) == ["telegram"]
+    step = [s for s in t["steps"] if s["tool_id"] == "window_show"][0]
+    assert step["state"] == "succeeded" and step["verification"]["status"] == "verified"
+
+
+async def test_connect_whatsapp_starts_the_qr_itself(core, monkeypatch):
+    from jarvis.comms.whatsapp import WhatsAppProvider
+    started = []
+
+    async def begin(self):
+        started.append(True)
+        return {"stage": "starting"}
+    monkeypatch.setattr(WhatsAppProvider, "begin_link", begin)
+    core.director.gw.registry.get("window_show").presence = lambda: True
+    q = core.bus.subscribe()
+    tid = await core.director.submit("подключи ватсап и почту")
+    await wait_done(core, tid)
+    text = core.director.messages(core.director.conversation_id())[-1]["text"]
+    assert started and "QR-код" in text and "«подключи почту»" in text
+    assert navigations(q) == ["whatsapp"]
+
+
+async def test_window_show_opens_a_closed_window_first(core):
+    wt = core.director.gw.registry.get("window_show")
+    state = {"open": False}
+    wt.presence = lambda: state["open"]
+    wt.opener = lambda: state.update(open=True)
+    q = core.bus.subscribe()
+    t = core.tasks.create("x", None)
+    out = await core.director.gw.execute(t, "window_show", {"view": "tasks"}, "test")
+    assert out.status == "ok" and out.result.data["window_opened"] and navigations(q) == ["tasks"]
+
+
+async def test_window_show_reports_a_window_that_did_not_open(core):
+    wt = core.director.gw.registry.get("window_show")
+    wt.presence = lambda: False
+    t = core.tasks.create("x", None)
+    out = await core.director.gw.execute(t, "window_show", {"view": "files"}, "test")
+    assert out.status == "failed" and "не открылось" in out.error
+
+
+def test_model_sees_state_and_action_first_rules(core):
+    from jarvis.agency.agency import jarvis_state_line
+    from jarvis.providers.claude_chat import CHAT_SYSTEM
+    line = jarvis_state_line(core.director)
+    assert line.startswith("[Состояние JARVIS:") and "Telegram — не подключено" in line
+    assert "ДЕЙСТВУЕШЬ, а не объясняешь" in CHAT_SYSTEM and "window_show" in CHAT_SYSTEM
+    assert "window_show" in [t.spec.id for t in core.director.gw.registry.model_tools()]
+
+
+@pytest.mark.parametrize("text,app", [("открой настройки звука", "audio"), ("открой микшер", "audio"),
+                                      ("открой вайфай", "wifi"), ("открой блютуз", "bluetooth")])
+def test_system_settings_open_without_ai(text, app):
+    r = router.route(text)
+    assert r and r.kind == "tool" and r.tool == "app_open" and r.args == {"app": app}
+
+
+async def test_window_show_connect_starts_whatsapp_and_grounds_the_model(core, monkeypatch):
+    from jarvis.comms.whatsapp import WhatsAppProvider
+    started = []
+
+    async def begin(self):
+        started.append(True)
+        return {"stage": "starting"}
+    monkeypatch.setattr(WhatsAppProvider, "begin_link", begin)
+    wt = core.director.gw.registry.get("window_show")
+    wt.presence = lambda: True
+    t = core.tasks.create("x", None)
+    out = await core.director.gw.execute(t, "window_show", {"view": "whatsapp", "connect": True}, "test")
+    assert out.status == "ok" and started and out.result.data["connect_started"]
+    assert "QR-код" in out.for_model()["summary"]
+    # Telegram: the model is told what the card needs and where to get it — so it can open that page itself.
+    out = await core.director.gw.execute(t, "window_show", {"view": "telegram"}, "test")
+    assert "my.telegram.org/apps" in out.for_model()["summary"] and not out.result.data["connect_started"]

@@ -78,6 +78,9 @@ class Server:
         self.app.on_shutdown.append(self.on_shutdown)
         self.app.on_cleanup.append(self.on_cleanup)
         self.sockets: set[web.WebSocketResponse] = set()
+        wt = core.director.gw.registry.get("window_show")
+        if wt:
+            wt.presence = lambda: bool(self.sockets)      # is a JARVIS window connected right now
 
     # ------------------------------------------------------------------ security
     def _hosts(self) -> set[str]:
