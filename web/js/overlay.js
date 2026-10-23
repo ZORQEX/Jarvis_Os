@@ -31,6 +31,8 @@ const link = new Link({
     // JARVIS restarted with a new interface: load it (never in the middle of a phrase).
     if (d.ui_build && S.build && d.ui_build !== S.build && !["recording", "transcribing"].includes(S.voice)) { location.reload(); return; }
     S.build = d.ui_build || S.build;
+    // The window keeps its size across a page reload (e.g. a JARVIS restart while the card was open): match it.
+    if (!S.sized) { S.sized = true; if (!S.expanded) link.request("overlay.size", { w: ORB, h: ORB }).catch(() => {}); }
     S.tasks = d.tasks; S.core = d.core; S.messages = d.messages.slice(-30);
     S.approvals = Object.fromEntries(d.approvals.map((a) => [a.id, a]));
     S.streaming = {};
