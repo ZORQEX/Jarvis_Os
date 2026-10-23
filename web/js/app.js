@@ -1,62 +1,85 @@
+// JARVIS WorkOS — the window shell. One WebSocket to the local core; one state object; a topic bus so each part
+// redraws only for what it shows. Layout: sidebar (workspaces) · top bar (real status) · workspace · activity panel,
+// plus the global companion, the command palette and notifications above everything.
 import { Link } from "./net.js";
-import * as companion from "./companion.js";
-import { esc, md, ICON, STATE_RU, stepRow, resultCard, approvalCard, toolTitle, fmtMs, fmtWhen, fmtTime, shortPath, decisionCard } from "./render.js";
-import { agencyPanel, wireAgency } from "./agency-ui.js";
 import { Voice } from "./voice.js";
+import { esc, md, ICON, STATE_RU, stepRow, resultCard, approvalCard, toolTitle, fmtMs, fmtWhen, decisionCard } from "./render.js";
+import { createBus, frameBatch, prefs } from "./core/store.js";
+import { flashFor } from "./core/agent-state.js";
+import { classify } from "./core/intent.js";
+import { isUserTask, isWorking, canRetry } from "./core/tasks-model.js";
+import { WORKSPACES, ALL, byId, navBadge, connectionOf } from "./workspaces/registry.js";
+import { AgentStream } from "./adapters/agent.js";
+import { DesktopAdapter } from "./adapters/desktop.js";
+import { createNotifier } from "./ui/notify.js";
+import { createCompanionDock } from "./ui/companion-dock.js";
+import { createPalette } from "./ui/palette.js";
+import * as homeWs from "./workspaces/home.js";
+import * as tasksWs from "./workspaces/tasks.js";
+import * as browserWs from "./workspaces/browser.js";
+import * as commWs from "./workspaces/communication.js";
+import * as filesWs from "./workspaces/files.js";
+import * as settingsWs from "./workspaces/settings.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
 const S = {
   connected: false, convId: null, messages: [], tasks: {}, approvals: {}, core: { state: "OFFLINE" },
-  provider: null, reminders: [], recent: [], streaming: {}, progress: {}, tools: [], grants: [],
-  view: "chat", voice: null, firstSnapshot: true, providers: [], dev: localStorage.getItem("jarvis.dev") === "1",
+  provider: null, reminders: [], streaming: {}, progress: {}, tools: [], grants: [],
+  view: "home", voice: null, firstSnapshot: true, providers: [], dev: localStorage.getItem("jarvis.dev") === "1",
+  comms: {},              // messenger providers by channel (comms.state / comms.providers)
+  flash: null,            // last finished task's reaction (SUCCESS / ERROR / CANCELLED)
+  lastReply: null,        // {text, taskId, at} — newest assistant message, for the companion
+  attachments: [],        // file paths attached to the next chat message
+  lastVoiceAt: 0,
+  askedHere: new Set(),   // tasks asked from outside the chat (companion, Home, a workspace): their answer pops up there
 };
 
 // ------------------------------------------------------------------ boot
 const theme = localStorage.getItem("jarvis.theme");
 if (theme) document.documentElement.dataset.theme = theme;
 if (localStorage.getItem("jarvis.reduceMotion") === "1") document.documentElement.classList.add("anim-off");
-
-companion.mount($("#railCompanion"));
+const app = $("#app");
+const bus = createBus();
+const toast = createNotifier($("#toasts"));
 
 const link = new Link({
-  onSnapshot: (d) => { applySnapshot(d); },
+  onSnapshot: (d) => applySnapshot(d),
   onEvent: (ev) => onEvent(ev),
-  onStatus: (ok) => { S.connected = ok; if (!ok) toast("Нет связи с ядром JARVIS — переподключаюсь…", "warn"); renderStatus(); },
+  onStatus: (ok) => {
+    const was = S.connected;
+    S.connected = ok;
+    if (!ok && was) toast("Нет связи с ядром JARVIS — переподключаюсь…", "warn");
+    if (ok) loadComms();
+    bus.emit("link");
+  },
 });
+const agent = new AgentStream(link);
+const desktop = new DesktopAdapter(link);
 
 const voice = new Voice({
   link,
   onState: (v) => {
-    S.voice = v; renderStatus(); renderComposer(); renderPrivacy();
+    S.voice = v; bus.emit("voice");
     if (v === "interrupted") setTimeout(() => { if (S.voice === "interrupted") voice.set(voice.listening ? "listening" : null); }, 700);
   },
   onTurn: (r) => {
     if (r?.pending) { toast(`Слушаю дальше: «${(r.text || "").slice(0, 60)}…»`); return; }   // phrase cut off: wait for the rest
-    if (S.view !== "chat") nav("chat");
+    S.lastVoiceAt = Date.now();      // the answer shows at the companion in any workspace; no forced switch to chat
   },
   onError: (m) => toast(m, "warn"),
   onOutput: (r) => {
     S.audioOut = r;
-    const w = outputProblem(r);
+    const w = settingsWs.outputProblem(r);
     if (w) toast(w + " — откройте Настройки → Голос, там есть кнопка «Сделать громче».", "warn");
-    if (S.view === "settings") renderAudioOut();
+    if (S.view === "settings") settings.renderAudioOut();
   },
 });
 // JARVIS is waiting for the user's answer: a confirmation, or a question it just asked (the mic stays open for it).
 voice.holdOpen = () => Object.values(S.approvals).some((a) => a.status === "pending" && a.tool_id !== "trust_rule_add")
   || (() => { const m = S.messages.at(-1); return !!m && m.role === "assistant" && /\?\s*$/.test(m.text || "")
     && Date.now() / 1000 - m.created_at < 30; })();
-
-function outputProblem(r) {
-  if (!r?.available) return "";
-  if (r.sink_muted) return "Звук компьютера выключен";
-  if (r.stream_found && r.muted) return "Звук JARVIS выключен в системном микшере";
-  if (r.stream_found && r.volume_pct != null && r.volume_pct < 20) return `Громкость JARVIS в системе всего ${r.volume_pct} %`;
-  if (r.sink_volume_pct != null && r.sink_volume_pct < 10) return `Общая громкость компьютера всего ${r.sink_volume_pct} %`;
-  return "";
-}
 
 function applySnapshot(d) {
   // JARVIS restarted with a new interface: load it (never mid-recording).
@@ -77,12 +100,13 @@ function applySnapshot(d) {
   S.streaming = {};
   turnCache.clear();
   $("#thread").innerHTML = "";
-  renderAll();
+  for (const t of ["core", "tasks", "approvals", "messages", "reminders", "providers"]) bus.emit(t);
+  renderThread();
   if (S.firstSnapshot) { scrollToEnd(false); S.firstSnapshot = false; }
 }
 
-// ------------------------------------------------------------------ events
-let floraMod = null, pendingFlora = null;
+// ------------------------------------------------------------------ events from the core
+let floraMod = null, commsMod = null, pendingFlora = null;
 function onEvent(ev) {
   floraMod?.onEvent(ev);
   commsMod?.onEvent(ev);
@@ -94,54 +118,64 @@ function onEvent(ev) {
       if (S.messages.some((x) => x.id === m.id)) return;
       S.messages.push(m);
       if (m.role === "assistant" && m.task_id) delete S.streaming[m.task_id];
-      renderThread();
+      if (m.role === "assistant" && m.task_id && isUserTask(S.tasks[m.task_id]) && S.tasks[m.task_id]?.state !== "cancelled") {
+        const byVoice = S.messages.some((x) => x.task_id === m.task_id && x.role === "user" && x.meta?.source === "voice");
+        S.lastReply = { text: m.text, taskId: m.task_id, at: Date.now(), pop: S.askedHere.has(m.task_id) || byVoice };
+      }
+      bus.emit("messages", m);
       break;
     }
     case "task.created": case "task.updated": {
-      const t = ev.task;
+      const t = ev.task, prev = S.tasks[t.id];
+      if (t.route === "ui_read") return;            // a folder click in «Файлы»: not a task to show or keep
       S.tasks[t.id] = t;
-      renderThread(); renderSide();
+      if ((!prev || isWorking(prev)) && !isWorking(t)) taskFinished(t);
+      bus.emit("task", t); bus.emit("tasks");
       break;
     }
-    case "action.recorded": case "action.deleted": if (S.view === "history") renderHistoryView(); break;
+    case "action.recorded":
+      if (ev.action?.title && ev.action.status !== "failed") toast(ev.action.title, "ok");
+      bus.emit("actions"); break;
+    case "action.deleted": bus.emit("actions"); break;
     case "step.updated": {
       const st = ev.step, t = S.tasks[tid];
       if (!t) return;
       const i = t.steps.findIndex((x) => x.id === st.id);
       if (i >= 0) t.steps[i] = st; else t.steps.push(st);
       if (!["running"].includes(st.state)) delete S.progress[st.id];
-      renderThread(); renderSide();
+      bus.emit("task", t); bus.emit("tasks");
       break;
     }
-    case "step.progress": S.progress[ev.step_id] = ev.message; renderThread(); break;
+    case "step.progress": S.progress[ev.step_id] = ev.message; bus.emit("tasks"); break;
     case "approval.created": case "approval.updated": {
       S.approvals[ev.approval.id] = ev.approval;
-      renderThread(); renderSide();
-      if (ev.kind === "approval.created") { notifyAttention(); }
+      bus.emit("approvals", ev.approval);
+      if (ev.kind === "approval.created") notifyAttention();
       break;
     }
     case "assistant.delta": {
       const s = S.streaming[tid] || (S.streaming[tid] = { text: "" });
       s.text += ev.text;
       updateStreaming(tid);
+      bus.emit("stream");
       break;
     }
-    case "core.state": S.core = ev; renderStatus(); renderSide(); break;
-    case "reminder.created": S.reminders.push(ev.reminder); renderSide(); break;
+    case "core.state": S.core = ev; bus.emit("core"); break;
+    case "reminder.created": S.reminders.push(ev.reminder); bus.emit("reminders"); break;
     case "reminder.updated": {                       // cancelled or moved
       S.reminders = S.reminders.filter((r) => r.id !== ev.reminder.id);
       if (ev.reminder.status === "scheduled") S.reminders.push(ev.reminder);
       S.reminders.sort((a, b) => a.due_at - b.due_at);
-      renderSide();
+      bus.emit("reminders");
       break;
     }
     case "reminder.fired": {
       S.reminders = S.reminders.filter((r) => r.id !== ev.reminder.id);
-      toast(`⏰ ${ev.body}`, ev.late ? "warn" : "");
-      renderSide();
+      toast(`⏰ ${ev.body}`, ev.late ? "warn" : "", { ttl: 12000 });
+      bus.emit("reminders");
       break;
     }
-    case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : ""); break;
+    case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : "ok"); break;
     case "speech.stop": voice.stopSpeaking(); break;
     case "speech.synth": if (!voice.audio && !["recording", "transcribing"].includes(S.voice)) voice.set("synthesizing"); break;
     case "speech.fallback":
@@ -159,14 +193,41 @@ function onEvent(ev) {
       setTimeout(() => { if (S.voice === "error") voice.set(voice.listening ? "listening" : null); }, 2500);
       break;
     case "conversation.new": link.request("snapshot").then(applySnapshot).catch(() => {}); break;
-    case "ui.navigate": pendingFlora = { tab: ev.tab }; nav(ev.view); break;
-    case "providers": S.providers = ev.providers; S.provider = ev.provider; renderStatus(); renderComposer();
-      if (S.view === "settings" && !document.activeElement?.closest?.(".pcard")) renderSettings(); break;
+    case "ui.navigate":
+      if (ev.view === "flora") pendingFlora = { tab: ev.tab };
+      nav(ev.view);
+      break;
+    case "providers": S.providers = ev.providers; S.provider = ev.provider; bus.emit("providers");
+      if (S.view === "settings" && !document.activeElement?.closest?.(".pcard")) settings.show(); break;
     case "task.decision": {
       const t = S.tasks[tid];
-      if (t) { t.decision = ev.decision; renderThread(); }
+      if (t) { t.decision = ev.decision; bus.emit("task", t); bus.emit("tasks"); }
       break;
     }
+    case "comms.providers": {
+      const before = { ...S.comms };
+      setProviders(ev.providers);
+      for (const p of ev.providers) {
+        const b = before[p.id];
+        if (b?.state === "connected" && p.state !== "connected") toast(`${p.title}: ${connectionOf(p).label.toLowerCase()}${p.detail ? " — " + p.detail : ""}`, "warn");
+      }
+      break;
+    }
+    case "comms.job": {
+      const j = ev.job;
+      bus.emit("comms.job", j);
+      if (j.status === "sent") toast(`Сообщение отправлено: ${j.to_name}`, "ok");
+      if (j.status === "failed") toast(`Не отправлено: ${j.to_name}${j.last_error ? " — " + j.last_error : ""}`, "err");
+      break;
+    }
+  }
+}
+
+function taskFinished(t) {
+  const f = flashFor(t, Date.now());
+  if (f) { S.flash = f; setTimeout(() => bus.emit("core"), 2700); }
+  if (t.state === "failed" && isUserTask(t) && S.view !== "chat" && t.route !== "ui") {
+    toast(`Не получилось: ${t.request.slice(0, 60)}`, "err", { action: { label: "Подробнее", run: () => openTask(t.id) } });
   }
 }
 
@@ -176,61 +237,183 @@ function notifyAttention() {
   }
 }
 
-// ------------------------------------------------------------------ rendering: status
-const STATUS_RU = { SYNTHESIZING: "Готовлю голос…", INTERRUPTED: "Перебито — слушаю", IDLE: "Готов", STANDBY: "Экстренная остановка — действия заблокированы", LISTENING: "Слушаю…",
-  PROCESSING: "Работаю…", THINKING: "Думаю…", EXECUTING: "Выполняю…", SPEAKING: "Говорю…",
-  WAITING_APPROVAL: "Нужно ваше решение", PAUSED: "Пауза", MUTED: "Готов · микрофон выключен", COMPLETED: "Готово",
-  ERROR: "Не получилось", OFFLINE: "Нет связи с ядром" };
-
-function uiState() {
-  if (!S.connected) return "OFFLINE";
-  if (S.voice === "recording") return "LISTENING";
-  if (S.voice === "interrupted") return "INTERRUPTED";
-  if (S.voice === "transcribing") return "PROCESSING";
-  if (S.voice === "speaking") return "SPEAKING";
-  if (S.voice === "synthesizing") return "SYNTHESIZING";
-  if (S.voice === "error") return "ERROR";
-  if (S.voice === "listening" && ["IDLE", "COMPLETED"].includes(S.core.state)) return "LISTENING";
-  const st = S.core.state;
-  if (st === "IDLE" && voice.muted) return "MUTED";
-  return st;
+function setProviders(list) {
+  S.comms = Object.fromEntries((list || []).map((p) => [p.id, p]));
+  bus.emit("providers");
+}
+async function loadComms() {
+  try { const d = await link.request("comms.state"); setProviders(d.providers); } catch { /* comms module not built in */ }
 }
 
+// ------------------------------------------------------------------ workspaces
+const sections = { chat: $("#viewChat"), flora: $("#viewFlora"), comms: $("#viewComms"), settings: $("#viewSettings") };
+const views = {};
+const ctx = {
+  S, bus, link, agent, desktop, voice, toast, nav: (id, p) => nav(id, p),
+  submit: (text, o) => submit(text, o), openTask: (id) => openTask(id), openApproval: (id) => openApproval(id),
+  attachFile: (p) => attachFile(p), findTask: (id) => S.tasks[id] || views.tasks?.findTask?.(id) || null,
+  connected: () => S.connected, providers: () => S.comms, setProviders: (l) => setProviders(l),
+  env: () => ({ connected: S.connected, providers: S.comms }), currentView: () => S.view,
+  agentState: () => dock.agent || { label: "…" },
+};
+const settings = settingsWs.create({ ...ctx, onChange: () => { bus.emit("core"); bus.emit("voice"); renderPrivacy(); },
+  onDevToggle: () => { turnCache.clear(); $("#thread").innerHTML = ""; } });
+views.settings = settings;
+const FACTORY = { home: homeWs.create, tasks: tasksWs.create, browser: browserWs.create, files: filesWs.create,
+  telegram: (c) => commWs.create(c, "telegram"), whatsapp: (c) => commWs.create(c, "whatsapp"), mail: (c) => commWs.create(c, "mail") };
+
+function viewFor(id) {
+  if (views[id]) return views[id];
+  if (!FACTORY[id]) return null;
+  const v = FACTORY[id](ctx);
+  $("#workspaces").appendChild(v.el);
+  sections[id] = v.el;
+  views[id] = v;
+  return v;
+}
+
+function nav(id, params = {}) {
+  if (id === "history") { id = "tasks"; params = { ...params, tab: "history" }; }
+  const def = byId(id);
+  if (!def) return;
+  const prev = S.view;
+  if (prev !== id) {
+    views[prev]?.hide?.();
+    if (sections[prev]) sections[prev].hidden = true;
+  }
+  S.view = id;
+  app.dataset.view = id;
+  prefs.set("ws", id);
+  const v = viewFor(id);
+  if (sections[id]) sections[id].hidden = false;
+  if (id === "chat") { renderThread(); scrollToEnd(false); setTimeout(() => input.focus(), 0); }
+  else if (id === "flora") renderFlora();
+  else if (id === "comms") renderComms();
+  else v?.show?.(params);
+  $$("[data-nav]", $("#sidebar")).forEach((b) => b.setAttribute("aria-selected", String(b.dataset.nav === id)));
+  renderCrumb();
+  bus.emit("workspace", id);
+}
+
+function openTask(id) { nav("tasks", { task: id }); }
+function openApproval(id) {
+  nav("chat");
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`[data-approval="${CSS.escape(id)}"]`);
+    if (!card) { if (!app.classList.contains("side-open") && innerWidth <= 1080) toggleSide(); return; }
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    const d = card.querySelector("details.revise");
+    if (d) d.open = true;
+    (card.querySelector("details.revise textarea, textarea[data-edit]") || card.querySelector("[data-approve]"))?.focus();
+  });
+}
+
+async function renderComms() {
+  const el = $("#viewComms");
+  try {
+    commsMod = commsMod || await import("./comms.js");
+    await commsMod.render(el, { link, toast });
+  } catch (e) {
+    el.innerHTML = `<div class="page"><h1>Сообщения</h1><p class="lead">Модуль не загрузился: ${esc(e.message)}</p></div>`;
+  }
+}
+async function renderFlora() {
+  const el = $("#viewFlora");
+  try {
+    const mod = floraMod || (floraMod = await import("./flora.js"));
+    const p = pendingFlora; pendingFlora = null;
+    if (p?.tab) mod.setTab(p.tab);
+    if (p?.item) mod.selectItem(p.item);
+    await mod.render(el, { link, S, toast, submit: (t, s) => submit(t, { source: s }), nav });
+  } catch (e) {
+    console.error(e);
+    if (!floraMod) el.innerHTML = `<div class="page"><h1>Проект «Флора»</h1><p class="lead">Модуль не загрузился: ${esc(e.message)}</p></div>`;
+  }
+}
+
+// ------------------------------------------------------------------ sidebar
+function buildSidebar() {
+  $("#nav").innerHTML = WORKSPACES.map((w) => `<button class="sb-btn" data-nav="${w.id}" role="tab" aria-selected="false"
+      aria-label="${esc(w.title)}" data-tip="${esc(w.title)}${w.hotkey ? "  ·  Ctrl+" + w.hotkey : ""}">
+      <span class="sb-ico" aria-hidden="true">${ICON[w.icon] || ICON.dot}<span class="sb-badge" hidden></span></span>
+      <span class="sb-label">${esc(w.title)}</span><span class="sb-count" hidden></span></button>`).join("");
+}
+const renderSidebar = frameBatch(() => {
+  const env = ctx.env();
+  for (const w of WORKSPACES) {
+    const b = $(`#nav [data-nav="${w.id}"]`);
+    if (!b) continue;
+    const badge = navBadge(w, env), dot = $(".sb-badge", b);
+    dot.hidden = !badge;
+    if (badge) { dot.className = `sb-badge ${badge}`; b.dataset.tip = `${w.title} · ${connectionOf(S.comms[w.channel]).label.toLowerCase()}${w.hotkey ? "  ·  Ctrl+" + w.hotkey : ""}`; }
+  }
+  const active = Object.values(S.tasks).filter((t) => isUserTask(t) && isWorking(t)).length;
+  const c = $('#nav [data-nav="tasks"] .sb-count');
+  if (c) { c.hidden = !active; c.textContent = active; }
+});
+function setSidebarWide(wide) {
+  app.classList.toggle("sb-wide", wide);
+  prefs.set("sidebar", wide ? "wide" : "narrow");
+  const t = $("#sbToggle");
+  t.setAttribute("aria-label", wide ? "Скрыть подписи" : "Показать подписи");
+  t.dataset.tip = wide ? "Скрыть подписи" : "Показать подписи";
+  $(".sb-label", t).textContent = wide ? "Свернуть" : "Развернуть";
+}
+
+// ------------------------------------------------------------------ top bar
+const STATUS_TITLE = { WAITING_CONFIRMATION: "● JARVIS", ERROR: "JARVIS — ошибка", OFFLINE: "JARVIS — нет связи" };
 function renderStatus() {
-  const st = uiState();
-  companion.setState(st === "SYNTHESIZING" ? "PROCESSING" : st, { muted: voice.muted });
+  const a = dock.agent;
+  if (!a) return;
   const el = $("#status");
-  el.dataset.state = st;
-  let label = STATUS_RU[st] || st;
-  if (st === "LISTENING") label = S.voice === "recording" ? "Слушаю…" : "Жду вашу фразу";
-  if (S.voice === "transcribing") label = "Распознаю речь…";
-  if (S.core.working && ["EXECUTING", "THINKING", "PROCESSING"].includes(st)) label = `${S.core.working} работает…`;
-  if (st === "ERROR" && S.voice === "error") label = "Звук ответа не получился — текст на экране";
-  if (st === "WAITING_APPROVAL" && S.core.pending_approvals > 1) label += ` (${S.core.pending_approvals})`;
-  $(".status-label", el).textContent = label;
-  $("#app").dataset.estop = S.core.estop ? "1" : "0";
-  document.title = st === "WAITING_APPROVAL" ? "● JARVIS" : "JARVIS";
+  el.dataset.state = a.mode;
+  $(".status-label", el).textContent = a.label + (a.count > 1 ? ` (${a.count})` : "");
+  el.title = `${a.label}${a.detail ? " — " + a.detail : ""} · Ctrl+J`;
+  app.dataset.estop = S.core.estop ? "1" : "0";
+  document.title = STATUS_TITLE[a.mode] || "JARVIS";
+  const voiceFlow = ["recording", "transcribing"].includes(S.voice) || (Date.now() - S.lastVoiceAt < 60000 && a.busy);
+  const ph = $("#phases");
+  const order = ["listening", "transcribing", "understanding", "executing"];
+  const idx = order.indexOf(a.phase);
+  ph.hidden = !(voiceFlow && idx >= 0 && a.mode !== "SPEAKING");
+  if (!ph.hidden) ph.innerHTML = [["Слушаю"], ["Распознаю"], ["Понимаю"], ["Выполняю"]].map(([l], i) => `<span class="${i < idx ? "done" : i === idx ? "on" : ""}">${l}</span>`).join("<i></i>");
   renderChips();
 }
 
 function renderChips() {
   const chips = [];
   if (S.core.estop) chips.push(`<button class="chip err" data-act="estop_clear">${ICON.stop} Остановлено · снять</button>`);
+  const pend = Object.values(S.approvals).filter((x) => x.status === "pending").length;
+  if (pend) chips.push(`<button class="chip attn" data-act="show-approvals">${ICON.shield} Нужно решение${pend > 1 ? ` · ${pend}` : ""}</button>`);
   if (voice.listening) chips.push(`<button class="chip live" data-act="conv">${ICON.mic} ${voice.conversation ? "Разговор: микрофон включён" : "Слушаю одну фразу"}</button>`);
-  if (S.providers.length) {
+  if (S.providers.length && S.connected) {
     const up = S.providers.filter((p) => p.health === "CONNECTED");
     const soft = S.providers.filter((p) => p.health === "DEGRADED");
     const names = [...up, ...soft].map((p) => p.name);
     const cls = up.length ? "ok" : soft.length ? "warn" : "";
-    const label = names.length ? `ИИ: ${names.join(" · ")}` : "ИИ не подключён";
-    chips.push(`<button class="chip ${cls}" data-nav="settings" title="AI-агентство">${ICON.spark} ${esc(label)}</button>`);
+    const full = names.length ? `ИИ: ${names.join(" · ")}` : "ИИ не подключён";
+    chips.push(`<button class="chip ${cls}" data-nav="settings" title="AI-агентство — ${esc(full)}">${ICON.spark} <span class="long">${esc(full)}</span><span class="short">${names.length ? "ИИ" : "ИИ нет"}</span></button>`);
   }
-  const prof = { AUTHORIZED_CLOUD: "Облако разрешено", PRIVATE_LOCAL: "Приватно: спрашивать", STRICT_OFFLINE: "Строго офлайн" }[S.core.privacy];
-  if (prof) chips.push(`<button class="chip" data-nav="settings">${ICON.lock} ${prof}</button>`);
+  // Privacy shows up here only when it restricts something; the normal mode is in the activity panel.
+  const prof = { PRIVATE_LOCAL: "Приватно: спрашивать", STRICT_OFFLINE: "Строго офлайн" }[S.core.privacy];
+  if (prof && S.connected) chips.push(`<button class="chip warn" data-nav="settings">${ICON.lock} ${prof}</button>`);
   $("#chips").innerHTML = chips.join("");
 }
 
-// ------------------------------------------------------------------ rendering: thread
+function renderCrumb() {
+  const def = byId(S.view);
+  if (!def) return;
+  const v = views[S.view];
+  const detail = v?.context?.() || "";
+  let pill = "";
+  if (def.channel) {
+    const c = connectionOf(S.comms[def.channel]);
+    pill = `<span class="cpill ${{ connected: "ok", connecting: "warn", error: "err" }[c.state] || ""}">${esc(c.label)}</span>`;
+  }
+  $("#crumb").innerHTML = `<b>${esc(def.title)}</b>${pill}<span class="ctx">${esc(detail || (def.context !== def.title ? def.context : ""))}</span>`;
+}
+
+// ------------------------------------------------------------------ chat thread
 const turnCache = new Map();   // key -> {el, sig}
 
 function buildTurns() {
@@ -252,11 +435,7 @@ function renderThread() {
   const thread = $("#thread");
   const turns = buildTurns();
   if (!turns.length) {
-    if (!$(".hero", thread)) {
-      turnCache.clear();
-      thread.innerHTML = heroHtml();
-      companion.mount($(".hero-companion", thread));
-    }
+    if (!$(".hero", thread)) { turnCache.clear(); thread.innerHTML = heroHtml(); }
     return;
   }
   $(".hero", thread)?.remove();
@@ -295,7 +474,7 @@ function heroHtml() {
   const greet = h < 5 ? "Доброй ночи" : h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : "Добрый вечер";
   const ideas = ["Что важного по Флоре?", "Состояние системы", "Найди файл смета", "Громкость 40",
     "Запиши заметку: позвонить фабрике", "Напомни через 10 минут проверить почту", "Сделай скриншот", "Что ты умеешь?"];
-  return `<div class="hero"><div class="hero-companion"></div><h1>${greet}.</h1>
+  return `<div class="hero"><h1>${greet}.</h1>
     <p>Скажите или напишите, что нужно сделать. Простые команды выполняются сразу, на этом компьютере.</p>
     <div class="suggestions">${ideas.map((i) => `<button class="suggestion" data-suggest="${esc(i)}">${esc(i)}</button>`).join("")}</div></div>`;
 }
@@ -334,6 +513,13 @@ function turnHtml(t, task, approvals) {
   if (task && task.state === "blocked") {
     body.push(`<div class="msg-ai faint">Задача прервана перезапуском JARVIS. ${esc(task.error || "")}</div>`);
   }
+  // Turn controls: stop while it runs, retry when it failed / was cancelled.
+  if (task && active && task.route !== "ui") {
+    body.push(`<div class="turn-ctl"><button class="btn ghost" data-task-act="cancel" data-task="${esc(task.id)}">${ICON.stop} Остановить</button></div>`);
+  } else if (task && canRetry(task) && t.user) {
+    body.push(`<div class="turn-ctl"><button class="btn ghost" data-retry="${esc(task.id)}">${ICON.retry} Повторить</button>
+      <button class="btn ghost" data-open-task="${esc(task.id)}">Подробнее</button></div>`);
+  }
   const meta = metaLine(t, task);
   if (meta) body.push(meta);
   if (body.length) parts.push(`<div class="assistant">${body.join("")}</div>`);
@@ -370,6 +556,7 @@ function updateStreaming(tid, schedule = true) {
 }
 function flushStream() {
   streamRaf = 0;
+  if (S.view !== "chat") { streamDirty.clear(); return; }
   const near = nearBottom();
   for (const tid of streamDirty) {
     const el = document.querySelector(`[data-stream="${CSS.escape(tid)}"]`);
@@ -390,9 +577,16 @@ function scrollToEnd(smooth = true) {
   requestAnimationFrame(() => scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? "smooth" : "auto" }));
 }
 
-// ------------------------------------------------------------------ rendering: side panel
+// ------------------------------------------------------------------ activity panel
 function renderSide() {
-  const active = Object.values(S.tasks).filter((t) => !["completed", "failed", "cancelled"].includes(t.state))
+  const pend = Object.values(S.approvals).filter((a) => a.status === "pending").sort((a, b) => a.created_at - b.created_at);
+  $("#approvalsSection").hidden = !pend.length;
+  $("#approvalsList").innerHTML = pend.map((a) => `<div class="task" style="border-color:color-mix(in srgb, var(--warn) 40%, transparent)">
+      <div class="top">${ICON.shield}<span class="req" title="${esc(a.summary?.action || "")}">${esc(a.summary?.action || a.summary?.title || toolTitle(a.tool_id))}</span></div>
+      <div class="sub" style="gap:6px"><button class="btn warn" data-approve="${esc(a.id)}" style="height:26px;font-size:12.5px;padding:0 10px">${a.tool_id === "message_send" ? "Отправить" : "Разрешить"}</button>
+        <button class="btn ghost" data-deny="${esc(a.id)}" style="height:26px;font-size:12.5px;padding:0 10px">Отклонить</button>
+        <button class="btn ghost" data-open-approval="${esc(a.id)}" style="height:26px;font-size:12.5px;padding:0 8px">Подробнее</button></div></div>`).join("");
+  const active = Object.values(S.tasks).filter((t) => isUserTask(t) && !["completed", "failed", "cancelled"].includes(t.state))
     .sort((a, b) => a.created_at - b.created_at);
   $("#activeTasks").innerHTML = active.length ? active.map(taskCard).join("")
     : `<div class="empty-note">Нет активных задач</div>`;
@@ -411,7 +605,7 @@ function taskCard(t) {
     : running ? `${toolTitle(running.tool_id)} · ${S.progress[running.id] || "выполняю"}`
     : t.state === "waiting_for_approval" ? "нужно ваше решение" : "";
   return `<div class="task"><div class="top">
-      <span class="req" title="${esc(t.request)}">${esc(t.request)}</span>
+      <button class="req" data-open-task="${esc(t.id)}" title="${esc(t.request)}" style="text-align:left">${esc(t.request)}</button>
       <span class="ctl">
         ${canPause ? `<button class="icon-btn" data-task-act="pause" data-task="${esc(t.id)}" aria-label="Пауза" title="Пауза">${ICON.pause}</button>` : ""}
         ${canResume ? `<button class="icon-btn" data-task-act="resume" data-task="${esc(t.id)}" aria-label="Продолжить" title="Продолжить">${ICON.play}</button>` : ""}
@@ -433,435 +627,274 @@ function renderPrivacy() {
 
 // ------------------------------------------------------------------ composer
 const input = $("#input");
+function stoppable() {
+  if (voice.audio || S.voice === "speaking") return "speech";
+  const t = Object.values(S.tasks).filter((x) => isUserTask(x) && isWorking(x) && x.route !== "ui")
+    .sort((a, b) => b.created_at - a.created_at)[0];
+  return t ? t.id : null;
+}
 function renderComposer() {
   const mic = $("#micBtn"), conv = $("#convBtn");
-  const aiReady = true;            // speech is recognised and spoken on this computer: no cloud needed for the mic
   mic.classList.toggle("recording", voice.listening && !voice.conversation);
   mic.classList.toggle("busy", S.voice === "transcribing");
   conv.classList.toggle("on", voice.conversation);
-  for (const b of [mic, conv]) b.disabled = voice.muted || !voice.supported || !aiReady;
+  for (const b of [mic, conv]) b.disabled = voice.muted || !voice.supported;
   const why = voice.muted ? "Микрофон выключен" : "";
   mic.title = why || "Сказать одну фразу (Ctrl+Space)";
   conv.title = why || (voice.conversation ? "Закончить разговор (Ctrl+Shift+Space)" : "Разговор без кнопок (Ctrl+Shift+Space)");
+  const stop = !input.value.trim() && !S.attachments.length && stoppable();
+  $("#stopBtn").hidden = !stop;
+  $("#sendBtn").hidden = !!stop;
+  $("#stopBtn span").textContent = stop === "speech" ? "Замолчать" : "Стоп";
   $("#sendBtn").disabled = !input.value.trim();
   const hint = S.voice === "recording" ? "Говорите… фраза закончится сама после паузы · <span class=\"kbd\">Esc</span> — отмена"
     : S.voice === "transcribing" ? "Распознаю речь…"
     : S.voice === "speaking" ? "JARVIS говорит — начните говорить, чтобы перебить, или <span class=\"kbd\">Esc</span>"
     : voice.conversation ? "Разговор: просто говорите. Пауза — конец фразы. Скажите «стоп», чтобы перебить."
-    : `<span><span class="kbd">Enter</span> отправить</span><span><span class="kbd">Ctrl Space</span> фраза</span><span><span class="kbd">Ctrl Shift Space</span> разговор</span><span><span class="kbd">Ctrl Shift X</span> экстренный стоп</span>`;
+    : stop ? `<span><span class="kbd">Esc</span> остановить</span><span><span class="kbd">Enter</span> отправить</span><span><span class="kbd">Ctrl K</span> команды</span>`
+    : `<span><span class="kbd">Enter</span> отправить</span><span><span class="kbd">Ctrl Space</span> фраза</span><span><span class="kbd">Ctrl K</span> команды</span><span><span class="kbd">Ctrl J</span> JARVIS</span>`;
   $("#composerHint").innerHTML = hint;
 }
 
 function autosize() { input.style.height = "auto"; input.style.height = Math.min(180, input.scrollHeight) + "px"; }
-input.addEventListener("input", () => { autosize(); $("#sendBtn").disabled = !input.value.trim(); });
+input.addEventListener("input", () => { autosize(); renderComposer(); });
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#composer").requestSubmit(); }
 });
 $("#composer").addEventListener("submit", (e) => {
   e.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
+  let text = input.value.trim();
+  if (!text && !S.attachments.length) return;
+  if (S.attachments.length) {
+    text = (text || "Посмотри эти файлы") + "\n\nФайлы:\n" + S.attachments.map((a) => "- " + a.path).join("\n");
+    S.attachments = []; renderAttachments();
+  }
   input.value = ""; autosize();
-  submit(text, "text");
+  submit(text, { source: "text" });
 });
 $("#micBtn").addEventListener("click", () => voice.listenOnce());
 $("#convBtn").addEventListener("click", () => voice.toggleConversation());
+$("#stopBtn").addEventListener("click", () => stopCurrent());
 
-async function submit(text, source) {
-  if (S.view !== "chat") nav("chat");
+async function stopCurrent() {
+  const s = stoppable();
+  if (!s) return false;
+  if (s === "speech") { voice.stopAll(); return true; }
+  try { const r = await agent.cancelTask(s); toast(r?.message || "Задача остановлена", "ok"); } catch (e) { toast(e.message, "err"); }
+  return true;
+}
+
+// Attachments: file paths from the computer (search here or pick in «Файлы»). The path goes with the message;
+// JARVIS reads the file through its own tools, within the allowed folders.
+function attachFile(path) {
+  if (!S.attachments.some((a) => a.path === path)) S.attachments.push({ path, name: path.split("/").pop() });
+  renderAttachments();
+  nav("chat");
+  setTimeout(() => input.focus(), 0);
+}
+function renderAttachments() {
+  const box = $("#attachments");
+  box.hidden = !S.attachments.length;
+  box.innerHTML = S.attachments.map((a, i) => `<span class="att" title="${esc(a.path)}">${ICON.file}<span>${esc(a.name)}</span>
+    <button type="button" class="icon-btn" data-att-del="${i}" aria-label="Убрать ${esc(a.name)}">${ICON.x}</button></span>`).join("");
+  renderComposer();
+}
+let attachPop = null;
+$("#attachBtn").addEventListener("click", () => {
+  if (attachPop) { attachPop.remove(); attachPop = null; return; }
+  attachPop = document.createElement("div");
+  attachPop.className = "attach-pop";
+  attachPop.innerHTML = `<input type="text" placeholder="Имя файла — поиск в разрешённых папках" aria-label="Найти файл для вложения">
+    <div class="rows"></div><div style="display:flex;gap:6px"><button type="button" class="btn ghost" data-nav="files">${ICON.folder} Выбрать в «Файлах»</button></div>`;
+  $("#composer").appendChild(attachPop);
+  const q = $("input", attachPop), rows = $(".rows", attachPop);
+  let timer = 0;
+  q.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      if (!q.value.trim()) { rows.innerHTML = ""; return; }
+      rows.innerHTML = `<div class="empty-note">Ищу…</div>`;
+      try {
+        const d = await desktop.searchFiles(q.value.trim());
+        rows.innerHTML = d.results.length ? d.results.slice(0, 12).map((h) => `<button type="button" class="row" data-attach="${esc(h.path)}" title="${esc(h.path)}">
+          <span>${h.dir ? ICON.folder : ICON.file}</span><span class="t"><div>${esc(h.name)}</div><div class="p">${esc(h.path.replace(/^\/home\/[^/]+/, "~"))}</div></span><span class="r"></span></button>`).join("")
+          : `<div class="empty-note">Ничего не найдено</div>`;
+      } catch (e) { rows.innerHTML = `<div class="cerr">${esc(e.message)}</div>`; }
+    }, 250);
+  });
+  q.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); attachPop.remove(); attachPop = null; input.focus(); } });
+  q.focus();
+});
+
+/** Send a request to JARVIS. Window-level commands (switch workspace, stop voice, emergency stop) act at once. */
+async function submit(text, { source = "text", stay = false } = {}) {
+  const intent = classify(text);
+  if (intent.kind === "nav" && source === "text") { nav(intent.view); return ""; }
+  if (intent.kind === "control" && intent.local === "estop") { estop(); return ""; }
+  if (intent.kind === "control" && intent.local === "stop_voice") voice.stopAll();
+  if (!stay && S.view !== "chat") nav("chat");
   try {
-    await link.request("submit", { text, source, speak: voice.speakReplies || voice.conversation }, 15000);
+    const id = await agent.sendMessage(text, { source, speak: voice.speakReplies || voice.conversation });
+    if (id && stay && S.view !== "chat") {
+      S.askedHere.add(id);
+      // A local command can finish before this reply arrives: mark its answer now.
+      if (S.lastReply?.taskId === id && !S.lastReply.pop) { S.lastReply.pop = true; bus.emit("messages"); }
+    }
+    return id;
   } catch (e) {
     toast(e.message, "err");
-    if (source === "text" && !input.value) { input.value = text; autosize(); }
-  }
-  renderComposer();
+    if (source === "text" && !stay && !input.value) { input.value = text; autosize(); }
+    return "";
+  } finally { renderComposer(); }
 }
 
 // ------------------------------------------------------------------ global clicks & keys
 document.addEventListener("click", async (e) => {
+  if (attachPop && !e.target.closest(".attach-pop, #attachBtn")) { attachPop.remove(); attachPop = null; }
   const t = e.target.closest("button, [data-open], [data-url]");
   if (!t) return;
   if (t.dataset.nav) {
     if (t.dataset.floraTab || t.dataset.floraItem) pendingFlora = { tab: t.dataset.floraTab, item: t.dataset.floraItem };
     return nav(t.dataset.nav);
   }
-  if (t.dataset.suggest) return submit(t.dataset.suggest, "text");
-  if (t.id === "railCompanion") { nav("chat"); input.focus(); return; }
+  if (t.dataset.suggest) return submit(t.dataset.suggest, { source: "text", stay: S.view !== "chat" });   // stay in the workspace
+  if (t.dataset.attach) { attachPop?.remove(); attachPop = null; return attachFile(t.dataset.attach); }
+  if (t.dataset.attDel != null) { S.attachments.splice(+t.dataset.attDel, 1); return renderAttachments(); }
+  if (t.dataset.retry) { const task = ctx.findTask(t.dataset.retry); if (task) submit(task.request, { source: "text" }); return; }
+  if (t.dataset.openTask) return openTask(t.dataset.openTask);
+  if (t.dataset.openApproval) return openApproval(t.dataset.openApproval);
+  if (t.id === "sbBrand") return nav("home");
+  if (t.id === "sbToggle") { setSidebarWide(!app.classList.contains("sb-wide")); return; }
   if (t.id === "estopBtn") return estop();
   if (t.id === "sideToggle") return toggleSide();
-  if (t.dataset.open) return link.request("tool.run", { tool: "open_path", args: { path: t.dataset.open } }).catch((er) => toast(er.message, "err"));
-  if (t.dataset.actionDel) return link.request("history.delete", { id: t.dataset.actionDel }).then(renderHistoryView).catch((er) => toast(er.message, "err"));
-  if (t.dataset.url) return link.request("tool.run", { tool: "open_url", args: { url: t.dataset.url } }).catch((er) => toast(er.message, "err"));
+  if (t.id === "paletteBtn") return palette.open();
+  if (t.id === "status") return dock.toggle();
+  if (t.dataset.open) return desktop.openPath(t.dataset.open).catch((er) => toast(er.message, "err"));
+  if (t.dataset.actionDel) return link.request("history.delete", { id: t.dataset.actionDel }).then(() => bus.emit("actions")).catch((er) => toast(er.message, "err"));
+  if (t.dataset.url) return desktop.openUrl(t.dataset.url).catch((er) => toast(er.message, "err"));
   if (t.dataset.approve) {
     const card = t.closest("[data-approval]");
     const a = S.approvals[t.dataset.approve];
+    if (!a) return;
     const edited = {};
     let changed = false;
-    $$("[data-edit]", card).forEach((ta) => { edited[ta.dataset.edit] = ta.value; if (ta.value !== a.args[ta.dataset.edit]) changed = true; });
-    const remember = $("[data-remember]", card)?.checked;
+    if (card) $$("[data-edit]", card).forEach((ta) => { edited[ta.dataset.edit] = ta.value; if (ta.value !== a.args[ta.dataset.edit]) changed = true; });
+    const remember = card ? $("[data-remember]", card)?.checked : false;
     t.disabled = true;
-    return link.request("approve", { id: a.id, edited: changed ? { ...a.args, ...edited } : null, remember })
+    return agent.confirmAction(a.id, changed ? { ...a.args, ...edited } : null, remember)
       .catch((er) => { toast(er.message, "err"); t.disabled = false; });
   }
-  if (t.dataset.deny) return link.request("deny", { id: t.dataset.deny }).catch((er) => toast(er.message, "err"));
+  if (t.dataset.deny) return agent.denyAction(t.dataset.deny).catch((er) => toast(er.message, "err"));
   if (t.dataset.revise) {
     const card = t.closest("[data-approval]");
     const body = $("[data-rev-body]", card)?.value, subject = $("[data-rev-subject]", card)?.value;
     t.disabled = true;
     return link.request("comms.revise", { approval_id: t.dataset.revise, body, subject: subject ?? null })
-      .then(() => toast("Изменил — подтвердите ещё раз")).catch((er) => { toast(er.message, "err"); t.disabled = false; });
+      .then(() => toast("Изменил — подтвердите ещё раз", "ok")).catch((er) => { toast(er.message, "err"); t.disabled = false; });
   }
   if (t.dataset.taskAct) return link.request(t.dataset.taskAct, { task_id: t.dataset.task }).then((r) => r.message && toast(r.message)).catch((er) => toast(er.message, "err"));
-  if (t.dataset.act === "estop_clear") return link.request("estop_clear").then((r) => toast(r.message));
+  if (t.dataset.act === "estop_clear") return agent.control("estop_clear").then((r) => toast(r.message, "ok"));
   if (t.dataset.act === "conv") { voice.toggleConversation(); return; }
-  if (t.dataset.act === "toggle-mute") { voice.setMuted(!voice.muted); renderStatus(); renderComposer(); return; }
+  if (t.dataset.act === "show-approvals") { const a = Object.values(S.approvals).find((x) => x.status === "pending"); if (a) { dock.show(); dock.focus(); } return; }
+  if (t.dataset.act === "toggle-mute") { voice.setMuted(!voice.muted); bus.emit("voice"); return; }
 });
 
 async function estop() {
   voice.stopAll();
-  try { const r = await link.request("estop"); toast(r.message, "err"); } catch (e) { toast(e.message, "err"); }
+  try { const r = await agent.control("estop"); toast(r.message, "err"); } catch (e) { toast(e.message, "err"); }
 }
 
+const typingTarget = (el) => el && (el.tagName === "TEXTAREA" || el.tagName === "SELECT" || (el.tagName === "INPUT" && !["checkbox", "radio", "range", "button"].includes(el.type)) || el.isContentEditable);
 document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey && e.shiftKey && (e.key === "X" || e.key === "x" || e.code === "KeyX")) { e.preventDefault(); return estop(); }
-  if (e.ctrlKey && e.shiftKey && e.code === "Space") { e.preventDefault(); if (!$("#convBtn").disabled) voice.toggleConversation(); return; }
-  if (e.ctrlKey && e.code === "Space") { e.preventDefault(); if (!$("#micBtn").disabled) voice.listenOnce(); return; }
+  const k = e.code;
+  if (e.ctrlKey && e.shiftKey && (e.key === "X" || e.key === "x" || k === "KeyX")) { e.preventDefault(); return estop(); }
+  if (e.ctrlKey && e.shiftKey && k === "Space") { e.preventDefault(); if (!voice.muted && voice.supported) voice.toggleConversation(); return; }
+  if (e.ctrlKey && k === "Space") { e.preventDefault(); if (!voice.muted && voice.supported) voice.listenOnce(); return; }
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && k === "KeyK") { e.preventDefault(); palette.isOpen ? palette.close() : palette.open(); return; }
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && k === "KeyJ") { e.preventDefault(); dock.focus(); return; }
+  if (palette.isOpen) return;
   if (e.key === "Escape") {
+    if (attachPop) { attachPop.remove(); attachPop = null; return; }
     if (voice.recording || voice.audio) { voice.stopAll(); return; }
-    if ($("#app").classList.contains("side-open")) { toggleSide(); return; }
+    if (app.classList.contains("side-open")) { toggleSide(); return; }
+    if (dock.state.expanded && !dock.state.pinned) { dock.toggle(); return; }
+    // Esc stops the running task — from an empty composer or with nothing focused, never while typing.
+    const a = document.activeElement;
+    if (a === document.body || (a === input && !input.value)) { stopCurrent(); return; }
   }
-  if (e.ctrlKey && !e.shiftKey) {
-    const m = { Digit1: "chat", Digit2: "history", Digit3: "flora", Digit4: "comms", Comma: "settings" }[e.code];
-    if (m) { e.preventDefault(); nav(m); return; }
-    if (e.code === "KeyK") { e.preventDefault(); nav("chat"); input.focus(); }
+  if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+    if (k === "Comma") { e.preventDefault(); nav("settings"); return; }
+    const m = /^Digit([1-9])$/.exec(k);
+    const w = m && WORKSPACES.find((x) => x.hotkey === m[1]);
+    if (w) { e.preventDefault(); nav(w.id); return; }
   }
-  if (e.key === "/" && document.activeElement === document.body) { e.preventDefault(); input.focus(); }
+  if (!typingTarget(document.activeElement) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    if (e.key === "/") { e.preventDefault(); if (S.view === "chat") input.focus(); else dock.focus(); return; }
+    // Space with nothing focused = say one phrase (never steals a space from a field or a focused button).
+    if (k === "Space" && document.activeElement === document.body && !voice.muted && voice.supported) { e.preventDefault(); voice.listenOnce(); }
+  }
 });
 
 function toggleSide() {
-  const app = $("#app");
   if (innerWidth <= 1080) app.classList.toggle("side-open");
-  else app.classList.toggle("side-hidden");
+  else { app.classList.toggle("side-hidden"); prefs.set("side", app.classList.contains("side-hidden") ? "hidden" : "shown"); }
 }
 
-// ------------------------------------------------------------------ views
-const VIEWS = { chat: "#viewChat", history: "#viewHistory", flora: "#viewFlora", comms: "#viewComms", settings: "#viewSettings" };
-function nav(v) {
-  S.view = v;
-  $("#app").dataset.view = v;
-  for (const [k, sel] of Object.entries(VIEWS)) $(sel).hidden = k !== v;
-  $$(".rail-btn").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.nav === v)));
-  if (v === "chat") { renderThread(); scrollToEnd(false); setTimeout(() => input.focus(), 0); }
-  if (v === "history") renderHistoryView();
-  if (v === "settings") renderSettings();
-  if (v === "flora") renderFlora();
-  if (v === "comms") renderComms();
-}
+// ------------------------------------------------------------------ companion & palette
+const dock = createCompanionDock({
+  ...ctx,
+  agentInput: () => ({ connected: S.connected, core: S.core, voice: S.voice, micOpen: voice.listening, muted: voice.muted,
+    tasks: Object.values(S.tasks), approvals: Object.values(S.approvals), streaming: S.streaming, progress: S.progress,
+    flash: S.flash, now: Date.now() }),
+  context: () => ({ title: byId(S.view)?.title || "", detail: views[S.view]?.context?.() || "" }),
+  lastReply: () => S.lastReply,
+  onLayout: (docked) => { app.dataset.cdock = docked ? "1" : "0"; },
+});
 
-let commsMod = null;
-async function renderComms() {
-  const el = $("#viewComms");
-  try {
-    commsMod = commsMod || await import("./comms.js");
-    await commsMod.render(el, { link, toast });
-  } catch (e) {
-    el.innerHTML = `<div class="page"><h1>Сообщения</h1><p class="lead">Модуль не загрузился: ${esc(e.message)}</p></div>`;
-  }
+function commands() {
+  const C = [];
+  const go = (w) => ({ id: "nav:" + w.id, title: w.title, sub: w.context !== w.title ? w.context : "", group: "Перейти", icon: w.icon,
+    hint: w.hotkey ? "Ctrl+" + w.hotkey : w.id === "settings" ? "Ctrl+," : "", keywords: `открыть раздел ${w.id} ${w.context}`, run: () => nav(w.id) });
+  for (const w of ALL) if (w.id !== S.view) C.push(go(w));
+  const cur = stoppable();
+  if (cur && cur !== "speech") C.unshift({ id: "stop", title: "Остановить текущую задачу", group: "JARVIS", icon: "stop", hint: "Esc", keywords: "стоп cancel отмена", run: () => stopCurrent() });
+  if (cur === "speech") C.unshift({ id: "quiet", title: "Замолчать", group: "JARVIS", icon: "stop", hint: "Esc", keywords: "стоп тише", run: () => voice.stopAll() });
+  C.push(
+    { id: "focus", title: "Спросить JARVIS", sub: "Компаньон с полем ввода — из любого раздела", group: "JARVIS", icon: "spark", hint: "Ctrl+J", keywords: "focus фокус", run: () => dock.focus() },
+    { id: "listen", title: "Сказать одну фразу", group: "JARVIS", icon: "mic", hint: "Ctrl+Space", keywords: "микрофон голос слушать listen", run: () => voice.listenOnce() },
+    { id: "conv", title: voice.conversation ? "Закончить разговор" : "Разговор без кнопок", group: "JARVIS", icon: "wave", hint: "Ctrl+Shift+Space", keywords: "голос микрофон conversation", run: () => voice.toggleConversation() },
+    { id: "pause", title: "Пауза всех задач", group: "JARVIS", icon: "pause", keywords: "pause приостановить", run: () => agent.control("pause_all").then((r) => toast(r.message)) },
+    { id: "resume", title: "Продолжить задачи", group: "JARVIS", icon: "play", keywords: "resume продолжить", run: () => agent.control("resume_all").then((r) => toast(r.message)) },
+    S.core.estop ? { id: "estop_clear", title: "Снять экстренную остановку", group: "JARVIS", icon: "play", keywords: "estop снять", run: () => agent.control("estop_clear").then((r) => toast(r.message, "ok")) }
+      : { id: "estop", title: "Экстренная остановка", sub: "Остановить всё и заблокировать действия", group: "JARVIS", icon: "estop", hint: "Ctrl+Shift+X", keywords: "стоп stop emergency", run: () => estop() },
+    { id: "newconv", title: "Новая беседа", group: "JARVIS", icon: "chat", keywords: "new conversation начать заново", run: () => agent.control("new_conversation").then(() => nav("chat")) },
+    { id: "help", title: "Что ты умеешь?", group: "JARVIS", icon: "spark", keywords: "помощь help команды", run: () => submit("Что ты умеешь?", { source: "text" }) },
+    { id: "sys", title: "Состояние системы", group: "Быстрые действия", icon: "cpu", keywords: "батарея память диск процессор", run: () => submit("Состояние системы", { stay: true }) },
+    { id: "win", title: "Какие окна открыты", group: "Быстрые действия", icon: "window", keywords: "окна hyprland", run: () => submit("Какие окна открыты", { stay: true }) },
+    { id: "find", title: "Найти файл…", group: "Быстрые действия", icon: "search", keywords: "поиск файлов", run: () => nav("files") },
+    { id: "cd-show", title: dock.state.hidden ? "Показать JARVIS" : "Скрыть JARVIS до следующего события", group: "Компаньон", icon: dock.state.hidden ? "spark" : "eyeOff", keywords: "компаньон companion", run: () => (dock.state.hidden ? dock.show() : dock.hide()) },
+    { id: "cd-dock", title: "Вернуть JARVIS на место", sub: "В верхний левый угол", group: "Компаньон", icon: "dock", keywords: "компаньон позиция сбросить", run: () => dock.redock() },
+    { id: "cd-pin", title: dock.state.pinned ? "Открепить JARVIS" : "Закрепить JARVIS открытым", group: "Компаньон", icon: "pin", keywords: "компаньон pin", run: () => dock.togglePin() },
+    { id: "side", title: "Панель активности", group: "Интерфейс", icon: "sidebar", keywords: "активность задачи приватность", run: () => toggleSide() },
+    { id: "sb", title: app.classList.contains("sb-wide") ? "Скрыть подписи меню" : "Показать подписи меню", group: "Интерфейс", icon: "sidebar", keywords: "sidebar боковая панель", run: () => setSidebarWide(!app.classList.contains("sb-wide")) },
+    ...[["", "Тема как в системе"], ["dark", "Тёмная тема"], ["light", "Светлая тема"]].map(([v, title]) => ({ id: "theme:" + v, title, group: "Интерфейс", icon: "image", keywords: "тема theme оформление",
+      run: () => { if (v) { document.documentElement.dataset.theme = v; localStorage.setItem("jarvis.theme", v); } else { delete document.documentElement.dataset.theme; localStorage.removeItem("jarvis.theme"); } } })),
+  );
+  const recent = Object.values(S.tasks).filter((t) => isUserTask(t) && t.route !== "ui").sort((a, b) => b.created_at - a.created_at).slice(0, 6);
+  for (const t of recent) C.push({ id: "task:" + t.id, title: t.request, sub: STATE_RU[t.state] || t.state, group: "Недавние задачи", icon: "tasks", keywords: "задача task", run: () => openTask(t.id) });
+  return C;
 }
+const palette = createPalette({ commands, toast, ask: (q) => submit(q, { source: "text", stay: S.view !== "chat" }) });
 
-// Action history: only lasting changes on the computer (sites, code, files, programs, notes). Messages, volume,
-// windows and questions are not kept — the server records an entry only from verified step results.
-const KIND_RU = { change: "Изменения на компьютере", note: "Заметка", file: "Файлы", install: "Установка программ", publish: "Публикация в интернете" };
-function dayLabel(ts) {
-  const d = new Date(ts * 1000), t = new Date(), y = new Date(Date.now() - 864e5);
-  if (d.toDateString() === t.toDateString()) return "Сегодня";
-  if (d.toDateString() === y.toDateString()) return "Вчера";
-  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: d.getFullYear() === t.getFullYear() ? undefined : "numeric" });
-}
-function actionCard(a) {
-  const det = a.details || {};
-  const files = a.files || [];
-  const more = (a.files_total || files.length) - Math.min(files.length, 6);
-  const meta = [fmtTime(a.created_at)];
-  if (det.duration_ms >= 1000) meta.push(fmtMs(det.duration_ms));
-  if (det.tests) meta.push(det.tests.ok ? "тесты прошли" : det.tests.ran ? "тесты не прошли" : "");
-  if (typeof det.cost_usd === "number") meta.push(`$${det.cost_usd.toFixed(det.cost_usd < 0.1 ? 3 : 2)}`);
-  return `<article class="action ${a.status === "failed" ? "failed" : ""}">
-    <div class="action-head">
-      <span class="action-icon">${a.kind === "note" ? ICON.note : a.kind === "publish" ? ICON.globe : ICON.spark}</span>
-      <div class="action-title"><b>${esc(a.title)}</b><span>${esc(KIND_RU[a.kind] || "Действие")}${a.status === "failed" ? " · не удалось" : ""}</span></div>
-      <button class="icon-btn action-del" data-action-del="${esc(a.id)}" aria-label="Убрать из истории" title="Убрать из истории (файлы останутся)">${ICON.x}</button>
-    </div>
-    ${a.summary ? `<p class="action-sum">${esc(a.summary)}</p>` : ""}
-    ${det.error ? `<p class="action-err">${esc(det.error)}</p>` : ""}
-    ${files.length ? `<div class="action-files">${files.slice(0, 6).map((f) => typeof f === "string" ? `<code>${esc(f)}</code>`
-      : `<code class="${esc(f.op)}" title="${{ new: "новый файл", edit: "изменён", del: "удалён" }[f.op] || ""}">${esc(f.p)}</code>`).join("")}${more > 0 ? `<span>ещё ${more}</span>` : ""}</div>` : ""}
-    <div class="action-foot">
-      ${a.folder ? `<button class="action-folder" data-open="${esc(a.folder)}" title="Открыть папку: ${esc(a.folder)}">${ICON.folder}<span>${esc(shortPath(a.folder_short || a.folder))}</span></button>` : ""}
-      ${det.url ? `<button class="action-folder" data-url="${esc(det.url)}" title="Открыть сайт">${ICON.globe}<span>${esc(det.url)}</span></button>` : ""}
-      <span class="action-meta">${meta.filter(Boolean).map(esc).join(" · ")}</span>
-    </div>
-  </article>`;
-}
-async function renderHistoryView() {
-  const el = $("#viewHistory");
-  let list = [];
-  try { list = await link.request("history.list", { limit: 150 }); } catch (e) { toast(e.message, "err"); }
-  const groups = [];
-  for (const a of list) {
-    const label = dayLabel(a.created_at);
-    if (!groups.length || groups.at(-1).label !== label) groups.push({ label, items: [] });
-    groups.at(-1).items.push(a);
-  }
-  el.innerHTML = `<div class="page"><h1>История действий</h1>
-    <p class="lead">Только то, что JARVIS действительно сделал на компьютере: сайты, программы, код, файлы, заметки.
-    Сообщения, громкость, окна и вопросы сюда не попадают.</p>
-    ${groups.length ? groups.map((g) => `<section class="action-day"><h2>${esc(g.label)}</h2>${g.items.map(actionCard).join("")}</section>`).join("")
-      : `<div class="panel empty-note">Пока пусто. Попросите, например: «Создай сайт-визитку в папке Projects/site» — после выполнения действие появится здесь.</div>`}
-  </div>`;
-}
+// ------------------------------------------------------------------ wiring
+const shell = frameBatch(() => { dock.render(); renderStatus(); renderComposer(); renderSide(); renderSidebar(); renderCrumb(); });
+bus.on(["link", "core", "tasks", "approvals", "voice", "stream", "messages", "providers", "reminders", "workspace"], shell);
+bus.on(["tasks", "approvals", "messages"], frameBatch(renderThread));
 
-async function renderFlora() {
-  const el = $("#viewFlora");
-  try {
-    const mod = floraMod || (floraMod = await import("./flora.js"));
-    const p = pendingFlora; pendingFlora = null;
-    if (p?.tab) mod.setTab(p.tab);
-    if (p?.item) mod.selectItem(p.item);
-    await mod.render(el, { link, S, toast, submit, nav });
-  } catch (e) {
-    console.error(e);
-    if (!floraMod) el.innerHTML = `<div class="page"><h1>Проект «Флора»</h1><p class="lead">Модуль не загрузился: ${esc(e.message)}</p></div>`;
-  }
-}
-
-function renderSettings() {
-  const el = $("#viewSettings");
-  const p = S.provider || { models: [] };
-  const prof = S.core.privacy;
-  const choice = (id, title, text) => `<button class="choice" role="radio" aria-checked="${prof === id}" data-privacy="${id}"><b>${title}</b><span>${text}</span></button>`;
-  const statusRu = !p.configured ? "не подключён" : { ready: "готов", error: "ошибка", unknown: "проверка…", unconfigured: "не подключён" }[p.status] || p.status;
-  el.innerHTML = `<div class="page">
-    <h1>Настройки</h1>
-    ${agencyPanel(S)}
-    <div class="panel">
-      <h2>Приватность</h2>
-      <div class="muted" style="font-size:13.5px">Что можно отправлять во внешний ИИ. Локальные действия работают в любом режиме.</div>
-      <div class="choices" role="radiogroup" aria-label="Режим приватности">
-        ${choice("AUTHORIZED_CLOUD", "Облако разрешено", "Свободные запросы уходят в Claude (через Claude Code) без дополнительного вопроса. Файлы — только те, что нужны для задачи.")}
-        ${choice("PRIVATE_LOCAL", "Приватно", "Перед каждой отправкой в облако JARVIS спросит разрешение.")}
-        ${choice("STRICT_OFFLINE", "Строго офлайн", "Ничего не уходит в облако. Голос, команды, сообщения работают; свободные вопросы к ИИ — нет.")}
-      </div>
-    </div>
-    <div class="panel">
-      <h2>Голос</h2>
-      <div class="muted" style="font-size:13.5px">Речь распознаётся и озвучивается на этом компьютере (GigaAM и Silero) — без интернета и лимитов;
-        в Claude уходит только текст вопроса, если на него нужен ответ ИИ. Микрофон слушает только когда включён (кнопка или разговор).</div>
-      <h2 style="font-size:13.5px;margin:14px 0 2px">Голос JARVIS</h2>
-      <div class="faint" style="font-size:12.5px">Голоса Silero работают на этом компьютере: без интернета, без лимитов, фраза готова за ~0,25 с.
-        Модели Silero — для личного некоммерческого использования.</div>
-      <div id="voicePicker" class="vpick"></div>
-      <div class="field"><span style="font-size:13.5px">Скорость речи:</span>
-        <input type="range" id="rateRange" min="0.8" max="1.3" step="0.05" style="flex:1;min-width:160px">
-        <span class="faint" id="rateVal"></span></div>
-      <label class="toggle"><input type="checkbox" id="speakToggle" ${voice.speakReplies ? "checked" : ""}> Озвучивать ответы и на текстовые запросы</label>
-      <label class="toggle"><input type="checkbox" id="muteToggle" ${voice.muted ? "checked" : ""}> Выключить микрофон</label>
-      <div class="field"><span style="font-size:13.5px">Пауза, после которой фраза считается законченной:</span>
-        <input type="range" id="silenceRange" min="600" max="3000" step="100" value="${voice.silenceMs}" style="flex:1;min-width:160px">
-        <span class="faint" id="silenceVal">${(voice.silenceMs / 1000).toFixed(2).replace(".", ",")} с</span></div>
-      <div class="field" style="margin-top:10px">
-        <button class="btn" id="soundTest">Проверить звук</button>
-        <span id="audioOut" class="faint" style="font-size:13px"></span>
-      </div>
-      <div id="voiceTurns" style="margin-top:12px"></div>
-    </div>
-    <div class="panel">
-      <h2>Публикация сайтов</h2>
-      <div class="muted" style="font-size:13.5px">Готовые сайты JARVIS может выложить в интернет по ссылке (GitHub Pages, бесплатно) —
-        через ваш аккаунт GitHub. Вход подтверждаете вы в своём браузере одноразовым кодом; пароль и токен JARVIS не видит.</div>
-      <div id="publishBox" style="margin-top:10px"><span class="faint">Проверяю…</span></div>
-    </div>
-    <div class="panel">
-      <h2>Разрешения</h2>
-      <div class="muted" style="font-size:13.5px">Каждое действие проходит через единую политику. Средний и высокий риск требуют вашего решения.</div>
-      <label class="toggle"><input type="checkbox" id="fullAccess" ${S.core.access === "full" ? "checked" : ""}> <span><b>Полный доступ к ноутбуку</b> —
-        чтение и поиск по всей домашней папке, обычные действия без вопросов, «да» голосом на любое подтверждение, сообщения себе без вопроса.
-        По-прежнему спрашиваю один раз: сообщения другим людям, изменения кода, правила «без подтверждения».
-        Никогда не открываю ключи, пароли и данные браузеров.</span></label>
-      <table class="tbl"><thead><tr><th>Действие</th><th>Риск</th><th>Проверка результата</th></tr></thead><tbody>
-        ${S.tools.filter((t) => t.id !== "cloud_send").map((t) => `<tr><td>${esc(t.title)}${S.grants.includes(t.id) ? ` <button class="btn ghost" data-revoke="${esc(t.id)}" style="height:24px;font-size:12px">отозвать разрешение</button>` : ""}</td>
-          <td><span class="risk ${esc(t.risk)}">${esc({ low: "низкий", moderate: "средний", high: "высокий" }[t.risk] || t.risk)}</span></td>
-          <td class="faint">${esc(t.verification)}</td></tr>`).join("")}
-      </tbody></table>
-    </div>
-    <div class="panel">
-      <h2>Интерфейс</h2>
-      <div class="field">
-        <button class="btn ${!document.documentElement.dataset.theme ? "primary" : ""}" data-theme-set="">Как в системе</button>
-        <button class="btn ${document.documentElement.dataset.theme === "dark" ? "primary" : ""}" data-theme-set="dark">Тёмная</button>
-        <button class="btn ${document.documentElement.dataset.theme === "light" ? "primary" : ""}" data-theme-set="light">Светлая</button>
-      </div>
-      <label class="toggle"><input type="checkbox" id="motionToggle" ${localStorage.getItem("jarvis.reduceMotion") === "1" ? "checked" : ""}> Без анимации</label>
-      <label class="toggle"><input type="checkbox" id="devToggle" ${S.dev ? "checked" : ""}> Режим разработчика: показывать решения директора (исполнители, причины, кандидаты)</label>
-    </div>
-  </div>`;
-  wireAgency(el, { link, S, toast, rerender: () => { renderSettings(); renderStatus(); renderComposer(); } });
-  renderPublish();
-  $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {
-    try { await link.request("privacy.set", { profile: b.dataset.privacy }); S.core.privacy = b.dataset.privacy; } catch (er) { toast(er.message, "err"); }
-    renderSettings(); renderStatus(); renderPrivacy(); renderComposer();
-  }));
-  $("#fullAccess", el).addEventListener("change", async (e) => {
-    try { const r = await link.request("access.set", { level: e.target.checked ? "full" : "standard" }); S.core.access = r.access;
-      toast(r.access === "full" ? "Полный доступ включён" : "Обычный доступ: снова спрашиваю перед изменениями"); }
-    catch (er) { toast(er.message, "err"); e.target.checked = !e.target.checked; }
-  });
-  $$("[data-revoke]", el).forEach((b) => b.addEventListener("click", async () => {
-    const r = await link.request("grant.revoke", { tool_id: b.dataset.revoke }); S.grants = r.session_grants; renderSettings();
-  }));
-  $$("[data-theme-set]", el).forEach((b) => b.addEventListener("click", () => {
-    const v = b.dataset.themeSet;
-    if (v) { document.documentElement.dataset.theme = v; localStorage.setItem("jarvis.theme", v); }
-    else { delete document.documentElement.dataset.theme; localStorage.removeItem("jarvis.theme"); }
-    renderSettings();
-  }));
-  $("#speakToggle", el).addEventListener("change", (e) => { voice.speakReplies = e.target.checked; localStorage.setItem("jarvis.speak", e.target.checked ? "1" : "0"); });
-  $("#muteToggle", el).addEventListener("change", (e) => { voice.setMuted(e.target.checked); renderStatus(); renderComposer(); });
-  $("#silenceRange", el).addEventListener("input", (e) => {
-    voice.silenceMs = +e.target.value; localStorage.setItem("jarvis.silenceMs2", String(voice.silenceMs));
-    $("#silenceVal", el).textContent = (voice.silenceMs / 1000).toFixed(2).replace(".", ",") + " с";
-  });
-  renderVoiceTurns($("#voiceTurns", el));
-  renderAudioOut();
-  renderVoicePicker();
-  $("#soundTest", el).addEventListener("click", async () => {
-    try { await link.request("voice.test"); } catch (er) { toast(er.message, "err"); return; }
-    setTimeout(() => voice.checkOutput(true), 900);
-  });
-  $("#devToggle", el).addEventListener("change", (e) => {
-    S.dev = e.target.checked; localStorage.setItem("jarvis.dev", S.dev ? "1" : "0"); turnCache.clear(); $("#thread").innerHTML = "";
-  });
-  $("#motionToggle", el).addEventListener("change", (e) => {
-    localStorage.setItem("jarvis.reduceMotion", e.target.checked ? "1" : "0");
-    document.documentElement.classList.toggle("anim-off", e.target.checked);
-  });
-}
-
-async function renderPublish(poll = 0) {
-  const box = $("#publishBox");
-  if (!box) return;
-  let st;
-  try { st = await link.request("publish.state"); } catch (e) { box.innerHTML = `<span class="faint">${esc(e.message)}</span>`; return; }
-  if (!st.available) { box.innerHTML = `<span class="faint">Нужен GitHub CLI (gh) — установите: «Установи gh в систему».</span>`; return; }
-  if (st.connected) {
-    box.innerHTML = `<div class="field" style="margin-top:0"><span class="cpill ok">GitHub подключён</span> <b>${esc(st.login)}</b>
-      <button class="btn ghost" id="ghLogout">Отключить</button></div>
-      <div class="faint" style="font-size:12.5px;margin-top:6px">Скажите, например: «Опубликуй сайт кафе» — JARVIS спросит подтверждение и даст ссылку.</div>`;
-    $("#ghLogout").onclick = async () => { try { await link.request("publish.github.logout"); } catch (e) { toast(e.message, "err"); } renderPublish(); };
-    return;
-  }
-  if (st.stage === "code") {
-    box.innerHTML = `<div style="font-size:13.5px">Откройте <b>github.com/login/device</b> и введите код:</div>
-      <div class="gh-code">${esc(st.code)}</div>
-      <div class="field" style="margin-top:6px"><button class="btn primary" id="ghOpen">Открыть GitHub</button>
-        <span class="faint" style="font-size:12.5px">После подтверждения в браузере здесь появится «подключён».</span></div>`;
-    $("#ghOpen").onclick = () => link.request("tool.run", { tool: "open_url", args: { url: st.url } }).catch((e) => toast(e.message, "err"));
-    if (S.view === "settings" && poll < 300) setTimeout(() => renderPublish(poll + 1), 3000);
-    return;
-  }
-  box.innerHTML = `${st.error ? `<div class="cerr" style="margin-bottom:6px">${esc(st.error)}</div>` : ""}
-    <div class="field" style="margin-top:0"><span class="cpill">не подключён</span><button class="btn primary" id="ghBegin">Подключить GitHub</button></div>`;
-  $("#ghBegin").onclick = async (e) => {
-    e.target.disabled = true;
-    try { await link.request("publish.github.begin", {}, 30000); } catch (er) { toast(er.message, "err"); }
-    renderPublish();
-  };
-}
-
-async function renderVoicePicker() {
-  const box = $("#voicePicker");
-  if (!box) return;
-  let d;
-  try { d = await link.request("voice.voices"); } catch (e) { box.innerHTML = `<div class="faint">${esc(e.message)}</div>`; return; }
-  const card = (v) => `<div class="vcard ${v.id === d.current ? "on" : ""} ${v.available ? "" : "off"}">
-      <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"}</span></div>
-      <div class="faint vd">${esc(v.desc)}</div>
-      <div class="va"><button class="btn ghost" data-vprev="${esc(v.id)}" ${v.available ? "" : "disabled"}>▶ Послушать</button>
-        ${v.id === d.current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`;
-  box.innerHTML = `${d.installed ? "" : `<div class="cerr" style="margin:6px 0">Голос Silero не установлен — запустите scripts/install.sh. Пока звучит запасной голос.</div>`}
-    <div class="vgrid" style="margin-top:8px">${d.voices.map(card).join("")}</div>
-    ${d.last_fallback ? `<div class="cerr" style="margin-top:6px">Последний ответ прозвучал запасным голосом: Silero не сработал (${esc(d.last_fallback)})</div>` : ""}
-    <h2 style="font-size:13.5px;margin:16px 0 0">Кто отвечает голосом</h2>
-    <div class="choices" role="radiogroup" aria-label="Модель для ответов голосом">
-      <button class="choice" role="radio" aria-checked="${d.ai_model !== "quality"}" data-vai="fast"><b>Быстро</b>
-        <span>${esc(d.ai_models?.fast || "")}: первые слова через ~1–1,5 с, без долгих пауз. Подходит для разговора.</span></button>
-      <button class="choice" role="radio" aria-checked="${d.ai_model === "quality"}" data-vai="quality"><b>Подробнее</b>
-        <span>${esc(d.ai_models?.quality || "")}: обычно ~1 с, но иногда задумывается на 4–10 с.</span></button>
-    </div>
-    <div class="faint" style="font-size:12px;margin-top:4px">Написанные текстом запросы всегда обрабатывает ${esc(d.ai_models?.quality || "основная модель")}. Беседа общая — контекст не теряется.</div>`;
-  $$("[data-vai]", box).forEach((b) => b.addEventListener("click", async () => {
-    try { await link.request("voice.ai_model", { pref: b.dataset.vai }); renderVoicePicker(); } catch (er) { toast(er.message, "err"); }
-  }));
-  $$("[data-vprev]", box).forEach((b) => b.addEventListener("click", () => {
-    voice.stopSpeaking();
-    link.request("voice.preview", { voice: b.dataset.vprev }).catch((er) => toast(er.message, "err"));
-  }));
-  $$("[data-vset]", box).forEach((b) => b.addEventListener("click", async () => {
-    b.disabled = true;
-    try { await link.request("voice.set", { voice: b.dataset.vset }); toast("Голос выбран"); renderVoicePicker(); }
-    catch (er) { toast(er.message, "err"); b.disabled = false; }
-  }));
-  const r = $("#rateRange"), rv = $("#rateVal");
-  if (r) {
-    r.value = d.rate; rv.textContent = `×${(+d.rate).toFixed(2).replace(".", ",")}`;
-    r.onchange = async () => {
-      rv.textContent = `×${(+r.value).toFixed(2).replace(".", ",")}`;
-      try { await link.request("voice.set", { voice: d.current, rate: +r.value }); } catch (er) { toast(er.message, "err"); }
-    };
-  }
-}
-
-function renderAudioOut() {
-  const box = $("#audioOut");
-  if (!box) return;
-  const r = S.audioOut;
-  if (!r) { box.textContent = "Нажмите — JARVIS скажет тестовую фразу и проверит громкость своего звука."; return; }
-  if (!r.available) { box.textContent = "Системный микшер недоступен — проверьте громкость вручную."; return; }
-  const w = outputProblem(r);
-  box.innerHTML = `${esc(r.sink || "Устройство вывода")}: общая громкость ${r.sink_volume_pct ?? "?"} %${r.sink_muted ? " (выключен)" : ""}`
-    + (r.stream_found ? ` · JARVIS ${r.volume_pct ?? "?"} %${r.muted ? " (выключен)" : ""}` : " · поток JARVIS сейчас не играет")
-    + (w ? ` <b style="color:var(--warn)">— ${esc(w)}</b> <button class="btn primary" id="audioFix" style="height:28px">Сделать громче</button>` : " ✓");
-  $("#audioFix")?.addEventListener("click", async () => {
-    try { await link.request("voice.test"); await new Promise((r) => setTimeout(r, 700)); S.audioOut = await link.request("voice.output", { fix: true }); }
-    catch (er) { toast(er.message, "err"); }
-    renderAudioOut();
-  });
-}
-
-async function renderVoiceTurns(box) {
-  let turns = [];
-  try { turns = await link.request("voice.turns", { limit: 10 }); } catch { return; }
-  if (!turns.length) { box.innerHTML = '<div class="faint" style="font-size:12.5px">Замеры появятся после первых голосовых фраз.</div>'; return; }
-  const s = (v) => v == null ? "—" : (v / 1000).toFixed(1).replace(".", ",");
-  box.innerHTML = `<h2 style="font-size:13.5px;margin:0 0 4px">Задержка последних голосовых ходов, с (от конца вашей фразы)</h2>
-    <table class="tbl"><thead><tr><th>Фраза</th><th>Распознано</th><th>Первое слово ответа</th><th>Первый звук</th><th>Ответ готов</th></tr></thead><tbody>
-    ${turns.map((t) => `<tr><td>${esc((t.transcript || "—").slice(0, 46))}</td><td>${s(t.ms.stt_end)}</td><td>${s(t.ms.ttft)}</td>
-      <td><b>${s(t.ms.first_audio_played ?? t.ms.first_audio_sent)}</b></td><td>${s(t.ms.answer_done)}</td></tr>`).join("")}</tbody></table>`;
-}
-
-// ------------------------------------------------------------------ toasts
-function toast(msg, kind = "") {
-  const el = document.createElement("div");
-  el.className = `toast ${kind}`;
-  el.textContent = msg;
-  $("#toasts").appendChild(el);
-  setTimeout(() => el.remove(), kind === "err" ? 6000 : 3500);
-  while ($("#toasts").children.length > 3) $("#toasts").firstChild.remove();
-}
-
-function renderAll() { renderStatus(); renderThread(); renderSide(); renderComposer(); if (S.view !== "chat") nav(S.view); }
-
-nav("chat");
-renderAll();
-window.__jarvis = { S, link, voice, render: () => { turnCache.clear(); renderThread(); } };   // for automated UI tests
+buildSidebar();
+setSidebarWide(prefs.get("sidebar", innerWidth >= 1560 ? "wide" : "narrow") === "wide");
+if (prefs.get("side", "shown") === "hidden" && innerWidth > 1080) app.classList.add("side-hidden");
+const start = prefs.get("ws", "home");
+nav(byId(start) && start !== "history" ? start : "home");
+shell();
+window.__jarvis = { S, link, voice, bus, dock, palette, nav, render: () => { turnCache.clear(); renderThread(); } };   // for automated UI tests

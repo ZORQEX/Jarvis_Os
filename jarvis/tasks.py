@@ -117,10 +117,13 @@ class TaskStore:
                            " ORDER BY created_at")
         return [self.get(r["id"]) for r in rows]
 
-    def recent(self, limit: int = 30, conversation_id: str | None = None) -> list[dict]:
+    def recent(self, limit: int = 30, conversation_id: str | None = None, exclude_route: str | None = None) -> list[dict]:
         if conversation_id:
             rows = self.db.all("SELECT id FROM tasks WHERE conversation_id=? ORDER BY created_at DESC LIMIT ?",
                                (conversation_id, limit))
+        elif exclude_route:
+            rows = self.db.all("SELECT id FROM tasks WHERE route IS NULL OR route != ? ORDER BY created_at DESC LIMIT ?",
+                               (exclude_route, limit))
         else:
             rows = self.db.all("SELECT id FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,))
         return [self.get(r["id"]) for r in rows]

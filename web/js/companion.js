@@ -80,7 +80,7 @@ function updateGaze() {
   raf = 0;
   if (reduced || document.hidden) return;
   for (const i of instances) {
-    if (!["IDLE", "SPEAKING", "COMPLETED", "PROCESSING"].includes(current.state)) {
+    if (!["IDLE", "SPEAKING", "SUCCESS", "THINKING"].includes(current.state)) {
       i.el.style.removeProperty("--gx"); i.el.style.removeProperty("--gy"); continue;
     }
     const r = i.el.getBoundingClientRect();
@@ -96,7 +96,7 @@ function updateGaze() {
 // Blinking: occasional, irregular; skipped when hidden or reduced motion.
 function scheduleBlink() {
   setTimeout(() => {
-    if (!reduced && !document.hidden && ["IDLE", "SPEAKING", "PROCESSING"].includes(current.state)) {
+    if (!reduced && !document.hidden && ["IDLE", "SPEAKING", "THINKING"].includes(current.state)) {
       for (const i of instances) {
         i.el.querySelectorAll(".eye").forEach((e) => {
           e.classList.remove("blink"); void e.getBBox(); e.classList.add("blink");

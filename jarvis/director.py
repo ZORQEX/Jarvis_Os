@@ -18,6 +18,7 @@ from .tasks import S, TERMINAL, IllegalTransition, TaskStore
 from .tools.base import Risk, Tool, ToolResult, ToolSpec, Verification
 
 COMPLETED_FLASH_S = 2.5
+UI_READ_TOOLS = ("folder_list", "search_files", "read_file")   # read-only tools a workspace may call directly
 _STATE_KINDS = {"approval.created", "approval.updated", "step.updated", "task.updated", "task.created"}
 
 
@@ -199,6 +200,23 @@ class Director:
         self.rt[tid].task = asyncio.create_task(self._run(tid, cid, label, route, announce=True))
         return tid
 
+    async def run_ui_read(self, tool: str, args: dict) -> dict:
+        """Read-only browsing from a workspace (Files): the same gateway — validation, policy, audit, step record —
+        but no chat message, since opening a folder is not a conversation turn. Route «ui_read» marks these tasks so
+        the core state, the task center and the companion do not treat a folder click as JARVIS working."""
+        if tool not in UI_READ_TOOLS:
+            raise ValueError("Это действие нельзя запустить из интерфейса")
+        spec = self.gw.registry.get(tool).spec
+        tid = self.tasks.create(spec.title, None, route="ui_read", level=0)
+        self.tasks.transition(tid, S.RUNNING, objective="Просмотр в рабочем пространстве")
+        out = await self.gw.execute(tid, tool, args, "Просмотр в рабочем пространстве")
+        if out.status == "ok":
+            self._safe_transition(tid, S.COMPLETED, result={"status": "ok", "step_id": out.step_id})
+            return {"status": "ok", "summary": out.result.summary, "data": out.result.data,
+                    "verification": out.verification.as_dict() if out.verification else None}
+        self._safe_transition(tid, S.FAILED, error=(out.error or out.status)[:500])
+        return {"status": out.status, "error": out.error}
+
     async def _run(self, tid: str, cid: str, text: str, route: rt.Route | None, announce: bool = False) -> None:
         try:
             if announce:
@@ -219,6 +237,10 @@ class Director:
                     self._finish(tid, cid, "Модуль связи не подключён в этой сборке.", meta={"route": "local"})
                 else:
                     await self.comms.handle(self, tid, cid, text)
+            elif route.kind == "ui":
+                # «Перейди в задачи»: the window switches its workspace; nothing runs on the computer.
+                self.bus.publish("ui.navigate", {"view": route.args["view"]})
+                self._finish(tid, cid, route.reply, meta={"route": "local", "level": 0, "why": route.why})
             elif route.kind == "flora":
                 if self.flora is None:
                     self._finish(tid, cid, "Сценарий «Флора» ещё не подключён в этой сборке.",
@@ -653,7 +675,7 @@ class Director:
 
     def core_state(self) -> dict:
         pending = self.approvals.pending()
-        active = self.tasks.active()
+        active = [t for t in self.tasks.active() if t.get("route") != "ui_read"]   # folder browsing is not work
         running = [s for t in active for s in t["steps"] if s["state"] in ("running", "verifying")]
         running_steps = bool(running)
         names = {"claude": "Claude", "claude_code": "Claude Code"}

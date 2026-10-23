@@ -8,76 +8,95 @@
   <meta name="google" content="notranslate">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/workos.css">
   <script type="module" src="/static/js/app.js"></script>
 </head>
 <body>
-  <div class="app" id="app" data-view="chat">
-    <nav class="rail" aria-label="Навигация">
-      <button class="rail-companion" id="railCompanion" aria-label="JARVIS — перейти к беседе"></button>
-      <div class="rail-nav" role="tablist">
-        <button class="rail-btn" data-nav="chat" role="tab" aria-label="Беседа" title="Беседа  (Ctrl+1)">
-          <svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A1.5 1.5 0 0 1 4 14.5z"/></svg>
+  <div class="app" id="app" data-view="home">
+    <!-- Global sidebar: workspaces (built from workspaces/registry.js) -->
+    <nav class="sidebar" id="sidebar" aria-label="Рабочие пространства">
+      <button class="sb-brand" id="sbBrand" aria-label="JARVIS — главная" data-tip="Главная">
+        <span class="sb-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.5 10.5v2.5M14.5 10.5v2.5"/></svg></span>
+        <span class="sb-name">JARVIS</span>
+      </button>
+      <div class="sb-nav" id="nav" role="tablist" aria-orientation="vertical"></div>
+      <div class="sb-foot">
+        <button class="sb-btn" data-nav="settings" role="tab" data-tip="Настройки  ·  Ctrl+,">
+          <span class="sb-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg></span>
+          <span class="sb-label">Настройки</span>
         </button>
-        <button class="rail-btn" data-nav="history" role="tab" aria-label="История действий" title="История действий  (Ctrl+2)">
-          <svg viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3.5 4.5V9H8"/><path d="M12 7.5V12l3 2"/></svg>
+        <button class="sb-btn sb-toggle" id="sbToggle" aria-label="Показать подписи" data-tip="Показать подписи">
+          <span class="sb-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></span>
+          <span class="sb-label">Свернуть</span>
         </button>
-        <button class="rail-btn" data-nav="flora" role="tab" aria-label="Проект «Флора»" title="Проект «Флора»  (Ctrl+3)">
-          <svg viewBox="0 0 24 24"><path d="M3 20h18M5 20V9l7-5 7 5v11"/><path d="M9.5 20v-5h5v5"/></svg>
-        </button>
-        <button class="rail-btn" data-nav="comms" role="tab" aria-label="Сообщения" title="Сообщения  (Ctrl+4)">
-          <svg viewBox="0 0 24 24"><path d="M21 3 10 14"/><path d="M21 3 14.5 21l-4.5-7-7-4.5z"/></svg>
-        </button>
-        <button class="rail-btn" data-nav="settings" role="tab" aria-label="Настройки" title="Настройки  (Ctrl+,)">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg>
+        <button class="estop" id="estopBtn" aria-label="Экстренная остановка" data-tip="Экстренная остановка  ·  Ctrl+Shift+X">
+          <svg viewBox="0 0 24 24"><path d="M8.2 3h7.6L21 8.2v7.6L15.8 21H8.2L3 15.8V8.2z"/><path d="M9 9h6v6H9z" class="fill"/></svg>
+          <span class="sb-label">Экстренный стоп</span>
         </button>
       </div>
-      <button class="estop" id="estopBtn" aria-label="Экстренная остановка" title="Экстренная остановка  (Ctrl+Shift+X)">
-        <svg viewBox="0 0 24 24"><path d="M8.2 3h7.6L21 8.2v7.6L15.8 21H8.2L3 15.8V8.2z"/><path d="M9 9h6v6H9z" class="fill"/></svg>
-      </button>
     </nav>
 
     <main class="main">
       <header class="topbar">
-        <div class="status" id="status" aria-live="polite">
+        <!-- The companion's home slot: the global companion sits here until it is dragged away. -->
+        <div class="dock-slot" id="dockSlot" aria-hidden="true"></div>
+        <button class="status" id="status" aria-live="polite" title="JARVIS — показать подробности (Ctrl+J)">
           <span class="status-dot"></span><span class="status-label">Подключение…</span>
-        </div>
+        </button>
+        <div class="phases" id="phases" hidden></div>
+        <div class="crumb" id="crumb"></div>
         <div class="chips" id="chips"></div>
+        <button class="palette-btn" id="paletteBtn" aria-label="Команды (Ctrl+K)" title="Все команды">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+          <span>Команды</span><span class="kbd">Ctrl K</span>
+        </button>
         <button class="icon-btn side-toggle" id="sideToggle" aria-label="Панель активности" title="Активность">
           <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg>
         </button>
       </header>
 
-      <section class="view view-chat" id="viewChat" aria-label="Беседа">
-        <div class="scroller" id="scroller">
-          <div class="thread" id="thread" role="log" aria-live="polite"></div>
-        </div>
-        <form class="composer" id="composer" autocomplete="off">
-          <div class="composer-box">
-            <textarea id="input" rows="1" placeholder="Скажите или напишите, что сделать…" aria-label="Команда для JARVIS"></textarea>
-            <div class="composer-actions">
-              <button type="button" class="icon-btn conv" id="convBtn" aria-label="Разговор без кнопок" title="Разговор (Ctrl+Shift+Space)">
-                <svg viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg>
-              </button>
-              <button type="button" class="icon-btn mic" id="micBtn" aria-label="Сказать одну фразу" title="Фраза  (Ctrl+Space)">
-                <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
-                <span class="mic-level" aria-hidden="true"></span>
-              </button>
-              <button type="submit" class="send" id="sendBtn" aria-label="Отправить" title="Отправить  (Enter)">
-                <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
-              </button>
-            </div>
+      <div class="workspaces" id="workspaces">
+        <section class="view view-chat" id="viewChat" data-ws="chat" aria-label="Беседа" hidden>
+          <div class="scroller" id="scroller">
+            <div class="thread" id="thread" role="log" aria-live="polite"></div>
           </div>
-          <div class="composer-hint" id="composerHint"></div>
-        </form>
-      </section>
-
-      <section class="view view-history" id="viewHistory" aria-label="История действий" hidden></section>
-      <section class="view view-flora" id="viewFlora" aria-label="Проект «Флора»" hidden></section>
-      <section class="view view-comms" id="viewComms" aria-label="Сообщения" hidden></section>
-      <section class="view view-settings" id="viewSettings" aria-label="Настройки" hidden></section>
+          <form class="composer" id="composer" autocomplete="off">
+            <div class="attachments" id="attachments" hidden></div>
+            <div class="composer-box">
+              <button type="button" class="icon-btn attach" id="attachBtn" aria-label="Прикрепить файл" title="Прикрепить файл с компьютера">
+                <svg viewBox="0 0 24 24"><path d="m20 11.5-7.8 7.8a5 5 0 0 1-7.1-7.1l8.2-8.2a3.4 3.4 0 0 1 4.8 4.8l-8.2 8.2a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/></svg>
+              </button>
+              <textarea id="input" rows="1" placeholder="Скажите или напишите, что сделать…" aria-label="Команда для JARVIS"></textarea>
+              <div class="composer-actions">
+                <button type="button" class="icon-btn conv" id="convBtn" aria-label="Разговор без кнопок" title="Разговор (Ctrl+Shift+Space)">
+                  <svg viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg>
+                </button>
+                <button type="button" class="icon-btn mic" id="micBtn" aria-label="Сказать одну фразу" title="Фраза  (Ctrl+Space)">
+                  <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+                  <span class="mic-level" aria-hidden="true"></span>
+                </button>
+                <button type="button" class="stopgen" id="stopBtn" aria-label="Остановить" title="Остановить (Esc)" hidden>
+                  <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg><span>Стоп</span>
+                </button>
+                <button type="submit" class="send" id="sendBtn" aria-label="Отправить" title="Отправить  (Enter)">
+                  <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="composer-hint" id="composerHint"></div>
+          </form>
+        </section>
+        <section class="view view-flora" id="viewFlora" data-ws="flora" aria-label="Проект «Флора»" hidden></section>
+        <section class="view view-comms" id="viewComms" data-ws="comms" aria-label="Сообщения" hidden></section>
+        <section class="view view-settings" id="viewSettings" data-ws="settings" aria-label="Настройки" hidden></section>
+      </div>
     </main>
 
     <aside class="side" id="side" aria-label="Активность">
+      <div class="side-section" id="approvalsSection" hidden>
+        <h2 class="side-title">Нужно ваше решение</h2>
+        <div id="approvalsList" class="task-list"></div>
+      </div>
       <div class="side-section">
         <h2 class="side-title">Сейчас</h2>
         <div id="activeTasks" class="task-list"></div>
@@ -92,6 +111,6 @@
       </div>
     </aside>
   </div>
-  <div class="toasts" id="toasts" aria-live="assertive"></div>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 </body>
 </html>

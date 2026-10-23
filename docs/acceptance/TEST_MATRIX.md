@@ -30,6 +30,34 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Hyprland bindings Super+H / Super+Shift+H | IMPLEMENTED UNVERIFIED | `config/omarchy/hypr-jarvis.conf`, applied only on request |
 | systemd user service | IMPLEMENTED UNVERIFIED | `scripts/install.sh --service` |
 
+## WorkOS window (2026-10-23)
+Tests: `uv run pytest -q` → 289 passed, 6 skipped; `node --test tests/ui/unit/` → 37 passed;
+`node tests/ui/workos.mjs` against an isolated core → 21/21 checks, 0 console errors (with `LIVE=1`, one real Claude answer).
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Shell: sidebar with 9 workspaces, top bar with real status, activity panel, workspace persisted | VERIFIED LOCAL | workos.mjs «sidebar», «persistence» |
+| Global companion: one instance, survives navigation, docked top-left by default | VERIFIED LOCAL | workos.mjs (element identity kept across 5 workspaces) |
+| Companion drag: clamped to window, snaps to edges, position restored after reload and resize, re-docks near its slot | VERIFIED LOCAL | workos.mjs «drag, clamp, persist» |
+| Companion expand / pin / hide until next event / Ctrl+J restore; folds on outside click | VERIFIED LOCAL | workos.mjs |
+| Companion state machine (IDLE, LISTENING, THINKING, PLANNING, EXECUTING, WAITING_CONFIRMATION, SPEAKING, SUCCESS, ERROR, CANCELLED, PAUSED, OFFLINE, STANDBY) from real state only | VERIFIED LOCAL | unit tests (agent-state); LIVE run: THINKING → EXECUTING → SUCCESS |
+| Chat: local command result card; stop on a running turn; retry on failed/cancelled | VERIFIED LOCAL | workos.mjs «chat», screenshots |
+| Streaming: assistant.delta rendered incrementally; companion shows «Claude отвечает…» | VERIFIED LIVE / LOCAL | LIVE run (2,5 s answer); renderer check with core events |
+| Confirmation: companion card «Разрешить / Изменить / Отклонить», side panel list, top bar; approve runs the real tool | VERIFIED LOCAL | workos.mjs «confirmation» (note written, verified) |
+| Cancel: Task Center button and Esc stop a task; timeline records it | VERIFIED LOCAL | workos.mjs «cancel», «Esc stops» |
+| Task Center: active/all/problems, plan ✓●○, execution timeline from persisted step and approval times | VERIFIED LOCAL | workos.mjs, unit tests (timeline) |
+| Command palette (Ctrl+K): workspaces, global commands, recent tasks, «Спросить JARVIS» fallback | VERIFIED LOCAL | workos.mjs «palette» |
+| Window-level commands handled instantly (navigation); voice navigation through the core router (no AI) | VERIFIED LOCAL | workos.mjs «navigation», test_workspaces.py |
+| Files: roots, browse, search, text/PDF preview through the gateway without chat noise; «Спросить JARVIS» attaches the path | VERIFIED LOCAL | workos.mjs «files», test_workspaces.py |
+| Telegram / WhatsApp / mail workspaces: honest connection state, connect cards, outbox per person, compose → JARVIS asks before sending | VERIFIED LOCAL (not connected in the test home) | workos.mjs «telegram»; sending path is the existing comms agent |
+| Reading incoming Telegram/WhatsApp messages | NOT IMPLEMENTED | needs a privacy decision; shown as «не подключено» |
+| Browser workspace: open link / search in the person's browser; website job → Claude Code isolated browser | IMPLEMENTED UNVERIFIED in this run | open_url not clicked in tests (would open the real browser) |
+| Browser back / forward / reload of the person's browser | NOT IMPLEMENTED | shown disabled with the reason |
+| Layout at 1280×720, 1440×900, 1920×1080: no overflow, no clipped status/chips, companion in view | VERIFIED LOCAL | workos.mjs «layout», screenshots |
+| Light theme | VERIFIED LOCAL | screenshots 14-light-home, 15-light-tasks |
+| Idle cost | VERIFIED LOCAL | idlecpu.mjs: task 0.14 % (previous UI 0.22 %), 0 frames idle |
+| Long chat (600 messages) | VERIFIED LOCAL | full render 4–6 ms script, next message 64–74 ms incl. layout |
+
 ## Performance (this laptop)
 - Core cold start to /health: 223 ms. Launcher returns in ~280 ms. Page ready ~100 ms.
 - Core idle: 0.0% CPU, ~39 MB PSS. Window (Chromium, 10 processes): ~380 MB PSS, idle 1.9% of one core

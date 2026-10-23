@@ -10,7 +10,7 @@
   --t-fast: 120ms; --t: 200ms; --t-slow: 420ms;
   --ease: cubic-bezier(.2, .7, .2, 1);
 
-  --rail-w: 68px; --side-w: 300px; --thread-w: 760px;
+  --side-w: 300px; --thread-w: 760px;
 
   /* dark (default) */
   --bg: #0d0e11;
@@ -93,33 +93,11 @@ code, pre { font-family: var(--mono); font-size: .88em; }
 /* ---------------------------------------------------------------- layout */
 .app {
   display: grid; height: 100vh;
-  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--side-w);
+  grid-template-columns: var(--sb-w) minmax(0, 1fr) var(--side-w);
   background: var(--bg);
 }
-.app.side-hidden { grid-template-columns: var(--rail-w) minmax(0, 1fr) 0; }
+.app.side-hidden { grid-template-columns: var(--sb-w) minmax(0, 1fr) 0; }
 .app.side-hidden .side { visibility: hidden; }
-
-.rail {
-  display: flex; flex-direction: column; align-items: center; gap: var(--s4);
-  padding: var(--s4) 0; border-right: 1px solid var(--line); background: var(--bg-2);
-}
-.rail-companion { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; }
-.rail-companion .companion { width: 44px; height: 44px; }
-.rail-nav { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s2); }
-.rail-btn {
-  width: 42px; height: 42px; border-radius: var(--r); display: grid; place-items: center; color: var(--text-3);
-  transition: background var(--t-fast), color var(--t-fast);
-}
-.rail-btn:hover { background: var(--surface-2); color: var(--text); }
-.rail-btn[aria-selected="true"] { background: var(--surface-3); color: var(--text); }
-.estop {
-  margin-top: auto; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center;
-  color: var(--err); background: var(--err-soft); transition: transform var(--t-fast), background var(--t-fast);
-}
-.estop:hover { background: color-mix(in srgb, var(--err) 22%, transparent); }
-.estop:active { transform: scale(.94); }
-.estop svg .fill { fill: currentColor; stroke: none; }
-.app[data-estop="1"] .estop { background: var(--err); color: var(--bg); }
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 .topbar {
@@ -129,11 +107,11 @@ code, pre { font-family: var(--mono); font-size: .88em; }
 .status { display: flex; align-items: center; gap: var(--s2); font-weight: 500; letter-spacing: .01em; min-width: 0; }
 .status-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; transition: background var(--t); }
-.status[data-state="IDLE"] .status-dot, .status[data-state="COMPLETED"] .status-dot { background: var(--ok); }
+.status[data-state="IDLE"] .status-dot, .status[data-state="SUCCESS"] .status-dot { background: var(--ok); }
 .status[data-state="THINKING"] .status-dot, .status[data-state="PROCESSING"] .status-dot,
 .status[data-state="EXECUTING"] .status-dot, .status[data-state="LISTENING"] .status-dot,
 .status[data-state="SPEAKING"] .status-dot { background: var(--accent); animation: pulse 1.4s var(--ease) infinite; }
-.status[data-state="WAITING_APPROVAL"] .status-dot, .status[data-state="PAUSED"] .status-dot { background: var(--warn); }
+.status[data-state="WAITING_CONFIRMATION"] .status-dot, .status[data-state="PAUSED"] .status-dot { background: var(--warn); }
 .status[data-state="ERROR"] .status-dot, .status[data-state="STANDBY"] .status-dot { background: var(--err); }
 @keyframes pulse { 50% { opacity: .35; } }
 .chips { display: flex; gap: var(--s2); margin-left: auto; flex-wrap: nowrap; overflow: hidden; }
@@ -473,19 +451,19 @@ button.row:hover { background: var(--surface-2); }
 .companion[data-state="SPEAKING"] .glow { opacity: calc(.2 + var(--lvl) * .5); }
 .companion[data-state="SPEAKING"] .halo { opacity: .45; }
 .companion[data-state="SPEAKING"] .eyes { animation: bob .5s ease-in-out infinite; }
-.companion[data-state="WAITING_APPROVAL"] { --c-halo: var(--warn); --c-eye: #ffd9a8; }
-.companion[data-state="WAITING_APPROVAL"] .halo { animation: halopulse 1.8s ease-in-out infinite; }
-.companion[data-state="WAITING_APPROVAL"] .glow { opacity: .4; fill: var(--warn-soft); }
-.companion[data-state="WAITING_APPROVAL"] .eyes { transform: translate(0, 3px); }
+.companion[data-state="WAITING_CONFIRMATION"] { --c-halo: var(--warn); --c-eye: #ffd9a8; }
+.companion[data-state="WAITING_CONFIRMATION"] .halo { animation: halopulse 1.8s ease-in-out infinite; }
+.companion[data-state="WAITING_CONFIRMATION"] .glow { opacity: .4; fill: var(--warn-soft); }
+.companion[data-state="WAITING_CONFIRMATION"] .eyes { transform: translate(0, 3px); }
 .companion[data-state="PAUSED"] .lid, .companion[data-state="STANDBY"] .lid { transform: scaleY(.55); }
 .companion[data-state="PAUSED"] { --c-halo: var(--warn); }
 .companion[data-state="PAUSED"] .halo { opacity: .3; }
 .companion[data-state="STANDBY"] { --c-halo: var(--err); }
 .companion[data-state="STANDBY"] .halo { opacity: .5; }
-.companion[data-state="COMPLETED"] { --c-halo: var(--ok); }
-.companion[data-state="COMPLETED"] .eye { opacity: 0; }
-.companion[data-state="COMPLETED"] .happy { opacity: 1; }
-.companion[data-state="COMPLETED"] .halo { opacity: .5; }
+.companion[data-state="SUCCESS"] { --c-halo: var(--ok); }
+.companion[data-state="SUCCESS"] .eye { opacity: 0; }
+.companion[data-state="SUCCESS"] .happy { opacity: 1; }
+.companion[data-state="SUCCESS"] .halo { opacity: .5; }
 .companion[data-state="ERROR"] { --c-halo: var(--err); --c-eye: #ffb4ab; }
 .companion[data-state="ERROR"] .eye { transform: scaleY(.45); }
 .companion[data-state="ERROR"] .halo { opacity: .5; }
@@ -507,13 +485,11 @@ button.row:hover { background: var(--surface-2); }
   .suggestion { padding: 6px 12px; font-size: 13px; }
 }
 @media (max-width: 1080px) {
-  .app { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
   .side { position: fixed; right: 0; top: 0; bottom: 0; width: var(--side-w); z-index: 20; box-shadow: var(--shadow); transform: translateX(100%); transition: transform var(--t) var(--ease); }
   .app.side-open .side { transform: none; }
   .app.side-hidden .side { visibility: visible; }
 }
 @media (max-width: 640px) {
-  :root { --rail-w: 56px; }
   .thread { padding: var(--s5) var(--s4); }
   .composer { padding: var(--s2) var(--s3) var(--s3); }
   .chips .chip:not(.live) { display: none; }

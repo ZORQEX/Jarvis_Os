@@ -91,6 +91,10 @@ class Approvals:
             d[k] = loads(d[k])
         return d
 
+    def for_task(self, task_id: str) -> list[dict]:
+        return [self.get(r["id"]) for r in
+                self.db.all("SELECT id FROM approvals WHERE task_id=? ORDER BY created_at", (task_id,))]
+
     def pending(self) -> list[dict]:
         self.expire_old()
         return [self.get(r["id"]) for r in

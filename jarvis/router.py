@@ -181,6 +181,11 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         if n and 1 <= n <= 10:
             return Route("tool", "workspace_switch", {"number": n}, why="Hyprland IPC")
 
+    # --- the JARVIS window: workspaces («перейди в задачи», «домой») -------------------
+    view = ui_view(t)
+    if view:
+        return Route("ui", args={"view": view}, reply=f"Открываю «{UI_TITLES[view]}».", why="Раздел окна JARVIS")
+
     # --- volume ------------------------------------------------------------------
     m = re.search(r"(?:громкость|звук|volume)(?: на| to)? (\d{1,3}|[а-я ]+?)(?: процент\w*|%)?$", t)
     if m and (n := parse_number(m.group(1))) is not None and 0 <= n <= 100:
@@ -294,6 +299,45 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         if fm:
             return Route("search_open", "search_files", {"query": _clean_query(fm.group(1))},
                          why="Поиск файла, затем открытие")
+    return None
+
+
+# Workspaces of the JARVIS window. «Открой Telegram» still opens the Telegram app; the window's own Telegram
+# workspace needs «перейди в Telegram» or a word like «раздел» / «вкладку».
+UI_VIEWS = (
+    ("home", r"главн\w*|домашн\w*(?: экран\w*)?|home"),
+    ("chat", r"бесед\w*|чат\w*"),
+    ("tasks", r"задач\w*|центр задач"),
+    ("history", r"истори\w*(?: действий)?"),
+    ("browser", r"браузер\w*"),
+    ("telegram", r"телеграм\w*|телег[аеиу]|telegram"),
+    ("whatsapp", r"ват[сц]ап\w*|вотсап\w*|вацап\w*|whats ?app"),
+    ("mail", r"почт\w*|gmail|джимейл\w*"),
+    ("files", r"файл\w*"),
+    ("flora", r"флор\w*"),
+    ("settings", r"настройк\w*"),
+    ("comms", r"сообщени\w*|очеред\w* сообщений"),
+)
+UI_TITLES = {"home": "Главная", "chat": "Беседа", "tasks": "Задачи", "history": "История действий",
+             "browser": "Браузер", "telegram": "Telegram", "whatsapp": "WhatsApp", "mail": "Почта", "files": "Файлы",
+             "flora": "Флора", "settings": "Настройки", "comms": "Сообщения"}
+_UI_NOUN = r"(?:раздел|вкладк[уа]|экран|страниц[уа]|рабочее пространство|пространство)"
+
+
+def ui_view(t: str) -> str | None:
+    """Normalised text → workspace id, or None. Only explicit navigation phrases: never a bare «открой X»."""
+    if re.fullmatch(r"(?:домой|на главную|вернись (?:домой|на главную)|go home)", t):
+        return "home"
+    m = re.fullmatch(r"(?:перейди|вернись|переключись|покажи|открой|go to)(?: мне)?(?: (?:на|в|во|к))? "
+                     + _UI_NOUN + r" (.+)", t) \
+        or re.fullmatch(r"(?:перейди|вернись)(?: (?:на|в|во|к))? (.+)", t) \
+        or re.fullmatch(r"покажи (задачи|историю действий|настройки)", t)
+    if not m:
+        return None
+    name = m.group(1).strip()
+    for view, pat in UI_VIEWS:
+        if re.fullmatch(pat, name):
+            return view
     return None
 
 

@@ -21,6 +21,8 @@ const t0 = Date.now();
 await page.goto(`http://127.0.0.1:${port}/?t=${token}`);
 await page.waitForFunction(() => window.__jarvis?.S.connected === true, null, { timeout: 8000 });
 const ready = Date.now() - t0;
+// These scenarios are about the conversation: start in the chat workspace (the window itself opens on Home).
+await page.evaluate(() => window.__jarvis.nav("chat"));
 const shot = async (name) => page.screenshot({ path: `${outDir}/${name}.png` });
 const say = async (text, waitMs = 1500) => {
   await page.fill("#input", text);
@@ -48,12 +50,12 @@ if (scenario === "smoke") {
   await say("какие окна открыты", 1000);
   await say("расскажи о погоде", 1000);
   await shot("06-more");
-  await page.click('[data-nav="history"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "history");
   await page.waitForTimeout(600);
   timings.history = await page.$$eval(".action .action-title b", (els) => els.map((e) => e.textContent));
-  timings.recent_list_present = !!(await page.$("#recentTasks"));
+  timings.task_center_present = !!(await page.$("#tcList, #hList"));
   await shot("07-history");
-  await page.click('[data-nav="settings"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "settings");
   await page.waitForTimeout(400);
   await shot("08-settings");
 }
@@ -127,7 +129,7 @@ if (scenario === "flora") {
 
 if (scenario === "agency") {
   const dir = process.env.CALC_DIR;
-  await page.click('[data-nav="settings"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "settings");
   await page.waitForSelector(".pcard");
   await page.waitForTimeout(300);
   await shot("ag-01-settings");
@@ -137,7 +139,7 @@ if (scenario === "agency") {
   timings.claude_live_check_ms = Date.now() - s;
   await page.waitForTimeout(400);
   await page.locator('.pcard[data-provider="claude_code"]').screenshot({ path: `${outDir}/ag-02-claude-connected.png` });
-  await page.click('[data-nav="chat"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "chat");
   s = Date.now();
   await say("Claude, посмотри код в calc и объясни, почему падает тест", 500);
   await page.waitForFunction(() => { const S = window.__jarvis.S; const t = Object.values(S.tasks).at(-1); return t && ["completed", "failed"].includes(t.state); }, null, { timeout: 180000 });
@@ -166,12 +168,12 @@ if (scenario === "agency") {
 if (scenario === "two") {
   const waitDone = async (ms = 240000) => page.waitForFunction(() => { const t = Object.values(window.__jarvis.S.tasks).at(-1);
     return t && ["completed", "failed", "cancelled"].includes(t.state); }, null, { timeout: ms });
-  await page.click('[data-nav="settings"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "settings");
   await page.waitForSelector(".pcard");
   await page.waitForTimeout(400);
   await shot("two-01-settings");
   timings.provider_cards = await page.locator(".pcard").count();
-  await page.click('[data-nav="chat"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "chat");
   let s = Date.now();
   await say("Привет! Расскажи в двух предложениях, что ты умеешь.", 300);
   await waitDone(); timings.chat_ms = Date.now() - s;
@@ -194,12 +196,12 @@ if (scenario === "two") {
 
 if (scenario === "comms") {
   // Honest states without accounts: the view, the connect forms, and a send command that must NOT pretend.
-  await page.click('[data-nav="comms"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "comms");
   await page.waitForSelector("#caccounts .pcard", { timeout: 5000 });
   await page.waitForTimeout(300);
   await shot("comms-01-view");
   timings.cards = await page.$$eval("#caccounts .pcard", (els) => els.map((e) => e.innerText.split("\n").slice(0, 2).join(" | ")));
-  await page.click('[data-nav="chat"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "chat");
   let s = Date.now();
   await say("Отправь Ивану в Telegram: привет", 50);
   await page.waitForFunction(() => /не подключён/.test(document.querySelector("#thread")?.innerText || ""), null, { timeout: 15000 });
@@ -227,7 +229,7 @@ if (scenario === "comms") {
 
 if (scenario === "commsqr") {
   // WhatsApp linking: JARVIS opens WhatsApp Web in its own profile and shows the real QR code (not scanned here).
-  await page.click('[data-nav="comms"]');
+  await page.evaluate((v) => window.__jarvis.nav(v), "comms");
   await page.waitForSelector('[data-ca="wa-link"]', { timeout: 5000 });
   const s = Date.now();
   await page.click('[data-ca="wa-link"]');

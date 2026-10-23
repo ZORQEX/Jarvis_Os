@@ -103,7 +103,7 @@ function drawAccounts() {
   if (box.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;   // don't wipe typing
   const P = Object.fromEntries(st.data.providers.map((p) => [p.id, p]));
   box.innerHTML = [tgCard(P.telegram), waCard(P.whatsapp), mailCard(P.email)].join("");
-  wireAccounts(box);
+  wireAccounts(box, ctx, () => st.data, (d) => { st.data = d; drawAccounts(); });
   const connecting = st.data.providers.some((p) => p.state === "connecting" && p.id === "whatsapp");
   clearInterval(poll);
   if (connecting) poll = setInterval(async () => {
@@ -180,26 +180,33 @@ function mailCard(p) {
   return `<div class="pcard"><div class="ph"><b>Почта</b>${badge(p)}</div>${body}${caps(p)}</div>`;
 }
 
-function wireAccounts(box) {
-  const v = (id) => root.querySelector("#" + id)?.value?.trim() || "";
+/** One service's connection card (Telegram / WhatsApp / mail) for a workspace page. */
+export function accountCard(provider) {
+  return { telegram: tgCard, whatsapp: waCard, email: mailCard }[provider?.id]?.(provider) || "";
+}
+
+/** Wire the buttons of account cards inside box. getData() → last comms.state; onData(d) after each change. */
+export function wireAccounts(box, c, getData, onData) {
+  const v = (id) => box.querySelector("#" + id)?.value?.trim() || "";
   const act = async (b, typ, args, ok) => {
     b.disabled = true;
-    try { st.data = await ctx.link.request(typ, args, 90000); if (ok) ctx.toast(ok); }
-    catch (e) { ctx.toast(e.message, "err"); }
+    let d = null;
+    try { d = await c.link.request(typ, args, 90000); if (ok) c.toast(ok, "ok"); }
+    catch (e) { c.toast(e.message, "err"); }
     b.disabled = false;
-    drawAccounts();
+    if (d) onData(d);
   };
   box.querySelectorAll("[data-ca]").forEach((b) => b.addEventListener("click", () => {
     const a = b.dataset.ca;
     if (a === "tg-begin") return act(b, "comms.telegram.begin", { api_id: v("tgId"), api_hash: v("tgHash"), phone: v("tgPhone") }, "Telegram отправил код");
     if (a === "tg-finish") {
-      const p = st.data.providers.find((x) => x.id === "telegram");
-      return act(b, "comms.telegram.finish", p.login_stage === "password" ? { password: root.querySelector("#tgCode").value } : { code: v("tgCode") });
+      const p = getData().providers.find((x) => x.id === "telegram");
+      return act(b, "comms.telegram.finish", p.login_stage === "password" ? { password: box.querySelector("#tgCode").value } : { code: v("tgCode") });
     }
     if (a === "tg-logout" && confirm("Выйти из сеанса Telegram в JARVIS?")) return act(b, "comms.telegram.logout", {}, "Telegram отключён");
     if (a === "wa-link") return act(b, "comms.whatsapp.link", {});
     if (a === "wa-logout" && confirm("Отвязать WhatsApp от JARVIS? Профиль будет удалён.")) return act(b, "comms.whatsapp.logout", {}, "WhatsApp отвязан");
-    if (a === "mail-connect") return act(b, "comms.email.connect", { address: v("mAddr"), password: root.querySelector("#mPass").value,
+    if (a === "mail-connect") return act(b, "comms.email.connect", { address: v("mAddr"), password: box.querySelector("#mPass").value,
       smtp_host: v("mSmtp"), smtp_port: v("mPort"), imap_host: v("mImap") }, "Почта подключена");
     if (a === "mail-logout" && confirm("Отключить почту?")) return act(b, "comms.email.logout", {}, "Почта отключена");
   }));

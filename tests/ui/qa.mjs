@@ -15,6 +15,7 @@ page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
 await page.goto(`http://127.0.0.1:${port}/?t=${fs.readFileSync(tokenFile, "utf8").trim()}`);
 await page.waitForFunction(() => window.__jarvis?.S.connected === true, null, { timeout: 10000 });
+await page.evaluate(() => window.__jarvis.nav("chat"));   // the window opens on Home; QA drives the conversation
 await page.evaluate(() => {
   const q = window.__qa = { delta: {}, events: [], audio: {}, states: [] };
   const L = window.__jarvis.link, orig = L.onEvent;

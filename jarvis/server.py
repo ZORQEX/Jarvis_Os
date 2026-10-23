@@ -525,8 +525,20 @@ class Server:
                 if data.get("tool") not in UI_TOOLS:
                     raise ValueError("Это действие нельзя запустить из интерфейса")
                 res = {"task_id": await d.run_ui_tool(data["tool"], dict(data.get("args") or {}))}
+            elif typ == "ui.read":                # Files workspace: folder listing / search, read-only
+                res = await d.run_ui_read(str(data.get("tool")), dict(data.get("args") or {}))
+            elif typ == "files.roots":            # Files workspace: the folders JARVIS may read (paths only)
+                cfg = self.core.config
+                roots = [str(r) for r in cfg.read_roots if r.is_dir()]
+                res = {"roots": roots, "write_dir": str(cfg.expand(cfg.write_dir)), "home": str(Path.home())}
+            elif typ == "task.detail":            # Task Center timeline: the task with all its decisions
+                t = self.core.tasks.get(str(data.get("task_id")))
+                if not t:
+                    raise ValueError("Задача не найдена")
+                res = {"task": t, "approvals": self.core.approvals.for_task(t["id"])}
             elif typ == "tasks.list":
-                res = self.core.tasks.recent(min(200, int(data.get("limit", 50))))
+                res = self.core.tasks.recent(min(300, int(data.get("limit", 50))),
+                                             exclude_route=None if data.get("include_ui_read") else "ui_read")
             elif typ == "publish.state":          # GitHub for site publishing (window only, user-driven)
                 res = await d.github.state()
             elif typ == "publish.github.begin":
