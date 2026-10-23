@@ -219,7 +219,7 @@ async function renderVoicePicker() {
     <div class="vgrid" style="margin-top:8px">${d.en_voices.map((v) => `<div class="vcard ${v.id === d.en_current ? "on" : ""} ${v.available ? "" : "off"}">
       <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"}</span></div>
       <div class="faint vd">${esc(v.desc)}</div>
-      <div class="va"><button class="btn ghost" data-vprev-en="${esc(v.id)}" ${v.available ? "" : "disabled"}>▶ Listen</button>
+      <div class="va"><button class="btn ghost" data-vprev-en="${esc(v.id)}" ${v.available ? "" : "disabled"}>▶ Послушать</button>
         ${v.id === d.en_current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset-en="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`).join("")}</div>`;
   $$("[data-stt]", box).forEach((b) => b.addEventListener("click", async () => {
     try { await ctx.link.request("voice.stt_mode", { mode: b.dataset.stt }); renderVoicePicker(); } catch (er) { ctx.toast(er.message, "err"); }
