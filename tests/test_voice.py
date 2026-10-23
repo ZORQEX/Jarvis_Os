@@ -366,7 +366,7 @@ async def test_slow_answer_gets_a_spoken_hold_phrase(core, speech):
     orig = g.run_tool_loop
 
     async def slow(*a, **k):
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(4.2)          # the hold phrase comes after 3.5 s of silence
         return await orig(*a, **k)
     g.run_tool_loop = slow
     install(core, claude=g)

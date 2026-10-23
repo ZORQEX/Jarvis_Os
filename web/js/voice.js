@@ -2,6 +2,7 @@
 // The microphone is open only while listening is on (shown in the UI); only detected speech segments are
 // sent for recognition. LISTENING is reported only while a real microphone stream is open.
 import { setLevel } from "./companion.js";
+import { Vad } from "./core/vad.js";
 
 const now = () => performance.timeOrigin + performance.now();   // epoch ms, same clock as the core
 
@@ -11,9 +12,9 @@ export class Voice {
     // Wake listening (desktop companion): the mic stays open, every phrase is recognised on this computer and only
     // the ones starting with «Джарвис» (or a direct follow-up) are acted on — the core drops the rest unseen.
     this.wake = wake;
-    // Waiting for «Джарвис» the browser's echo/noise processing is off (measured ~2% of a core all the time); instead
-    // the mic is ignored while JARVIS itself speaks here, so it never hears its own answer as a command.
-    this.apm = !wake;
+    // Echo cancellation / noise suppression / gain stay on everywhere. Turning them off to save ~2% of a core made the
+    // companion deaf in practice and unable to be interrupted; with echo cancellation the person can talk over JARVIS.
+    this.apm = true;
     this.client = client;
     this.onOutput = onOutput || (() => {});
     this.outputChecked = 0;
@@ -27,6 +28,9 @@ export class Voice {
     // Early end of phrase: after this pause the phrase is recognised already; a clearly finished one is answered
     // at once, a cut-off one («Отправь маме в…») still waits the full pause (saves ~0.7 s per answer).
     this.earlyMs = 600;
+    // A phrase longer than this is cut and recognised anyway (wake listening: a TV or a long monologue must not keep
+    // «Джарвис, …» waiting).
+    this.maxMs = wake ? 12000 : 30000;
     this.probe = null; this.voiceFrames = 0;
     this.closeWhenQuiet = false;  // mic button: stay open while JARVIS answers, so it can be interrupted
     this.holdOpen = () => false;  // set by the app: JARVIS waits for the user's answer («да» / «нет», a question)
@@ -48,8 +52,11 @@ export class Voice {
   get audio() { return this.playing.length > 0; }
 
   resetVad() {
-    this.floor = 0.004; this.voiced = 0; this.silent = 0; this.seg = null; this.preroll = []; this.segStart = 0;
-    this.probe = null; this.voiceFrames = 0; this.recent = [];
+    if (!this.vad) this.vad = new Vad({ silenceMs: this.silenceMs, maxMs: this.maxMs });
+    this.vad.reset();
+    this.seg = null; this.preroll = []; this.segStart = 0;
+    this.probe = null; this.voiceFrames = 0;
+    this.duck(false);
   }
 
   setMuted(m) {
@@ -110,13 +117,8 @@ export class Voice {
   }
 
   // ---------------------------------------------------------------- VAD (local, ~20 ms frames)
-  frame({ rms, pcm }) {
+  frame({ rms, low = 1, pcm }) {
     const speaking = this.audio;
-    if (this.wake && (speaking || now() - this.lastAudioEnd < 500)) { this.preroll = []; this.voiced = 0; return; }
-    // Slightly higher bar while JARVIS talks (echo cancellation removes most of its own voice), so the user can
-    // still cut in with a normal voice: 1.7× threshold for 200 ms (was 2.4× for 280 ms — too hard to interrupt).
-    const thr = Math.max(0.012, this.floor * 3.2) * (speaking ? 1.7 : 1);
-    const need = speaking ? 10 : 4;          // frames of voice to start (200 ms / 80 ms)
     // The level drives the companion's halo (a style change per frame). Waiting for «Джарвис» it is shown only while a
     // phrase is being recorded: an idle always-on mic must not redraw 50 times a second (measured: ~4% of a core).
     if (!this.wake || this.seg) { this.lvlTick = (this.lvlTick || 0) + 1; if (this.lvlTick % 2 === 0) setLevel(Math.min(1, rms * 8)); }
@@ -128,35 +130,33 @@ export class Voice {
         && now() - this.idleSince > 6000 && now() - this.lastAudioEnd > 2000) {
       this.closeWhenQuiet = false; this.closeMic(); return;   // answer finished: the single-phrase mic turns off
     }
+    const ev = this.vad.push({ rms, low }, speaking);
     if (!this.seg) {
       this.preroll.push(pcm);
       if (this.preroll.length > 20) this.preroll.shift();     // keep 400 ms before speech start
-      if (rms > thr) this.voiced++; else { this.voiced = 0; this.floor = this.floor * 0.995 + rms * 0.005; }
-      // While JARVIS talks, a short «Стоп» must still cut in: its consonants leave gaps, so it never had 200 ms of
-      // voice in a row (measured: 6 frames at most). Count loud frames in the last 300 ms instead (8 of 15).
-      this.recent.push(rms > thr);
-      if (this.recent.length > 15) this.recent.shift();
-      const loud = this.recent.reduce((n, v) => n + (v ? 1 : 0), 0);
-      if (speaking ? loud >= 8 : this.voiced >= need) this.startSegment();
-      if (this.conversation && !this.wake && now() - this.idleSince > 180000) {   // 3 min without speech: stop listening
+      if (ev === "start") this.startSegment();
+      else if (this.conversation && !this.wake && now() - this.idleSince > 180000) {   // 3 min without speech: stop listening
         this.conversation = false; this.closeMic(); this.onError("Разговор завершён: 3 минуты тишины");
       }
       return;
     }
     this.seg.push(pcm);
-    if (rms > thr * 0.7) { this.silent = 0; this.voiceFrames++; } else this.silent += 20;
-    const dur = this.seg.length * 20;
-    if ((this.silent >= this.silenceMs && dur > 300) || dur > 30000) { this.endSegment(); return; }
+    this.voiceFrames = this.vad.voiceMs / 20;
+    // The person talks over JARVIS: its voice was turned down at once; after 0.4 s of real speech it stops and listens
+    // (a cough or a door does not cut the answer off).
+    if (this.ducked && this.vad.voiceMs >= 400) this.bargeIn();
+    if (ev === "end" || ev === "max") { this.endSegment(); return; }
+    const silent = this.vad.silent, dur = this.vad.dur;
     const early = Math.min(this.earlyMs, this.silenceMs - 400);
-    if (!this.probe && !this.wake && early >= 300 && this.silent >= early && dur - this.silent >= 400) this.startProbe();
+    if (!this.probe && early >= 300 && silent >= early && dur - silent >= 400) this.startProbe();
   }
 
   startSegment() {
     this.segStart = now() - this.preroll.length * 20;
     this.seg = this.preroll.slice(0);
+    this.seg.barge = this.audio;               // started while JARVIS was talking: the person cut in
     this.preroll = [];
-    this.silent = 0;
-    if (this.audio) this.bargeIn();
+    if (this.audio) this.duck(true);
     this.set("recording");
     if (!this.wake) this.link.request("voice.warm").catch(() => {});   // warm the cloud connection while the user speaks
   }
@@ -164,22 +164,28 @@ export class Voice {
   // Recognise the phrase during the pause. The user may go on talking: then the probe is simply dropped.
   startProbe() {
     const seg = this.seg, mark = this.voiceFrames;
-    const probe = this.probe = { seg, mark, id: null, complete: false, speechEnd: now() - this.silent };
-    b64(encodeWav(seg.slice(0))).then((audio) => this.link.request("voice.probe", { audio_b64: audio, mime: "audio/wav" }, 15000))
+    const probe = this.probe = { seg, mark, id: null, complete: false, speechEnd: now() - this.vad.silent };
+    b64(encodeWav(seg.slice(0))).then((audio) => this.link.request("voice.probe", { audio_b64: audio, mime: "audio/wav", ...this.flags(seg) }, 15000))
       .then((r) => {
         probe.id = r.probe_id; probe.complete = !!r.complete;
         // Still the same phrase, nothing said since, and the phrase is finished: answer now.
-        if (this.seg === seg && this.voiceFrames === mark && probe.complete) this.endSegment(probe);
+        if (this.seg === seg && this.voiceFrames === mark && probe.complete) { this.vad.close(); this.endSegment(probe); }
       })
       .catch(() => { probe.failed = true; });
   }
 
+  // What the core needs to know about a phrase: wake listening (must start with «Джарвис» or follow up), who heard it,
+  // and whether the person cut JARVIS off (then no «Джарвис» is needed).
+  flags(seg) {
+    return { wake: this.wake && this.conversation, client: this.client, barge: !!seg?.barge };
+  }
+
   async endSegment(viaProbe = null) {
-    const frames = this.seg; this.seg = null; this.voiced = 0;
+    const frames = this.seg; this.seg = null;
     const probe = this.probe; this.probe = null;
-    const speechEnd = viaProbe ? viaProbe.speechEnd : now() - this.silent;
-    const voicedMs = frames.length * 20 - this.silent;
-    if (!viaProbe && voicedMs < 250) { this.set("listening"); return; }
+    const speechEnd = viaProbe ? viaProbe.speechEnd : now() - this.vad.silent;
+    const voicedMs = this.vad.voiceMs;
+    if (!viaProbe && voicedMs < 200) { this.duck(false); this.set(this.listening ? "listening" : null); return; }
     // The probe already recognised exactly this phrase (no voice since): reuse it instead of a second recognition.
     const reuse = probe && probe.id && probe.seg === frames && probe.mark === this.voiceFrames ? probe.id : null;
     this.voiceFrames = 0;
@@ -189,14 +195,17 @@ export class Voice {
     const times = { speech_start: this.segStart / 1000, speech_end: speechEnd / 1000 };
     try {
       let r = null;
-      if (reuse) r = await this.link.request("voice.commit", { probe_id: reuse, ...times }, 45000).catch(() => null);
+      const flags = this.flags(frames);                // a pressed mic (not a conversation) needs no «Джарвис»
+      if (reuse) r = await this.link.request("voice.commit", { probe_id: reuse, ...flags, ...times }, 45000).catch(() => null);
       if (!r) r = await this.link.request("voice.transcribe", { audio_b64: await b64(encodeWav(frames)), mime: "audio/wav",
-        wake: this.wake && this.conversation, client: this.client, ...times }, 45000);   // a pressed mic needs no «Джарвис»
-      if (r.ignored) { this.set(this.listening ? "listening" : null); return; }   // not addressed to JARVIS
+        ...flags, ...times }, 45000);
+      if (r.ignored) { this.duck(false); this.set(this.listening ? "listening" : (this.audio ? "speaking" : null)); return; }   // not for JARVIS
+      if (this.ducked) this.bargeIn();                 // a short phrase over JARVIS («стоп», «хватит»): it was for JARVIS
       if (r.task_id && r.turn) this.turnOf.set(r.task_id, r.turn);
       if (r.turn) this.turnOf.set("notice-" + r.turn, r.turn);
       this.onTurn(r);
     } catch (e) {
+      this.duck(false);
       this.onError(e.message);
     }
     this.set(this.listening ? "listening" : (this.audio ? "speaking" : null));
@@ -223,7 +232,8 @@ export class Voice {
     if (this.dropped.has(ev.task_id)) return;
     const src = this.out.createBufferSource();
     src.buffer = buf;
-    src.connect(this.out.destination);
+    if (!this.gain) { this.gain = this.out.createGain(); this.gain.connect(this.out.destination); }
+    src.connect(this.gain);
     const at = Math.max(this.out.currentTime + 0.02, this.nextAt);
     src.start(at);
     this.nextAt = at + buf.duration;
@@ -232,6 +242,7 @@ export class Voice {
     src.onended = () => {
       this.playing = this.playing.filter((x) => x !== item);
       this.lastAudioEnd = now();
+      if (!this.playing.length) this.duck(false);
       if (!this.playing.length && this.state === "speaking") this.set(this.listening ? "listening" : null);
     };
     const delay = Math.max(0, (at - this.out.currentTime) * 1000);
@@ -262,17 +273,26 @@ export class Voice {
     if (!this.playing.length && this.state === "speaking") this.set(this.listening ? "listening" : null);
   }
 
-  bargeIn() {                                 // the user started talking over JARVIS
+  // Turn JARVIS's voice down while the person may be cutting in (instantly, without stopping it yet).
+  duck(on) {
+    this.ducked = !!on && this.audio;
+    if (this.gain && this.out) this.gain.gain.setTargetAtTime(this.ducked ? 0.15 : 1, this.out.currentTime, 0.03);
+  }
+
+  bargeIn() {                                 // the person talks over JARVIS: stop the voice and listen (the work goes on)
+    this.ducked = false;
     for (const x of this.playing) this.dropped.add(x.task);
     this.stopSpeaking();
-    this.set("interrupted");
-    this.link.request("voice.interrupt").catch(() => {});
+    if (this.gain && this.out) this.gain.gain.setValueAtTime(1, this.out.currentTime);
+    if (this.state !== "recording") this.set("interrupted");
+    this.link.request("voice.barge").catch(() => {});
   }
 
   stopAll() {                                 // Esc / stop button
     for (const x of this.playing) this.dropped.add(x.task);
     this.stopSpeaking();
-    if (this.seg) { this.seg = null; this.voiced = 0; }
+    this.duck(false);
+    if (this.seg) { this.seg = null; this.vad.close(); }
     this.link.request("voice.interrupt").catch(() => {});
   }
 }

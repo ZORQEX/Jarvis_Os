@@ -46,6 +46,20 @@ if [[ ! -x "$SILERO/.venv/bin/python" ]]; then
     && uv pip install -q --python .venv/bin/python "numpy<2.3" "num2words==0.5.14")
 fi
 [[ -s "$SILERO/models/v5_2_ru.pt" ]] || curl -fsSL -o "$SILERO/models/v5_2_ru.pt" "https://models.silero.ai/models/tts/ru/v5_2_ru.pt"
+# German and Ukrainian voices (same worker, loaded on their first phrase).
+[[ -s "$SILERO/models/v3_de.pt" ]] || curl -fsSL -o "$SILERO/models/v3_de.pt" "https://models.silero.ai/models/tts/de/v3_de.pt"
+[[ -s "$SILERO/models/v4_ua.pt" ]] || curl -fsSL -o "$SILERO/models/v4_ua.pt" "https://models.silero.ai/models/tts/ua/v4_ua.pt"
+
+# English (British/American), Spanish, French, Italian, Portuguese voices: Kokoro-82M (Apache-2.0), int8 ONNX, own
+# virtualenv, separate process (jarvis/voice/kokoro_worker.py). ~120 MB of models.
+KOKORO="$HOME/.local/share/jarvis/kokoro"
+if [[ ! -x "$KOKORO/.venv/bin/python" ]]; then
+  mkdir -p "$KOKORO/models" && (cd "$KOKORO" && uv venv -q --python 3.12 .venv \
+    && uv pip install -q --python .venv/bin/python "kokoro-onnx==0.4.7")
+fi
+for f in kokoro-v1.0.int8.onnx voices-v1.0.bin; do
+  [[ -s "$KOKORO/models/$f" ]] || curl -fsSL -o "$KOKORO/models/$f" "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/$f"
+done
 
 # Speech recognition on this computer: GigaAM v3 (Sber, MIT), int8 build (~230 MB, ~520 MB RAM), own virtualenv.
 STT="$HOME/.local/share/jarvis/stt"
@@ -54,6 +68,10 @@ if [[ ! -x "$STT/.venv/bin/python" ]]; then
     && uv pip install -q --python .venv/bin/python "onnx-asr[cpu,hub]==0.12.0")
 fi
 HF_HOME="$STT/hf" "$STT/.venv/bin/python" -c "import onnx_asr; onnx_asr.load_model('gigaam-v3-e2e-rnnt', quantization='int8')"
+# Other languages: Parakeet TDT 0.6B v3 (NVIDIA, CC-BY-4.0, 25 European languages), int8 (~670 MB). It re-hears only
+# phrases that are not Russian; a Russian word list (FrequencyWords, CC-BY-SA-4.0) tells them apart.
+HF_HOME="$STT/hf" "$STT/.venv/bin/python" -c "import onnx_asr; onnx_asr.load_model('nemo-parakeet-tdt-0.6b-v3', quantization='int8')"
+[[ -s "$STT/ru_50k.txt" ]] || curl -fsSL -o "$STT/ru_50k.txt" "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ru/ru_50k.txt"
 
 # Browser control for Claude Code tasks the user allows (Microsoft Playwright MCP, pinned; uses /usr/bin/chromium).
 command -v npx >/dev/null && npx -y @playwright/mcp@0.0.83 --help >/dev/null 2>&1 || true

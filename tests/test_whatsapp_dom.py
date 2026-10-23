@@ -1,7 +1,5 @@
 """WhatsApp Web layers that cover the search box (measured 2026-10-23: a «what's new» popover made every
 «напиши маме» fail with «страница не отвечает»). Real Chromium on a local page that copies WhatsApp's structure."""
-import shutil
-from pathlib import Path
 
 import pytest
 

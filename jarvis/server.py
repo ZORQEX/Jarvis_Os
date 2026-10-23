@@ -151,6 +151,10 @@ class Server:
         stt = getattr(self.core.director, "stt", None)
         if stt and stt.available():
             try:
+                from .voice.stt import VOCAB
+                stt.mode = "ru" if self.core.db.get_kv("stt_mode") == "ru" else "auto"
+                names = [w for r in self.core.db.all("SELECT name FROM contacts") for w in str(r["name"]).split()]
+                await stt.add_vocab([*VOCAB, *names])
                 await stt.start()                 # load the recognition model before the first phrase
             except Exception as e:   # noqa: BLE001
                 self.core.audit.write("stt.prewarm_failed", error=repr(e)[:200])
@@ -202,6 +206,22 @@ class Server:
             raise ValueError("Не удалось распознать речь: нужна запись WAV")
         return audio
 
+    def _wake_text(self, text: str, data: dict) -> str | None:
+        """Wake listening: the phrase to act on, or None if it was not for JARVIS. A recording may start with other
+        speech («…телевизор… Джарвис, который час»): the command is what follows the name. While or right after JARVIS
+        speaks, a phrase that repeats what it just said is its own voice through the speakers, not the person."""
+        from .router import find_wake, wake_len
+        t = (text or "").strip()
+        if not t:
+            return None
+        sp = self.core.director.speech
+        if sp and len(t.split()) >= 3 and not wake_len(t) and sp.is_echo(t):
+            return None
+        if data.get("barge") or self._addressed(t):
+            return t
+        pos = find_wake(t)
+        return t[pos:] if pos > 0 else None
+
     def _addressed(self, text: str) -> bool:
         """Wake listening: is this phrase for JARVIS? «Джарвис…» at the start, an answer within 20 s of the last
         exchange, a «да / нет» to a pending confirmation, or the continuation of a cut-off command."""
@@ -220,16 +240,22 @@ class Server:
         computer and dropped at once: no turn, no transcript stored, nothing sent anywhere."""
         d = self.core.director
         audio = self._voice_audio(data)
+        t0 = time.time()
         text = await d.stt.transcribe(audio)
-        if not text.strip() or not self._addressed(text):
+        return await self._wake_turn(text, data, len(audio), t0, time.time())
+
+    async def _wake_turn(self, text: str, data: dict, nbytes: int, stt_start: float, stt_end: float) -> dict:
+        text = self._wake_text(text, data)
+        if text is None:
             return {"text": "", "ignored": True}
         self._wake_until = time.time() + 20
         self.core.bus.publish("wake.heard", {"text": text[:200]})
-        sp = d.speech
+        sp = self.core.director.speech
         turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
         if sp:
-            sp.mark(turn, "stt_end")
-        return await self._after_stt(text, turn, len(audio), data)
+            sp.mark(turn, "stt_start", stt_start)
+            sp.mark(turn, "stt_end", stt_end)
+        return await self._after_stt(text, turn, nbytes, data)
 
     async def _voice_turn(self, data: dict) -> dict:
         """One spoken request: STT → Director (same path as typed text) → streamed speech."""
@@ -265,13 +291,18 @@ class Server:
         now_ = time.time()
         self._probes = {k: v for k, v in getattr(self, "_probes", {}).items() if now_ - v["at"] < 30}
         self._probes[pid] = {"text": text, "stt_start": t0, "stt_end": now_, "at": now_, "bytes": len(audio)}
-        return {"probe_id": pid, "complete": phrase_complete(joined), "chars": len(text)}
+        complete = phrase_complete(joined)
+        if data.get("wake"):          # wake listening: only a phrase for JARVIS is answered early
+            complete = complete and self._wake_text(text, data) is not None
+        return {"probe_id": pid, "complete": complete, "chars": len(text)}
 
     async def _voice_commit(self, data: dict) -> dict:
         """The window confirms a probe: the user stayed silent, so its transcript is the phrase (no second STT)."""
         pr = getattr(self, "_probes", {}).pop(str(data.get("probe_id")), None)
         if not pr:
             raise ValueError("probe expired")
+        if data.get("wake"):
+            return await self._wake_turn(pr["text"], data, pr["bytes"], pr["stt_start"], pr["stt_end"])
         sp = self.core.director.speech
         turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
         if sp:
@@ -283,12 +314,12 @@ class Server:
         d = self.core.director
         sp = d.speech
         if sp:
-            sp.annotate(turn, stt_model=d.stt.name, transcript=text)
+            sp.annotate(turn, stt_model=getattr(d.stt, "last_model", None) or d.stt.name, transcript=text)
         self.core.audit.write("voice.transcribed", bytes=nbytes, chars=len(text), turn=turn)
         if not text.strip():
             if sp:
-                from .voice.tts import NOT_HEARD
-                sp.say("notice-" + (turn or "x"), NOT_HEARD, turn)
+                from .voice.tts import NOT_HEARD_BY_LANG, phrase
+                sp.say("notice-" + (turn or "x"), phrase(NOT_HEARD_BY_LANG, sp.lang), turn)
             return {"text": "", "turn": turn}
         # A phrase cut off mid-command («Отправь…», «…в», «…моей») is kept and joined with the next one, instead of
         # being answered on its own (measured: «Отправь» / «в Телеграме» / «любимые с сердечком» became 3 requests).
@@ -472,23 +503,32 @@ class Server:
         return ws
 
     def _voices(self) -> dict:
-        from .voice.tts import VOICES
+        from .voice.lang import NAMES
+        from .voice.tts import EN_VOICES, VOICES
         eng = self.core.director.speech.engine if self.core.director.speech else None
         ok = bool(getattr(eng, "silero", None) and eng.silero.available())
+        en_ok = bool(getattr(eng, "kokoro", None) and eng.kokoro.available())
+        stt = getattr(self.core.director, "stt", None)
+        langs = eng.languages() if hasattr(eng, "languages") else ["ru"]
         return {"voices": [{**v, "available": ok} for v in VOICES], "current": getattr(eng, "voice_id", None),
+                "en_voices": [{**v, "available": en_ok} for v in EN_VOICES],
+                "en_current": (getattr(eng, "en", None) or {}).get("id"), "en_installed": en_ok,
+                "languages": [{"id": x, "name": NAMES.get(x, x)} for x in langs],
+                "stt_mode": getattr(stt, "mode", "ru"), "stt_multi": bool(stt and stt.multilingual()),
                 "rate": getattr(eng, "rate", 1.0), "installed": ok,
                 "last_engine": getattr(eng, "last_engine", None), "last_fallback": getattr(eng, "last_fallback", None),
                 "ai_model": self.core.db.get_kv("voice_ai_model") or "fast",
                 "ai_models": {"fast": self.core.config.claude_voice_model, "quality": self.core.config.claude_chat_model}}
 
-    async def _voice_preview(self, vid: str, tid: str) -> None:
+    async def _voice_preview(self, vid: str, tid: str, en: bool = False) -> None:
         """Speak a sample in any voice without changing the chosen one."""
-        from .voice.tts import PREVIEW, voice_info
-        bus, v = self.core.bus, voice_info(vid)
+        from .voice.tts import PREVIEW, PREVIEW_EN, en_voice, voice_info
+        bus = self.core.bus
+        v = en_voice(vid) if en else voice_info(vid)
         eng = self.core.director.speech.engine if self.core.director.speech else None
         try:
-            audio = await eng.preview(v["id"])
-            bus.publish("speech.audio", {"seq": 1, "text": PREVIEW, "mime": "audio/wav",
+            audio = await (eng.preview_en(v["id"]) if en else eng.preview(v["id"]))
+            bus.publish("speech.audio", {"seq": 1, "text": PREVIEW_EN if en else PREVIEW, "mime": "audio/wav",
                                          "audio_b64": base64.b64encode(audio).decode()}, tid)
             bus.publish("speech.end", {"segments": 1}, tid)
         except Exception as e:   # noqa: BLE001
@@ -539,6 +579,8 @@ class Server:
                 res = await self._voice_commit(data)
             elif typ == "voice.interrupt":
                 res = {"message": await d.control("interrupt")}
+            elif typ == "voice.barge":            # the person started talking over JARVIS: stop the voice, not the work
+                res = {"message": await d.control("stop_speech")}
             elif typ == "voice.metric":
                 if d.speech and data.get("field") == "first_audio_played":
                     d.speech.mark(str(data.get("turn")), "first_audio_played", float(data.get("ts") or time.time()))
@@ -574,8 +616,24 @@ class Server:
                 res = self._voices()
             elif typ == "voice.preview":
                 tid = "preview_" + pysecrets.token_hex(4)
-                spawn(self._voice_preview(str(data.get("voice")), tid), "voice-preview")
+                spawn(self._voice_preview(str(data.get("voice")), tid, en=bool(data.get("en"))), "voice-preview")
                 res = {"task_id": tid}
+            elif typ == "voice.set_en":           # the English voice (Kokoro)
+                eng = d.speech.engine if d.speech else None
+                if not hasattr(eng, "set_en_voice"):
+                    raise ValueError("Озвучивание не настроено")
+                v = eng.set_en_voice(str(data.get("voice")))
+                self.core.db.set_kv("tts_voice_en", v["id"])
+                self.core.audit.write("voice.selected_en", voice=v["id"])
+                res = self._voices()
+            elif typ == "voice.stt_mode":         # «auto»: Russian + other languages; «ru»: Russian only (less memory)
+                mode = "ru" if data.get("mode") == "ru" else "auto"
+                self.core.db.set_kv("stt_mode", mode)
+                if d.stt:
+                    await d.stt.set_mode(mode)
+                    if d.stt.available():
+                        spawn(d.stt.start(), "stt-restart")      # load the models now, not on the next phrase
+                res = self._voices()
             elif typ == "voice.output":
                 res = await audio_output(fix=bool(data.get("fix")))
                 if data.get("fix"):

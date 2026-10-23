@@ -41,7 +41,7 @@ function renderSettings() {
     </div>
     <div class="panel">
       <h2>Голос</h2>
-      <div class="muted" style="font-size:13.5px">Речь распознаётся и озвучивается на этом компьютере (GigaAM и Silero) — без интернета и лимитов;
+      <div class="muted" style="font-size:13.5px">Речь распознаётся и озвучивается на этом компьютере (GigaAM, Parakeet, Silero, Kokoro) — без интернета и лимитов;
         в Claude уходит только текст вопроса, если на него нужен ответ ИИ. Микрофон слушает только когда включён (кнопка или разговор).</div>
       <h2 style="font-size:13.5px;margin:14px 0 2px">Голос JARVIS</h2>
       <div class="faint" style="font-size:12.5px">Голоса Silero работают на этом компьютере: без интернета, без лимитов, фраза готова за ~0,25 с.
@@ -204,7 +204,35 @@ async function renderVoicePicker() {
       <button class="choice" role="radio" aria-checked="${d.ai_model === "quality"}" data-vai="quality"><b>Подробнее</b>
         <span>${esc(d.ai_models?.quality || "")}: обычно ~1 с, но иногда задумывается на 4–10 с.</span></button>
     </div>
-    <div class="faint" style="font-size:12px;margin-top:4px">Написанные текстом запросы всегда обрабатывает ${esc(d.ai_models?.quality || "основная модель")}. Беседа общая — контекст не теряется.</div>`;
+    <div class="faint" style="font-size:12px;margin-top:4px">Написанные текстом запросы всегда обрабатывает ${esc(d.ai_models?.quality || "основная модель")}. Беседа общая — контекст не теряется.</div>
+    <h2 style="font-size:13.5px;margin:16px 0 0">Языки</h2>
+    <div class="faint" style="font-size:12.5px">Говорите на любом из них — JARVIS ответит на том же языке и прочитает каждое предложение голосом
+      своего языка. Сейчас говорит: ${d.languages.map((x) => esc(x.name)).join(", ")}.</div>
+    <div class="choices" role="radiogroup" aria-label="Распознавание речи">
+      <button class="choice" role="radio" aria-checked="${d.stt_mode !== "ru"}" data-stt="auto" ${d.stt_multi ? "" : "disabled"}><b>Русский и другие языки</b>
+        <span>${d.stt_multi ? "Русскую речь слышит GigaAM (~0,4 с); английскую и ещё 24 европейских языка — Parakeet (+~0,9 с). ~1,9 ГБ памяти." : "Модель Parakeet не скачана — scripts/install.sh"}</span></button>
+      <button class="choice" role="radio" aria-checked="${d.stt_mode === "ru"}" data-stt="ru"><b>Только русский</b>
+        <span>Только GigaAM: меньше памяти (~0,5 ГБ), фразы на других языках не распознаются.</span></button>
+    </div>
+    <h2 style="font-size:13.5px;margin:14px 0 2px">Английский голос</h2>
+    ${d.en_installed ? "" : `<div class="cerr" style="margin:6px 0">Kokoro не установлен — запустите scripts/install.sh. Пока английский читает русский голос.</div>`}
+    <div class="vgrid" style="margin-top:8px">${d.en_voices.map((v) => `<div class="vcard ${v.id === d.en_current ? "on" : ""} ${v.available ? "" : "off"}">
+      <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"}</span></div>
+      <div class="faint vd">${esc(v.desc)}</div>
+      <div class="va"><button class="btn ghost" data-vprev-en="${esc(v.id)}" ${v.available ? "" : "disabled"}>▶ Listen</button>
+        ${v.id === d.en_current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset-en="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`).join("")}</div>`;
+  $$("[data-stt]", box).forEach((b) => b.addEventListener("click", async () => {
+    try { await ctx.link.request("voice.stt_mode", { mode: b.dataset.stt }); renderVoicePicker(); } catch (er) { ctx.toast(er.message, "err"); }
+  }));
+  $$("[data-vprev-en]", box).forEach((b) => b.addEventListener("click", () => {
+    ctx.voice.stopSpeaking();
+    ctx.link.request("voice.preview", { voice: b.dataset.vprevEn, en: true }).catch((er) => ctx.toast(er.message, "err"));
+  }));
+  $$("[data-vset-en]", box).forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try { await ctx.link.request("voice.set_en", { voice: b.dataset.vsetEn }); ctx.toast("Голос выбран"); renderVoicePicker(); }
+    catch (er) { ctx.toast(er.message, "err"); b.disabled = false; }
+  }));
   $$("[data-vai]", box).forEach((b) => b.addEventListener("click", async () => {
     try { await ctx.link.request("voice.ai_model", { pref: b.dataset.vai }); renderVoicePicker(); } catch (er) { ctx.toast(er.message, "err"); }
   }));

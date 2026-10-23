@@ -222,9 +222,10 @@ class Agency:
         if r and r.voice and director.speech and self._is_long(d):
             director.speech.ack(tid)          # local, pre-synthesized: no extra AI call
         elif r and r.voice and director.speech:
-            # A slow answer (Claude busy, a web search, a tool call): after 2.5 s of silence say «Секунду…» so the user
-            # knows JARVIS heard them. ack() does nothing if the answer has already started.
-            asyncio.get_running_loop().call_later(2.5, director.speech.ack, tid)
+            # A slow answer (Claude busy, a web search, a tool call): after 3.5 s of silence say «Секунду.» so the user
+            # knows JARVIS heard them (the companion already shows it is working, so not sooner: say less, do more).
+            # ack() does nothing if the answer has already started.
+            asyncio.get_running_loop().call_later(3.5, director.speech.ack, tid)
         cloud = sorted({s.executor for s in runnable if s.executor_kind == "provider" and self.mgr.get(s.executor).cloud})
         if cloud and director.privacy_profile() == "PRIVATE_LOCAL":
             names = ", ".join(PROVIDER_NAMES.get(p, p) for p in cloud)

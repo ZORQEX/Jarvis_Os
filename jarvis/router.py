@@ -67,10 +67,29 @@ def wake_len(text: str) -> int:
     m = _FIRST_WORD.match(text or "")
     if not m:
         return 0
-    w = m.group(1).casefold().replace("ё", "е")
-    if w == "jarvis" or (5 <= len(w) <= 9 and w[0] in "джчзj" and w[-1] in "сзш" and _lev(w, "джарвис") <= 2):
-        return m.end()
-    return 0
+    return m.end() if is_wake_word(m.group(1)) else 0
+
+
+def is_wake_word(word: str) -> bool:
+    """«Джарвис» as the recognisers hear it: «Джарвес», «Джорис», «Чарвис», «Javis», «Jervis»…"""
+    w = word.casefold().replace("ё", "е")
+    if w == "jarvis" or WAKE.fullmatch(w):
+        return True
+    if 5 <= len(w) <= 9 and w[0] in "джчзj" and w[-1] in "сзш" and _lev(w, "джарвис") <= 2:
+        return True
+    return 5 <= len(w) <= 8 and w[0] in "jgdc" and w[-1] in "sz" and _lev(w, "jarvis") <= 2
+
+
+_WORDS = re.compile(r"[^\W\d_]+")
+
+
+def find_wake(text: str) -> int:
+    """Where «Джарвис» starts in a phrase, or -1. Wake listening hears whole stretches of sound: the recording may begin
+    with a TV or another person and only then «Джарвис, который час» — the command is what follows the name."""
+    for m in _WORDS.finditer(text or ""):
+        if is_wake_word(m.group(0)):
+            return m.start()
+    return -1
 
 
 def norm(text: str) -> str:
@@ -150,7 +169,10 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     t = norm(text)
     if not t:
         # "Джарвис." alone → "Да?"
-        return Route("answer", reply="Да?", why="Обращение по имени") if wake_len(text) else None
+        if not wake_len(text):
+            return None
+        return Route("answer", reply="Yes?" if re.match(r"\s*(?:hey\s+|ok\s+)?[a-z]", text, re.I) else "Да?",
+                     why="Обращение по имени")
 
     # --- control -----------------------------------------------------------
     if re.fullmatch(r"(экстренная остановка|остановить все|останови все|прекрати все|emergency stop|стоп все|"

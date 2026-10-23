@@ -122,3 +122,57 @@ async def test_speech_of_the_companion_is_marked(ws_client, core):
         if len(owners) == 2:
             break
     assert owners == {"t_x": "overlay", "t_y": None}
+
+
+async def test_wake_word_in_the_middle_of_a_recording(ws_client, core):
+    """The recording began with other speech (a TV, a colleague): the command is what follows «Джарвис»."""
+    tc = ws_client
+    core.director.stt = FakeSTT()
+    core.director.stt.texts = ["ну и вот он говорит Джарвис, который час"]
+    tc.srv._wake_until = 0
+    m = await request(tc, "voice.transcribe", 1, audio_b64=WAV, mime="audio/wav", wake=True, client="overlay")
+    assert m["data"]["task_id"] and m["data"]["text"] == "Джарвис, который час"
+
+
+async def test_cutting_in_needs_no_wake_word_but_echo_is_ignored(ws_client, core):
+    tc = ws_client
+    core.director.stt = FakeSTT()
+    tc.srv._wake_until = 0
+    core.director.speech.spoken("Сейчас в Алматы двенадцать градусов, ясно, без осадков.")
+    # JARVIS's own voice through the speakers, heard while it talks: dropped
+    core.director.stt.texts = ["в Алматы двенадцать градусов ясно"]
+    m = await request(tc, "voice.transcribe", 1, audio_b64=WAV, mime="audio/wav", wake=True, client="overlay", barge=True)
+    assert m["data"].get("ignored")
+    # the person talking over it: a new task, no «Джарвис» needed
+    core.director.stt.texts = ["открой папку загрузки"]
+    m = await request(tc, "voice.transcribe", 2, audio_b64=WAV, mime="audio/wav", wake=True, client="overlay", barge=True)
+    assert m["data"].get("task_id")
+
+
+async def test_barge_in_stops_the_voice_not_the_work(ws_client, core):
+    tc = ws_client
+    stopped = []
+    orig = core.director.cancel
+
+    async def cancel(tid, *a, **k):
+        stopped.append(tid)
+        return await orig(tid, *a, **k)
+    core.director.cancel = cancel
+    m = await request(tc, "voice.barge", 1)
+    assert m["ok"] and stopped == []
+
+
+async def test_early_answer_only_for_phrases_to_jarvis(ws_client, core):
+    tc = ws_client
+    core.director.stt = FakeSTT()
+    tc.srv._wake_until = 0
+    core.director.stt.texts = ["я сегодня поздно приду домой."]
+    m = await request(tc, "voice.probe", 1, audio_b64=WAV, mime="audio/wav", wake=True, client="overlay")
+    assert m["data"]["complete"] is False
+    m = await request(tc, "voice.commit", 2, probe_id=m["data"]["probe_id"], wake=True, client="overlay")
+    assert m["data"].get("ignored")
+    core.director.stt.texts = ["Джарвис, который час?"]
+    m = await request(tc, "voice.probe", 3, audio_b64=WAV, mime="audio/wav", wake=True, client="overlay")
+    assert m["data"]["complete"] is True
+    m = await request(tc, "voice.commit", 4, probe_id=m["data"]["probe_id"], wake=True, client="overlay")
+    assert m["data"].get("task_id") and tc.srv._speech_owner[m["data"]["task_id"]] == "overlay"

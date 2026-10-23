@@ -93,6 +93,24 @@ Tests: `uv run pytest -q` → 336 passed, 6 skipped; `node tests/ui/workos.mjs` 
 | No limits on thinking time / budget / steps (stop any time) | VERIFIED LOCAL | test_no_time_budget_or_turn_limits_by_default |
 | Skills: JARVIS builds, keeps and runs its own tools (GitHub/pip/npm/cargo), confirmed once, verified by manifest | VERIFIED MOCK | tests/test_skills.py (Claude Code scripted) |
 
+## Languages, barge-in, deaf companion fix, skill phrases (2026-10-24)
+Tests: `uv run pytest -q` → 352 passed, 6 skipped; `node --test tests/ui/unit/` → 43/43; `node tests/ui/workos.mjs` → 21/21.
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| English and other languages are spoken by a voice of that language (Russian voice no longer spells English: «Done. I've sent…» was «днме. и уе ремс…») | VERIFIED LOCAL (real voices) | Kokoro-82M int8 for en/es/fr/it/pt, Silero de/uk; TTS → STT round trip: en «Done, I've sent the message to your mom on WhatsApp.», de, uk, es, mixed ru+en all heard back word for word; English sentence ~1.1 s on this CPU |
+| Each sentence gets its language's voice; Russian with a brand («Открыл YouTube Music») stays Russian | VERIFIED LOCAL | tests/test_languages.py (runs/detect) |
+| English (and 24 more European languages) speech is understood; Russian stays as fast as before | VERIFIED LOCAL (real models) | GigaAM first; a phrase that does not read as Russian (word list) is re-heard by Parakeet v3: 10/10 English test phrases right (1.1 s), Russian 0.25–0.7 s unchanged; on 155 real past voice phrases only 6 re-heard (2 of them were English) |
+| Hold phrase / «не расслышал» / «Да?» in the language the person speaks | VERIFIED LOCAL | test_english_question_gets_english_hold_phrase_and_voice, test_bare_wake_word_is_answered_in_its_language |
+| Companion «does not understand, have to repeat»: a phrase recorded for 8.6 s / 30 s | FIXED, VERIFIED (Chromium fake microphone, real STT/TTS, dev core) | cause: keyboard clicks counted as voice, so the pause never came (room 0.002 RMS, typing peaks 0.37). New VAD (core/vad.js): voice = lasting and low-frequency; noise floor = quietest 3 s. Typing + «Джарвис, который час?» + typing: recording 4.3→6.3 s (phrase 4.1→5.6), answer audio 1.26 s after speech end; tests/ui/unit/vad.test.mjs |
+| Talking over JARVIS: it turns its voice down at once, stops after 0.4 s of speech and does the new request (no «Джарвис» needed); the work in progress is not cancelled | VERIFIED (fake microphone, dev core) | answer playing → «Покажи состояние системы» → recording, new task, answer 0.94 s after speech; voice.barge stops speech only (test_barge_in_stops_the_voice_not_the_work) |
+| JARVIS's own voice heard through the speakers is not taken as a command | VERIFIED LOCAL | echo check against what it said in the last 30 s (test_cutting_in_needs_no_wake_word_but_echo_is_ignored); echo cancellation back on |
+| «…другой разговор… Джарвис, который час» in one recording → the command after the name | VERIFIED LOCAL | test_wake_word_in_the_middle_of_a_recording |
+| Early answer in wake mode (0.6 s pause), only for phrases to JARVIS | VERIFIED LOCAL | test_early_answer_only_for_phrases_to_jarvis |
+| Say less: spoken AI answers 1–2 sentences, ≤450 characters, hold phrase only after 3.5 s | IMPLEMENTED | CHAT_SYSTEM, director, agency |
+| Skill phrases: a learned skill runs at once on one of its phrases — no AI call, no tokens; result file opened | VERIFIED LOCAL | test_skill_phrase_runs_it_without_ai, test_skill_result_file_is_opened; installed qr_code skill got «сделай qr код для …» / «make a qr code for …» |
+| Memory of the voice processes | MEASURED | recognition 1.9 GB (GigaAM + Parakeet; «Только русский» in Settings → 0.5 GB), Silero 0.7 GB, Kokoro 0.3 GB |
+
 ## Performance (this laptop)
 - Core cold start to /health: 223 ms. Launcher returns in ~280 ms. Page ready ~100 ms.
 - Core idle: 0.0% CPU, ~39 MB PSS. Window (Chromium, 10 processes): ~380 MB PSS, idle 1.9% of one core

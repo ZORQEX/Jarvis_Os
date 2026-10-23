@@ -38,8 +38,8 @@ def core(home, cfg, monkeypatch):
     monkeypatch.setattr(secrets, "get", lambda account: None)
     # The real voice and recognition models (~1 GB, seconds to load) are exercised by their own tests only.
     from jarvis.voice.stt import LocalSTT
-    from jarvis.voice.tts import PiperTTS, SileroTTS
-    for cls in (LocalSTT, SileroTTS, PiperTTS):
+    from jarvis.voice.tts import KokoroTTS, PiperTTS, SileroTTS
+    for cls in (LocalSTT, SileroTTS, PiperTTS, KokoroTTS):
         monkeypatch.setattr(cls, "available", lambda self: False)
     # Never the real Claude in tests (it would use the user's subscription): providers look «not installed» unless a
     # test installs a scripted one. Live checks are in test_live.py (JARVIS_LIVE=1).

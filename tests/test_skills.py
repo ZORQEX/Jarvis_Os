@@ -160,3 +160,50 @@ async def test_a_named_project_still_goes_to_claude_code(core, home):
     d = await core.director.agency.plan(core.director, core.tasks.create(text, None), text)
     assert d.steps[0].action == "inspect_code", d.steps[0].action
     # (in tests Claude Code is not installed, so the step is planned but blocked — the point is: not «chat»)
+
+
+async def test_skill_phrase_runs_it_without_ai(core):
+    """A learned skill is asked for by one of its phrases: it runs at once (no AI call: none is configured here)."""
+    from conftest import wait_done
+    make_skill(skills_root(core.config), say=["сделай заглавными {text}", "make uppercase {text}"])
+    core.policy.full_access = True
+    tid = await core.director.submit("Джарвис, сделай заглавными hello world", "text")     # tr: ASCII only
+    t = await wait_done(core, tid)
+    assert t["state"] == "completed" and t["route"] == "skill"
+    reply = core.director.messages(core.director.conversation_id())[-1]
+    assert reply["text"] == "Готово: Заглавные буквы. HELLO WORLD"
+    assert reply["meta"]["skill"] == "echo_upper" and reply["meta"]["cloud"] is False
+    # a phrase that only looks similar still goes to the AI route
+    from jarvis import router as rt
+    assert core.director._skill_route("сделай заглавными") is None
+    assert core.director._skill_route("покажи заглавные буквы") is None
+    assert rt.route("make uppercase hello") is None and core.director._skill_route("make uppercase hello")
+
+
+async def test_skill_result_file_is_opened(core, home, monkeypatch):
+    from conftest import wait_done
+    from jarvis.tools import files
+    opened = []
+
+    async def fake_run(cmd, **k):
+        opened.append(cmd[-1])
+    monkeypatch.setattr(files, "run_cmd", fake_run)
+    out = home / "files"
+    out.mkdir(parents=True, exist_ok=True)
+    make_skill(skills_root(core.config), "make_note", f'echo "$1" > {out}/note.txt; echo "Готово"; echo {out}/note.txt',
+               say=["запиши в файл {text}"], open_result=True)
+    core.policy.full_access = True
+    tid = await core.director.submit("Запиши в файл купить хлеб", "text")
+    t = await wait_done(core, tid)
+    assert t["state"] == "completed", t
+    assert opened == [str(out / "note.txt")] and (out / "note.txt").read_text().strip() == "купить хлеб"
+    assert "note.txt открыт" in core.director.messages(core.director.conversation_id())[-1]["text"]
+
+
+def test_skill_phrases_cannot_catch_everything(core):
+    from jarvis.skills import phrase_regex
+    names = ["text"]
+    assert phrase_regex("{text}", names) is None             # would catch every request
+    assert phrase_regex("qr {text}", names) is None           # too little fixed text
+    assert phrase_regex("сделай {other}", names) is None      # not an argument of the skill
+    assert phrase_regex("сделай qr код для {text}", names)

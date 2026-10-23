@@ -87,15 +87,17 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
                         gateway=gateway, ai=claude, scheduler=scheduler, config=config, flora=flora,
                         providers=manager, agency=agency)
     from .voice.speech import SpeechManager
-    from .voice.tts import DEFAULT_VOICE, PiperTTS, SileroTTS, VoiceEngine
-    # Local voice only (Silero; Piper «Денис» as emergency fallback). The user's choice from Settings → Голос.
+    from .voice.tts import DEFAULT_VOICE, KokoroTTS, PiperTTS, SileroTTS, VoiceEngine
+    # Local voices only: Silero for Russian (Piper «Денис» as emergency fallback), Kokoro for English and other
+    # languages. The user's choices from Settings → Голос.
     chosen = db.get_kv("tts_voice") or DEFAULT_VOICE
     if not str(chosen).startswith("silero:"):
         chosen = DEFAULT_VOICE                      # older choices (cloud / Piper voices) no longer exist
-    engine = VoiceEngine(SileroTTS(), PiperTTS(config.piper_voice), chosen, float(db.get_kv("tts_rate") or 1.0))
+    engine = VoiceEngine(SileroTTS(), PiperTTS(config.piper_voice), chosen, float(db.get_kv("tts_rate") or 1.0),
+                         kokoro=KokoroTTS(), en_voice_id=db.get_kv("tts_voice_en"))
     director.speech = SpeechManager(db, bus, engine)
     from .voice.stt import LocalSTT
-    director.stt = LocalSTT()           # speech recognition on this computer (GigaAM) — the only one
+    director.stt = LocalSTT()           # speech recognition on this computer (GigaAM + Parakeet) — the only one
     comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)
     from .history import ActionHistory
     director.history = ActionHistory(db, bus)       # lasting actions only (sites, code, files, programs, notes)

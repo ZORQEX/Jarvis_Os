@@ -25,6 +25,11 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   a dev core on another port uses «… :<port>», so it never moves the real one). Moves/resizes go through
   `jarvis/overlay.py` (Hyprland socket). Wake listening drops unaddressed speech before any turn or log.
 - Skills: `jarvis/skills.py`, folder `~/.local/share/jarvis-skills` (config `skills_dir`); limits are 0 = none.
+  A manifest's `say` phrases run the skill straight from the director (no AI); `open_result` opens the output file.
+- Voice: STT worker = GigaAM, then Parakeet only for phrases that are not Russian (`voice/lexicon.py`); TTS = Silero
+  (ru/de/uk) + Kokoro (en/es/fr/it/pt), one voice per sentence (`voice/lang.py`). Each runs in its own venv under
+  `~/.local/share/jarvis/` (install.sh). Browser VAD is `web/js/core/vad.js` (unit-tested; clicks ≠ voice);
+  barge-in = `voice.barge` (stops speech only, never the work). `tests/ui/voice-mic.mjs` feeds a WAV as the mic.
 
 ## Rules
 - Every action goes through `Gateway.execute` (validation → policy → approval → run → verify → audit).

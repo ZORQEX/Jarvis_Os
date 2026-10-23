@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import random
 import re
 import time
 
 from ..db import Database, new_id
 from ..events import EventBus
-from .tts import ACKS, clean_for_speech
+from .tts import ACKS_BY_LANG, clean_for_speech, phrase
 
 HARD = re.compile(r"[.!?…;:](?=\s)|\n+")
 SOFT = re.compile(r",(?=\s)")
@@ -24,8 +23,8 @@ class SentenceBuffer:
     The first segment is emitted early (at a comma once ~25 chars are ready) so
     audio starts quickly; later segments prefer sentence ends."""
 
-    def __init__(self, first_min: int = 25, soft_min: int = 80, max_len: int = 220):
-        self.buf = ""
+    def __init__(self, first_min: int = 25, soft_min: int = 80, max_len: int = 220, lang: str = "ru"):
+        self.buf, self.lang = "", lang
         self.first_min, self.soft_min, self.max_len = first_min, soft_min, max_len
         self.emitted = 0
 
@@ -36,7 +35,7 @@ class SentenceBuffer:
             seg = self._cut()
             if seg is None:
                 break
-            seg = clean_for_speech(seg)
+            seg = clean_for_speech(seg, self.lang)
             if re.search(r"\w", seg):
                 out.append(seg)
                 self.emitted += 1
@@ -61,15 +60,16 @@ class SentenceBuffer:
         return None
 
     def flush(self) -> list[str]:
-        rest, self.buf = clean_for_speech(self.buf), ""
+        rest, self.buf = clean_for_speech(self.buf, self.lang), ""
         return [rest] if re.search(r"\w", rest) else []
 
 
 class SpeechStream:
-    def __init__(self, mgr: "SpeechManager", task_id: str, turn_id: str | None, max_chars: int = 1200):
-        self.mgr, self.task_id, self.turn_id = mgr, task_id, turn_id
+    def __init__(self, mgr: "SpeechManager", task_id: str, turn_id: str | None, max_chars: int = 1200,
+                 lang: str = "ru"):
+        self.mgr, self.task_id, self.turn_id, self.lang = mgr, task_id, turn_id, lang
         self.max_chars, self.spoken, self.truncated = max_chars, 0, False
-        self.buffer = SentenceBuffer()
+        self.buffer = SentenceBuffer(lang=lang)
         self.queue: asyncio.Queue = asyncio.Queue()
         self.seq = 0
         self.cancelled = False
@@ -119,7 +119,7 @@ class SpeechStream:
             self.queue.put_nowait(" ".join(self.batch))
             self.batch = []
         if self.truncated:
-            self.queue.put_nowait("Остальное — на экране.")
+            self.queue.put_nowait("The rest is on the screen." if self.lang == "en" else "Остальное — на экране.")
         self.queue.put_nowait(None)
 
     def cancel(self) -> None:
@@ -136,12 +136,13 @@ class SpeechStream:
                 if self.seq == 0:
                     self.mgr.bus.publish("speech.synth", {}, self.task_id)    # real state: synthesizing speech
                 eng = self.mgr.engine
+                kw = {"lang": self.lang} if getattr(eng, "multilingual", False) else {}
                 try:
                     if hasattr(eng, "synth_stream"):          # engines that stream: play pieces as they arrive
-                        async for audio in eng.synth_stream(text):
+                        async for audio in eng.synth_stream(text, **kw):
                             self._emit(text, audio)
                     else:
-                        self._emit(text, await eng.synth(text))
+                        self._emit(text, await eng.synth(text, **kw))
                 except Exception as e:   # noqa: BLE001 — speech failure must never hide the text answer
                     self.mgr.bus.publish("speech.error", {"error": str(e)[:200]}, self.task_id)
                     continue
@@ -161,6 +162,7 @@ class SpeechStream:
         if self.cancelled or not audio:
             return
         self.mgr.mark(self.turn_id, "first_audio_sent")
+        self.mgr.spoken(text)
         self.seq += 1
         self.mgr.bus.publish("speech.audio", {"seq": self.seq, "text": text, "mime": "audio/wav",
                                               "audio_b64": base64.b64encode(audio).decode()}, self.task_id)
@@ -174,7 +176,22 @@ class SpeechManager:
     def __init__(self, db: Database, bus: EventBus, engine):
         self.db, self.bus, self.engine = db, bus, engine
         self.streams: dict[str, SpeechStream] = {}
+        self.lang = "ru"                 # the language the person spoke last (JARVIS's own phrases follow it)
+        self.recent: list[tuple[float, str]] = []      # what JARVIS said in the last seconds (echo check)
         bus.listeners.append(self._on_event)
+
+    def spoken(self, text: str) -> None:
+        now_ = time.time()
+        self.recent = [(t, x) for t, x in self.recent if now_ - t < 30][-20:] + [(now_, text)]
+
+    def is_echo(self, heard: str) -> bool:
+        """Did the microphone just hear JARVIS's own voice? (most words of the phrase are in what it said lately)"""
+        words = re.findall(r"\w+", (heard or "").casefold().replace("ё", "е"))
+        if not words:
+            return False
+        said = set(re.findall(r"\w+", " ".join(x for t, x in self.recent if time.time() - t < 30).casefold()
+                              .replace("ё", "е")))
+        return bool(said) and sum(1 for w in words if w in said) / len(words) >= 0.7
 
     # ---------------------------------------------------------------- telemetry
     def new_turn(self, speech_start: float | None = None, speech_end: float | None = None) -> str:
@@ -210,17 +227,17 @@ class SpeechManager:
         return out
 
     # ---------------------------------------------------------------- streams
-    def start(self, task_id: str, turn_id: str | None, max_chars: int = 1200) -> SpeechStream:
+    def start(self, task_id: str, turn_id: str | None, max_chars: int = 1200, lang: str | None = None) -> SpeechStream:
         s = self.streams.get(task_id)
         if s is None:
-            s = SpeechStream(self, task_id, turn_id, max_chars)
+            s = SpeechStream(self, task_id, turn_id, max_chars, lang or self.lang)
             self.streams[task_id] = s
         return s
 
     def ack(self, task_id: str) -> None:
         s = self.streams.get(task_id)
-        if s and not s.got_delta:
-            s.say(random.choice(ACKS))
+        if s and not s.got_delta and not s.spoken:
+            s.say(phrase(ACKS_BY_LANG, s.lang))
 
     def speak_now(self, task_id: str, text: str, turn_id: str | None = None) -> None:
         """Speak a phrase now and keep the stream open (the final answer is spoken after it)."""

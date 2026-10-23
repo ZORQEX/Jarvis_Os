@@ -4,7 +4,10 @@ and test it on a real example. The skill is then a tool like any other: listed f
 (policy, approval, audit), stoppable. JARVIS's own core is never rewritten by a skill.
 
 Layout: <skills_dir>/<name>/skill.json + the files Claude Code made (run.sh, a venv, a binary…).
-skill.json: {"name", "title", "description", "run": ["./run.sh"], "args": [{"name", "description"}], "example": [...]}
+skill.json: {"name", "title", "description", "run": ["./run.sh"], "args": [{"name", "description"}], "example": [...],
+             "say": ["сделай qr код для {text}", "make a qr code for {text}"], "open_result": true}
+"say": phrases that run the skill straight away — no AI call, no tokens, no waiting (the router matches them first).
+"open_result": the last line of the output is a file to show the person (opened through the gateway).
 """
 from __future__ import annotations
 
@@ -45,9 +48,73 @@ def read_manifest(d: Path) -> dict | None:
     args = m.get("args") or []
     if not isinstance(args, list) or not all(isinstance(a, dict) and a.get("name") for a in args):
         return None
+    arg_names = [str(a["name"])[:40] for a in args]
+    say = [p for p in (m.get("say") or []) if isinstance(p, str) and phrase_regex(p, arg_names)][:16] \
+        if isinstance(m.get("say"), list) else []
     return {"name": d.name, "title": str(m.get("title") or d.name)[:80], "description": str(m.get("description") or "")[:600],
             "run": run, "args": [{"name": str(a["name"])[:40], "description": str(a.get("description") or "")[:200]} for a in args],
-            "example": m.get("example") if isinstance(m.get("example"), list) else [], "dir": str(d)}
+            "example": m.get("example") if isinstance(m.get("example"), list) else [], "dir": str(d),
+            "say": say, "open_result": bool(m.get("open_result"))}
+
+
+def _norm(text: str) -> str:
+    t = (text or "").casefold().replace("ё", "е")
+    t = re.sub(r"(?<=\w)-(?=\w)", " ", t)                 # «qr-код» = «qr код»
+    t = re.sub(r"[«»\"“”]", "", t)
+    return re.sub(r"\s+", " ", t).strip(" .!?")
+
+
+FILLER = {"для", "на", "в", "во", "с", "со", "по", "про", "и", "for", "to", "of", "a", "an", "the", "with", "and"}
+
+
+def phrase_regex(pattern: str, arg_names: list[str]) -> re.Pattern | None:
+    """«сделай qr код для {text}» → a regex with the skill's arguments as groups, matched against the request as typed
+    or heard (case-insensitive, «qr-код» = «qr код», е = ё). Rejected (None): placeholders that are not the skill's
+    arguments, or too few fixed words — a phrase like «{text}» would catch every request."""
+    if not isinstance(pattern, str) or len(pattern) > 160:
+        return None
+    parts = re.split(r"(\{[a-z_][a-z0-9_]*\})", _norm(pattern.replace("{ ", "{").replace(" }", "}")))
+    fixed = "".join(p for p in parts if not p.startswith("{"))
+    if len(re.sub(r"\W", "", fixed)) < 5:
+        return None
+    rx, seen = "", set()
+    for i, p in enumerate(parts):
+        if p.startswith("{"):
+            name = p[1:-1]
+            if name not in arg_names or name in seen:
+                return None
+            seen.add(name)
+            last = not any(x.strip() for x in parts[i + 1:])
+            rx += f"(?P<{name}>.+)" if last else f"(?P<{name}>.+?)"
+        elif p.strip():
+            words = [re.escape(w).replace("е", "[её]") for w in p.split()]
+            rx += (r"[\s,]*" if rx else "") + r"[\s,\-]+".join(words) + r"[\s,:]*"
+    try:
+        return re.compile(r"^\s*" + rx + r"$", re.S | re.I)
+    except re.error:
+        return None
+
+
+def match_skill(text: str, skills: list[dict]) -> tuple[dict, list[str]] | None:
+    """The skill whose «say» phrase matches the request, with its arguments in order (as typed: a link keeps its case
+    and hyphens)."""
+    if len(text or "") > 600:
+        return None
+    t = re.sub(r"[«»\"“”]", "", text or "").strip().rstrip(" .!?")
+    for sk in skills:
+        names = [a["name"] for a in sk["args"]]
+        for p in sk.get("say") or []:
+            rx = phrase_regex(p, names)
+            m = rx.match(t) if rx else None
+            if not m:
+                continue
+            vals = [(m.groupdict().get(n) or "").strip(" ,") for n in names]
+            while vals and not vals[-1]:
+                vals.pop()
+            if not vals or "" in vals or any(v.casefold() in FILLER for v in vals):
+                continue
+            return sk, vals
+    return None
 
 
 def list_skills(config) -> list[dict]:
@@ -192,7 +259,11 @@ class SkillCreate(Tool):
             "по умолчанию клади в ~/Downloads/Jarvis, если не сказано иное.\n"
             "3. Напиши ./skill.json строго такого вида: {\"name\": \"" + args["name"] + "\", \"title\": \"<коротко по-русски>\", "
             "\"description\": \"<что делает и когда звать, для модели>\", \"run\": [\"./run.sh\"], "
-            "\"args\": [{\"name\": \"<аргумент>\", \"description\": \"<что передать>\"}], \"example\": [\"<пример аргументов>\"]}.\n"
+            "\"args\": [{\"name\": \"<аргумент>\", \"description\": \"<что передать>\"}], \"example\": [\"<пример аргументов>\"], "
+            "\"say\": [\"<5–10 фраз, которыми человек попросит это голосом или текстом, по-русски и по-английски, "
+            "с {<имя аргумента>} на месте значения, например: сделай qr код для {text}, make a qr code for {text}>\"], "
+            "\"open_result\": <true, если последняя строка вывода — путь к готовому файлу, который нужно показать>}.\n"
+            "Фразы из say JARVIS потом выполняет сразу, без ИИ — делай их естественными и конкретными (не одно слово).\n"
             "4. Проверь навык на реальном примере (запусти ./run.sh с аргументами), исправь ошибки.\n"
             "В отчёте: что установлено, как вызывать, результат проверки.")
         req = StepRequest(Cap.CODE, instruction)

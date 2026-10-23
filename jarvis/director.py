@@ -3,10 +3,11 @@ runs it as a persistent task and keeps one canonical runtime state."""
 from __future__ import annotations
 
 import asyncio
-import re
 import os
+import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import router as rt
 from .db import Database, dumps, loads, new_id, now
@@ -171,6 +172,8 @@ class Director:
                 return pend[0]["task_id"]
         ctx = self.ctx(cid)
         route = rt.route(text, ctx)
+        if route is None:
+            route = self._skill_route(text)
         if self.comms and (route is None or route.kind not in ("control",)) and self.comms.answers_pending(text, ctx):
             route = rt.Route("comms", args={"text": text}, why="Ответ на уточнение JARVIS", level=1)
         # Control commands act immediately and are not tasks themselves.
@@ -190,7 +193,12 @@ class Director:
         runtime = Runtime(voice=source == "voice" or speak, turn=turn)
         self.rt[tid] = runtime
         if runtime.voice and self.speech:
-            self.speech.start(tid, turn, max_chars=1200 if route is None else 400)
+            from .voice.lang import detect
+            lang = detect(rt.strip_wake(text), self.speech.lang if source != "voice" else "ru")
+            if source == "voice":
+                self.speech.lang = lang       # JARVIS's own short phrases follow the language the person speaks
+            # Say less, do more: a spoken answer is its first ~3 sentences, the rest stays on screen.
+            self.speech.start(tid, turn, max_chars=450 if route is None else 400, lang=lang)
             self.speech.annotate(turn, task_id=tid, transcript=text, route=route.kind if route else "ai")
         runtime.task = asyncio.create_task(self._run(tid, cid, text, route), name=f"task-{tid}")
         self._touch()
@@ -268,6 +276,8 @@ class Director:
                 self._finish(tid, cid, route.reply, meta={"route": "local", "level": 0, "why": route.why})
             elif route.kind == "tool":
                 await self._run_tool_route(tid, cid, route)
+            elif route.kind == "skill":
+                await self._run_skill_route(tid, cid, route)
             elif route.kind == "search_open":
                 await self._run_search_open(tid, cid, route)
             elif route.kind == "comms":
@@ -363,6 +373,39 @@ class Director:
                                                               "why": route.why, "cloud": False},
                      failed=out.status in ("failed", "invalid"),
                      result={"status": out.status, "step_id": out.step_id})
+
+    def _skill_route(self, text: str) -> rt.Route | None:
+        """A skill JARVIS built earlier, asked for by one of its phrases: run it at once — no AI call, no tokens."""
+        from .skills import list_skills, match_skill
+        try:
+            hit = match_skill(rt.strip_wake(text), list_skills(self.config))
+        except OSError:
+            return None
+        if not hit:
+            return None
+        sk, vals = hit
+        return rt.Route("skill", "skill_run", {"name": sk["name"], "args": vals}, level=1,
+                        why=f"Навык «{sk['title']}» — без ИИ")
+
+    async def _run_skill_route(self, tid, cid, route: rt.Route) -> None:
+        from .skills import read_manifest, skills_root
+        out = await self.execute(tid, cid, "skill_run", route.args, route.why)
+        meta = {"route": "local", "level": route.level, "why": route.why, "cloud": False, "skill": route.args["name"]}
+        if out.status != "ok":
+            return self._finish(tid, cid, self.outcome_text(out), meta=meta, failed=out.status in ("failed", "invalid"),
+                                result={"status": out.status, "step_id": out.step_id})
+        m = read_manifest(skills_root(self.config) / route.args["name"]) or {"title": route.args["name"]}
+        lines = [x.strip() for x in str(out.result.data.get("output", "")).splitlines() if x.strip()]
+        last = lines[-1] if lines else ""
+        text = f"Готово: {m['title']}." + (f" {last[:300]}" if last and not m.get("open_result") else "")
+        if m.get("open_result") and last:
+            p = Path(os.path.expanduser(last))
+            if p.is_file():
+                o = await self.execute(tid, cid, "open_path", {"path": str(p)}, "Показать результат навыка")
+                text = f"Готово: {m['title']} — {p.name}" + (" открыт." if o.status == "ok" else f" ({p}).")
+            else:
+                text += f" {last[:300]}"
+        self._finish(tid, cid, text, meta=meta, result={"status": "ok", "step_id": out.step_id})
 
     async def _run_search_open(self, tid, cid, route: rt.Route) -> None:
         out = await self.execute(tid, cid, "search_files", route.args, route.why)
