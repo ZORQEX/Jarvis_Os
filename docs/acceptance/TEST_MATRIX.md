@@ -73,6 +73,22 @@ desktop launchers were replaced by loggers (nothing opened on the screen).
 | «Где посмотреть мои задачи?» → Task Center shown | VERIFIED LIVE | live run |
 | Weather → answered from web search with Russian «Источники:» | VERIFIED LIVE | live run 13 s |
 
+## Desktop companion, wake word, skills, no limits (2026-10-23)
+Tests: `uv run pytest -q` → 336 passed, 6 skipped; `node tests/ui/workos.mjs` → 21/21.
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Companion above every workspace and app (pinned Hyprland window, round, top-right under Waybar) | VERIFIED LIVE | `jarvis overlay` on the real desktop: at 1204,38, 64×64, pinned, focus returned to the previous window |
+| Drag anywhere on the screen (core follows the cursor via Hyprland IPC), place remembered | VERIFIED LIVE | cursor 600,300 → window 568,268 … 700,400 → 668,368; saved and restored |
+| Card opens away from the nearest edges and stays on screen; collapses back to the same spot | VERIFIED LIVE | top-right orb → card 360×470 at 908,38, rounding 18; back to 1204,38 |
+| «Джарвис, …» wakes it: speech recognised on this computer, other speech dropped and never stored | VERIFIED LIVE | phrase played through the speakers: «Джарвес, который час.» → answer spoken by the companion, card opened; unaddressed phrase ignored (dev core, real STT) |
+| Wake word tolerant to the speaker→mic spelling («Джарвес», «Жарвис»), not to «Дарвин» | VERIFIED LOCAL | test_wake_word_survives_speaker_to_mic_spelling |
+| Answers to the companion are spoken only by it (no double voice with the main window); it yields the mic to the window's conversation mode | VERIFIED LOCAL | test_speech_of_the_companion_is_marked; voice.presence |
+| Starts at login, Super+Shift+J brings it back, Super+H opens JARVIS (Omarchy integration applied, backups kept) | IMPLEMENTED (login autostart takes effect at next login) | ~/.config/hypr/hyprland.conf sources config/omarchy/hypr-jarvis.conf |
+| WhatsApp «напиши маме…»: a «what's new» popover covered the search box | VERIFIED LIVE (search, nothing sent) | real profile: «Мама ❤️» found; tests/test_whatsapp_dom.py |
+| No limits on thinking time / budget / steps (stop any time) | VERIFIED LOCAL | test_no_time_budget_or_turn_limits_by_default |
+| Skills: JARVIS builds, keeps and runs its own tools (GitHub/pip/npm/cargo), confirmed once, verified by manifest | VERIFIED MOCK | tests/test_skills.py (Claude Code scripted) |
+
 ## Performance (this laptop)
 - Core cold start to /health: 223 ms. Launcher returns in ~280 ms. Page ready ~100 ms.
 - Core idle: 0.0% CPU, ~39 MB PSS. Window (Chromium, 10 processes): ~380 MB PSS, idle 1.9% of one core

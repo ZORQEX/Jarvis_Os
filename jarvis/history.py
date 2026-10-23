@@ -20,7 +20,8 @@ _WAKE = re.compile(r"^\s*(джарвис|jarvis)[\s,!.:—-]*", re.I)
 
 
 def _title(request: str) -> str:
-    t = _WAKE.sub("", request or "").strip().rstrip(".")
+    from .router import strip_wake
+    t = strip_wake(request or "").strip().rstrip(".")
     t = re.sub(r"\s+", " ", t)
     return (t[:1].upper() + t[1:])[:140] or "Действие"
 

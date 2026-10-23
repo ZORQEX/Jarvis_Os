@@ -24,6 +24,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from ..config import limit
 from .base import AIProvider, Cap, GenResult, Health, ProviderFailure, StepRequest, usage_of
 from .claude_code import _clean_env
 
@@ -78,6 +79,14 @@ mcp__jarvis__system_install (официальные пакеты Arch; паро�
 переспрашивай сам. Никогда не говори, что что-то сделал, отправил, записал или запланировал, если инструмент не вернул
 status "ok". Если инструмент отклонён — не обходи запрет.
 Для свежих фактов (новости, цены, погода, курсы) используй поиск в интернете и называй источник.
+САМОРАЗВИТИЕ. Если встроенных инструментов не хватает — не отказывай и не объясняй, а расширяй себя:
+- сначала skill_list (навыки, которые ты уже собрал сам) и skill_run, если подходящий есть;
+- если задача повторяемая (скачать видео, конвертировать, распознать текст или речь, обработать фото, работать с
+  API сервиса…) — skill_create: Claude Code найдёт готовый инструмент (GitHub, pip, npm, cargo), установит, сделает
+  навык и проверит его; затем сразу выполни просьбу через skill_run;
+- разовую работу (сайт, программа, документ, исправить код, разобраться в проекте) — computer_task; установка
+  нужных программ и скачивание в нём уже разрешены.
+Времени на изучение не жалей — главное довести до результата. Не сдавайся после первой ошибки: попробуй другой путь.
 Сам отправлять сообщения и письма людям ты не можешь (их отправляет модуль сообщений JARVIS с подтверждением): если
 просят — подготовь текст и одной строкой дай готовую фразу, которую достаточно сказать: «Отправь Ивану в Telegram: …».
 Найти человека в Telegram / WhatsApp / почте — mcp__jarvis__contact_find (только поиск, ничего не отправляет).
@@ -231,7 +240,7 @@ class ClaudeChatProvider(AIProvider):
         tools = self._tools()
         bcfg = self.home / "bridge.json"
         bcfg.write_text(json.dumps({"url": self.bridge["url"], "secret": self.bridge["secret"], "tools": tools,
-                                    "timeout_s": 900}, ensure_ascii=False), "utf-8")
+                                    "timeout_s": limit(self.config.claude_timeout_s)}, ensure_ascii=False), "utf-8")
         os.chmod(bcfg, 0o600)
         mcfg = self.home / "mcp.json"
         mcfg.write_text(json.dumps({"mcpServers": {"jarvis": {
@@ -254,7 +263,8 @@ class ClaudeChatProvider(AIProvider):
         if mcfg:
             argv[argv.index("--strict-mcp-config") + 1:argv.index("--strict-mcp-config") + 1] = ["--mcp-config", str(mcfg)]
         # A computer_task (a whole site/app) waits for the user's «да» and then runs Claude Code: allow up to an hour.
-        env = {**_clean_env(), "MCP_TOOL_TIMEOUT": "3600000", "MCP_TIMEOUT": "30000"}
+        # A tool call may be a Claude Code job without a time limit (it waits for the user's «да» first): ~30 days.
+        env = {**_clean_env(), "MCP_TOOL_TIMEOUT": "2592000000", "MCP_TIMEOUT": "30000"}
         self.proc = await asyncio.create_subprocess_exec(*argv, cwd=str(self.work), env=env,
                                                          stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                                                          stderr=asyncio.subprocess.DEVNULL, start_new_session=True,
@@ -329,7 +339,7 @@ class ClaudeChatProvider(AIProvider):
     async def stop(self) -> None:
         await self._stop()
 
-    async def _send(self, text: str, on_delta=None, on_tool=None, timeout: float = 600, model: str | None = None,
+    async def _send(self, text: str, on_delta=None, on_tool=None, timeout: float | None = None, model: str | None = None,
                     execute=None) -> _Turn:
         """One question at a time. On cancel («стоп»), the lock is handed to a cleanup task that releases it only when
         Claude has confirmed the interruption — so the next question never mixes with the old answer."""
@@ -393,7 +403,8 @@ class ClaudeChatProvider(AIProvider):
         want = self.voice_model() if role == "voice" else self.config.claude_chat_model
         # One answer may include a whole Claude Code job (a site, an app) and the user's «да»: never cut it at 10 min
         # (measured: «создай сайт, запусти и открой» failed at exactly 600 s).
-        turn_limit = self.config.claude_timeout_s + getattr(self.config, "approval_ttl_s", 900) + 300
+        turn_limit = limit(self.config.claude_timeout_s) and \
+            self.config.claude_timeout_s + getattr(self.config, "approval_ttl_s", 900) + 300
         text = prefix + user_text
         if self.session_turns == 0 and (history or "Ранее в этом разговоре:" in (system or "")):
             recent = "\n".join(f"{'Пользователь' if m['role'] == 'user' else 'JARVIS'}: {m['text'][:600]}"
@@ -443,7 +454,7 @@ class ClaudeChatProvider(AIProvider):
         if self.registry and name not in {t.spec.id for t in self.registry.model_tools()}:
             return {"status": "invalid", "error": f"Неизвестный инструмент: {name}"}
         self.turn_calls = getattr(self, "turn_calls", 0) + 1
-        if self.turn_calls > max(1, self.config.max_tool_rounds):
+        if self.config.max_tool_rounds > 0 and self.turn_calls > self.config.max_tool_rounds:
             return {"status": "denied", "error": "Достигнут лимит шагов для одного запроса — остановись и ответь"}
         return await ex(name, args)
 
@@ -470,9 +481,9 @@ class ClaudeChatProvider(AIProvider):
                     "--append-system-prompt", req.system or STEP_SYSTEM]
             if tools:
                 argv[argv.index("--model"):argv.index("--model")] = ["--allowedTools", *tools]
-            return await self._oneshot(argv, tmp, on_delta, on_progress, timeout=240 if tools else 120)
+            return await self._oneshot(argv, tmp, on_delta, on_progress, timeout=limit(self.config.claude_timeout_s))
 
-    async def _oneshot(self, argv, cwd, on_delta, on_progress, timeout: float) -> GenResult:
+    async def _oneshot(self, argv, cwd, on_delta, on_progress, timeout: float | None) -> GenResult:
         t0 = time.perf_counter()
         proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd, env=_clean_env(), stdin=asyncio.subprocess.DEVNULL,
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,

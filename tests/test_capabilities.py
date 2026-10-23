@@ -76,7 +76,8 @@ def test_computer_task_accepts_browser_permission(core, home):
     t = core.registry.tools["computer_task"]
     a = t.validate({"instruction": "Зайди на сайт и сохрани цены", "new_folder": "prices", "allow": ["browser"]},
                    _ctx(core))
-    assert a["permissions"] == ["browser"] and "управление браузером" in t.describe(a)
+    # Getting tools is part of any job: installs and downloads are always allowed; the browser stays opt-in.
+    assert a["permissions"] == ["browser", "download", "install"] and "управление браузером" in t.describe(a)
 
 
 # ---------------------------------------------------------------- publishing

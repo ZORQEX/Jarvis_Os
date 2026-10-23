@@ -30,7 +30,7 @@ def main() -> None:
                                      headers={"Content-Type": "application/json", "X-JARVIS-MCP": cfg["secret"]},
                                      method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=cfg.get("timeout_s", 900)) as r:
+            with urllib.request.urlopen(req, timeout=cfg.get("timeout_s")) as r:     # None = as long as the job takes
                 out = json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
             return f"JARVIS отказал: HTTP {e.code}", True

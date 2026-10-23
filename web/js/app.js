@@ -62,6 +62,10 @@ const voice = new Voice({
   link,
   onState: (v) => {
     S.voice = v; bus.emit("voice");
+    if (voice.listening !== S.micWasOpen) {            // the desktop companion pauses «Джарвис» listening meanwhile
+      S.micWasOpen = voice.listening;
+      link.request("voice.presence", { client: "window", listening: voice.listening }).catch(() => {});
+    }
     if (v === "interrupted") setTimeout(() => { if (S.voice === "interrupted") voice.set(voice.listening ? "listening" : null); }, 700);
   },
   onTurn: (r) => {
@@ -111,6 +115,8 @@ function onEvent(ev) {
   floraMod?.onEvent(ev);
   commsMod?.onEvent(ev);
   const tid = ev.task_id;
+  // Answers to what was said to the desktop companion are spoken there, not here (no double voice).
+  if (ev.owner === "overlay" && String(ev.kind).startsWith("speech.")) return;
   switch (ev.kind) {
     case "message": {
       const m = ev.message;

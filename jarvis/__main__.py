@@ -1,6 +1,7 @@
 """`jarvis` command line.
 
   jarvis              open (or focus) the JARVIS window, starting the core if needed
+  jarvis overlay      show the desktop companion (a small JARVIS above every workspace)
   jarvis serve        run the core in the foreground
   jarvis status       print core state
   jarvis stop         emergency stop (cancel work, block consequential actions)
@@ -129,6 +130,58 @@ def open_window(cfg: Config, paths: Paths, toggle: bool = False) -> None:
         subprocess.Popen(env_prefix + argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
+def _overlay_open(port: int = 8791) -> bool:
+    from .overlay import title_for
+    return any(str(c.get("title", "")) == title_for(port) for c in _hypr_clients())
+
+
+def open_overlay(cfg: Config, paths: Paths) -> bool:
+    """The desktop companion: its own small Chromium app window (own profile, so Hyprland's rules reach it), floating,
+    pinned to every workspace, round, at its remembered place (top-right the first time). Mic permission is granted
+    automatically in this profile: it only ever shows JARVIS's own local page."""
+    ensure_core(cfg, paths)
+    if _overlay_open(cfg.port):
+        return False
+    b = _browser()
+    if not b or not (os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl")):
+        return False
+    from .overlay import ORB, default_spot, logical
+    try:
+        mons = json.loads(subprocess.run(["hyprctl", "-j", "monitors"], capture_output=True, text=True, timeout=3).stdout)
+        area = logical(next((m for m in mons if m.get("focused")), mons[0]))
+    except (OSError, ValueError, StopIteration, subprocess.TimeoutExpired, KeyError):
+        area = {"x": 0, "y": 0, "w": 1280, "h": 720}
+    x, y = default_spot(area)
+    try:
+        st, body = _req(cfg, paths, "GET", "/api/overlay")
+        pos = json.loads(body).get("pos") if st == 200 else None
+        if isinstance(pos, dict):
+            x, y = int(pos["x"]), int(pos["y"])
+    except (OSError, ValueError, KeyError):
+        pass
+    url = f"http://localhost:{cfg.port}/overlay?t={_token(paths)}"
+    argv = [b, f"--app={url}", f"--user-data-dir={paths.data / 'overlay-profile'}", "--no-first-run",
+            "--no-default-browser-check", "--disable-features=Translate,MediaRouter", "--disable-sync",
+            "--password-store=basic", "--ozone-platform=wayland", "--autoplay-policy=no-user-gesture-required",
+            "--use-fake-ui-for-media-stream"]
+    env_prefix = ["env", "PULSE_PROP=application.id=jarvis-workos application.name=JARVIS media.role=assistant"]
+    rules = f"[float; pin; size {ORB} {ORB}; move {x} {y}; noborder; noshadow; rounding {ORB // 2}]"
+    prev = subprocess.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True).stdout
+    subprocess.run(["hyprctl", "dispatch", "exec", f"{rules} {' '.join(_q(a) for a in env_prefix + argv)}"], capture_output=True)
+    # Do not steal the keyboard from what the person was doing (the no-initial-focus rule is not honoured here).
+    try:
+        addr = json.loads(prev or "{}").get("address")
+        if addr:
+            for _ in range(30):
+                time.sleep(0.2)
+                if _overlay_open(cfg.port):
+                    subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"], capture_output=True)
+                    break
+    except ValueError:
+        pass
+    return True
+
+
 def _window_size() -> tuple[int, int]:
     """1240×820 on roomy screens; otherwise ~92% of the focused monitor's usable logical area."""
     try:
@@ -211,6 +264,14 @@ def main(argv: list[str] | None = None) -> None:
         run()
     elif cmd in ("open", "toggle"):
         open_window(cfg, paths)
+        try:                                   # the desktop companion comes with the window unless turned off
+            st, body = _req(cfg, paths, "GET", "/api/overlay")
+            if st == 200 and json.loads(body).get("enabled", True):
+                open_overlay(cfg, paths)
+        except (OSError, ValueError):
+            pass
+    elif cmd == "overlay":
+        open_overlay(cfg, paths)
     elif cmd == "status":
         if not _alive(cfg, paths):
             print("JARVIS не запущен")

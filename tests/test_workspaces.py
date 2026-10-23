@@ -275,3 +275,14 @@ async def test_window_show_connect_starts_whatsapp_and_grounds_the_model(core, m
     # Telegram: the model is told what the card needs and where to get it — so it can open that page itself.
     out = await core.director.gw.execute(t, "window_show", {"view": "telegram"}, "test")
     assert "my.telegram.org/apps" in out.for_model()["summary"] and not out.result.data["connect_started"]
+
+
+
+@pytest.mark.parametrize("text,woke", [("Джарвес, который час.", True), ("Джарвис, который час?", True),
+                                       ("Жарвис открой браузер", True), ("Эй, Джарвес, стоп", True), ("Джарвиз", True),
+                                       ("Дарвин был учёным", False), ("Давай поговорим", False), ("Джордж привет", False),
+                                       ("привет как дела", False)])
+def test_wake_word_survives_speaker_to_mic_spelling(text, woke):
+    assert bool(router.wake_len(text)) is woke
+    if woke:
+        assert router.strip_wake(text) == text[router.wake_len(text):]

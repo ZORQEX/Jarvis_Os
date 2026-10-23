@@ -124,7 +124,8 @@ class Gateway:
         try:
             result = await asyncio.wait_for(tool.run(args, ctx), spec.timeout_s)
             self.tasks.update_step(sid, state="verifying")
-            verification = await asyncio.wait_for(tool.verify(args, result, ctx), max(5.0, spec.timeout_s))
+            verification = await asyncio.wait_for(tool.verify(args, result, ctx),
+                                                  max(5.0, spec.timeout_s) if spec.timeout_s else None)
         except asyncio.CancelledError:
             self.tasks.update_step(sid, state="cancelled", finished_at=now(),
                                    duration_ms=(time.perf_counter() - t0) * 1000, error="Отменено")

@@ -1,0 +1,66 @@
+/* Desktop companion (its own small window above every workspace). Hyprland rounds the window itself:
+   collapsed it is a 64 px circle, expanded a 360×470 card. Uses the tokens of app.css. */
+html, body.ov-body { height: 100%; overflow: hidden; background: var(--surface); }
+.ov { height: 100vh; display: flex; flex-direction: column; user-select: none; }
+.ov-orb { position: relative; width: 100vw; height: 100vh; display: grid; place-items: center; cursor: grab; touch-action: none;
+  background: radial-gradient(circle at 50% 40%, var(--surface-2), var(--surface)); }
+.ov[data-dragging="1"] .ov-orb, .ov[data-dragging="1"] .ov-head { cursor: grabbing; }
+.ov-face .companion { width: 46px; height: 46px; pointer-events: none; }
+.ov-mic { position: absolute; right: 9px; bottom: 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--err);
+  box-shadow: 0 0 0 2px var(--surface); }
+.ov-badge { position: absolute; right: 6px; top: 6px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--warn); color: #1b1305; font-size: 10.5px; font-weight: 700; display: grid; place-items: center; }
+.ov-mic[hidden], .ov-badge[hidden] { display: none; }
+.ov-card { display: none; flex-direction: column; gap: 10px; padding: 12px; height: 100vh; min-height: 0; }
+.ov[data-expanded="1"] .ov-orb { display: none; }
+.ov[data-expanded="1"] .ov-card { display: flex; animation: fade var(--t-pop, 160ms) var(--ease) both; }
+@keyframes fade { from { opacity: 0; } }
+.ov-head { display: flex; align-items: center; gap: 10px; cursor: grab; touch-action: none; }
+.ov-mini .companion { width: 34px; height: 34px; pointer-events: none; }
+.ov-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ov-title b { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-title span { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-tools { display: flex; gap: 2px; }
+.ov-tools .icon-btn { width: 30px; height: 30px; }
+.ov-tools .icon-btn svg { width: 16px; height: 16px; }
+.ov-tools .icon-btn[aria-pressed="true"] { color: var(--err); background: var(--err-soft); }
+.ov-detail { font-size: 13px; color: var(--text-2); line-height: 1.45; overflow-wrap: anywhere; max-height: 60px; overflow: hidden; }
+.ov-detail:empty { display: none; }
+.ov-body-main { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.ov-body-main:empty { display: none; }
+.ov-ask { margin-top: auto; }
+.ov .reply { font-size: 13.5px; line-height: 1.5; color: var(--text); }
+.ov .reply p { margin: 0 0 .5em; } .ov .reply p:last-child { margin: 0; }
+.ov .hint { font-size: 12px; color: var(--text-3); }
+.ov .quote { font-size: 13.5px; padding: 8px 10px; border-radius: var(--r-sm); background: var(--bg-2); border: 1px solid var(--line); white-space: pre-wrap; max-height: 120px; overflow: auto; }
+.ov .row-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.ov .row-btns .btn { height: 30px; font-size: 13px; padding: 0 12px; }
+.ov-phases { font-size: 11.5px; }
+/* plan rows and ask box come from workos.css-like rules (kept here: the overlay does not load the shell CSS) */
+.plan-row { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: baseline; color: var(--text-2); font-size: 12.5px; }
+.plan-row .m { font-size: 12px; text-align: center; color: var(--text-3); }
+.plan-row[data-mark="done"] .m { color: var(--ok); }
+.plan-row[data-mark="active"] .m { color: var(--accent); }
+.plan-row[data-mark="active"] { color: var(--text); }
+.plan-row[data-mark="waiting"] .m { color: var(--warn); }
+.plan-row[data-mark="failed"] .m { color: var(--err); }
+.plan-row span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-ask { display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 12px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line-2); }
+.cd-ask:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-2)); }
+.cd-ask input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; height: 30px; font-size: 13.5px; }
+.cd-ask input:focus-visible { box-shadow: none; }
+.cd-ask .icon-btn { width: 30px; height: 30px; border-radius: 50%; }
+.cd-ask .icon-btn svg { width: 17px; height: 17px; }
+.cd-ask .go { background: var(--text); color: var(--bg); }
+.cd-ask .go:disabled { opacity: .25; }
+.cd-ask .stop { color: var(--err); }
+.cd-ask .mic.recording { color: var(--err); background: var(--err-soft); }
+.phases { display: flex; align-items: center; gap: 4px; color: var(--text-3); white-space: nowrap; }
+.phases span { padding: 2px 8px; border-radius: 999px; }
+.phases span.on { background: var(--accent-soft); color: var(--accent); }
+.phases span.done { color: var(--text-2); }
+.phases i { width: 8px; height: 1px; background: var(--line-2); }
+/* companion states added for WorkOS */
+.companion[data-state="PLANNING"] .orbit { opacity: .9; animation: orbit 2.4s linear infinite; }
+.companion[data-state="CANCELLED"] { --c-halo: var(--warn); }
+.companion[data-state="CANCELLED"] .lid { transform: scaleY(.35); }

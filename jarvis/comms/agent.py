@@ -274,7 +274,7 @@ class CommsAgent:
             local["_ms"], local["_model"] = round((time.perf_counter() - t0) * 1000), "local"
             return local
         try:
-            d = await self.ai.structured(system_prompt(dt.datetime.now()), text, SCHEMA, budget=15.0)
+            d = await self.ai.structured(system_prompt(dt.datetime.now()), text, SCHEMA, budget=60.0)
         except Exception:   # noqa: BLE001 — limits / network: simple commands still work without AI
             if local is None:
                 raise

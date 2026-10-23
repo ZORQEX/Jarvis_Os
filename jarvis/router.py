@@ -45,8 +45,36 @@ FOLDERS = {
 }
 
 
+def _lev(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+_FIRST_WORD = re.compile(r"^\s*(?:(?:hey|эй|хэй|хей|ok|окей)[\s,]+)?([^\W\d_]+)(?=[\s,!.:?]|$)[\s,!.:]*", re.I)
+
+
+def wake_len(text: str) -> int:
+    """Length of the «Джарвис, » at the start of text, or 0. Besides the known spellings, a first word within two letters
+    of «джарвис» counts: through the laptop's speakers and mic the local recogniser heard «Джарвес» (measured 2026-10-23)."""
+    m = WAKE.match(text or "")
+    if m:
+        return m.end()
+    m = _FIRST_WORD.match(text or "")
+    if not m:
+        return 0
+    w = m.group(1).casefold().replace("ё", "е")
+    if w == "jarvis" or (5 <= len(w) <= 9 and w[0] in "джчзj" and w[-1] in "сзш" and _lev(w, "джарвис") <= 2):
+        return m.end()
+    return 0
+
+
 def norm(text: str) -> str:
-    t = WAKE.sub("", text.strip())
+    t = strip_wake(text)
     t = t.casefold().replace("ё", "е")
     t = re.sub(r"[«»\"“”!?.,;]+", " ", t)
     return re.sub(r"\s+", " ", t).strip()
@@ -112,7 +140,8 @@ def is_comms_followup(t: str, ctx: dict) -> bool:
 
 
 def strip_wake(text: str) -> str:
-    return WAKE.sub("", text.strip())
+    t = (text or "").strip()
+    return t[wake_len(t):]
 
 
 def route(text: str, ctx: dict | None = None) -> Route | None:
@@ -121,7 +150,7 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     t = norm(text)
     if not t:
         # "Джарвис." alone → "Да?"
-        return Route("answer", reply="Да?", why="Обращение по имени") if WAKE.match(text) else None
+        return Route("answer", reply="Да?", why="Обращение по имени") if wake_len(text) else None
 
     # --- control -----------------------------------------------------------
     if re.fullmatch(r"(экстренная остановка|остановить все|останови все|прекрати все|emergency stop|стоп все|"

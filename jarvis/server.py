@@ -62,6 +62,8 @@ class Server:
         self.app = web.Application(middlewares=[self.guard], client_max_size=12 * 1024 * 1024)
         r = self.app.router
         r.add_get("/", self.index)
+        r.add_get("/overlay", self.overlay_page)
+        r.add_get("/api/overlay", self.api_overlay)
         r.add_get("/ws", self.ws)
         r.add_get("/health", self.health)
         r.add_get("/api/state", self.api_state)
@@ -78,6 +80,10 @@ class Server:
         self.app.on_shutdown.append(self.on_shutdown)
         self.app.on_cleanup.append(self.on_cleanup)
         self.sockets: set[web.WebSocketResponse] = set()
+        from .overlay import Overlay
+        self.overlay = Overlay(core.db, core.config.port)
+        self._speech_owner: dict[str, str] = {}        # task id → the client that should play its speech
+        self._wake_until = 0.0                          # follow-up window after «Джарвис, …»
         wt = core.director.gw.registry.get("window_show")
         if wt:
             wt.presence = lambda: bool(self.sockets)      # is a JARVIS window connected right now
@@ -108,9 +114,9 @@ class Server:
             if req.method != "POST" or not hmac.compare_digest(req.headers.get("X-JARVIS-MCP", ""), self.mcp_secret):
                 return web.json_response({"error": "unauthorized"}, status=401)
             return await handler(req)
-        if req.path == "/" and req.query.get("t"):
+        if req.path in ("/", "/overlay") and req.query.get("t"):
             if hmac.compare_digest(req.query["t"], self.token):
-                resp = web.Response(status=302, headers={"Location": "/", "Cache-Control": "no-store"})
+                resp = web.Response(status=302, headers={"Location": req.path, "Cache-Control": "no-store"})
                 resp.set_cookie(COOKIE, self.token, httponly=True, samesite="Strict", path="/", max_age=86400 * 30)
                 return resp
             return web.Response(status=403, text="bad token")
@@ -196,10 +202,41 @@ class Server:
             raise ValueError("Не удалось распознать речь: нужна запись WAV")
         return audio
 
+    def _addressed(self, text: str) -> bool:
+        """Wake listening: is this phrase for JARVIS? «Джарвис…» at the start, an answer within 20 s of the last
+        exchange, a «да / нет» to a pending confirmation, or the continuation of a cut-off command."""
+        from .comms.agent import yes_no
+        from .router import wake_len
+        if wake_len(text or ""):
+            return True
+        if time.time() < self._wake_until:
+            return True
+        if getattr(self, "_fragment", None) and time.time() - self._fragment[1] < FRAGMENT_TTL_S:
+            return True
+        return bool(self.core.approvals.pending()) and yes_no(text) is not None
+
+    async def _voice_wake(self, data: dict) -> dict:
+        """Always-on listening from the desktop companion. Speech that is not addressed to JARVIS is recognised on this
+        computer and dropped at once: no turn, no transcript stored, nothing sent anywhere."""
+        d = self.core.director
+        audio = self._voice_audio(data)
+        text = await d.stt.transcribe(audio)
+        if not text.strip() or not self._addressed(text):
+            return {"text": "", "ignored": True}
+        self._wake_until = time.time() + 20
+        self.core.bus.publish("wake.heard", {"text": text[:200]})
+        sp = d.speech
+        turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
+        if sp:
+            sp.mark(turn, "stt_end")
+        return await self._after_stt(text, turn, len(audio), data)
+
     async def _voice_turn(self, data: dict) -> dict:
         """One spoken request: STT → Director (same path as typed text) → streamed speech."""
         d = self.core.director
         local = d.stt
+        if data.get("wake"):
+            return await self._voice_wake(data)
         audio = self._voice_audio(data)
         sp = d.speech
         turn = sp.new_turn(data.get("speech_start"), data.get("speech_end")) if sp else None
@@ -269,6 +306,14 @@ class Server:
             if sp:
                 sp.mark(turn, "request_start")
             task_id = await d.submit(text, "voice", turn=turn)
+        if data.get("client") == "overlay":            # its answer is spoken by the desktop companion only
+            for k in (task_id, "notice-" + str(turn)):
+                if k:
+                    self._speech_owner[k] = "overlay"
+            if len(self._speech_owner) > 500:
+                self._speech_owner = dict(list(self._speech_owner.items())[-200:])
+        if task_id or data.get("wake"):
+            self._wake_until = time.time() + 20       # «…а ещё…» right after the answer needs no «Джарвис»
         return {"text": text, "task_id": task_id, "turn": turn}
 
     async def _check_providers(self):
@@ -299,7 +344,8 @@ class Server:
         while True:
             ev = await q.get()
             dead = []
-            payload = json.dumps({"type": "event", **ev}, ensure_ascii=False, default=str)
+            owner = self._speech_owner.get(ev.get("task_id") or "") if str(ev.get("kind", "")).startswith("speech.") else None
+            payload = json.dumps({"type": "event", **ev, **({"owner": owner} if owner else {})}, ensure_ascii=False, default=str)
             for ws in list(self.sockets):
                 try:
                     await ws.send_str(payload)
@@ -321,6 +367,16 @@ class Server:
 
     async def health(self, req):
         return web.json_response({"ok": True, "app": "jarvis-workos"})
+
+    async def overlay_page(self, req):
+        return web.FileResponse(WEB / "overlay.html", headers={
+            "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": CSP})
+
+    async def api_overlay(self, req):
+        """For the launcher: is the desktop companion wanted, and where did the person leave it."""
+        return web.json_response({"enabled": bool(self.core.db.get_kv("overlay_enabled", True)),
+                                  "pos": self.overlay.saved(), "wake": bool(self.core.db.get_kv("wake_listen", False))})
 
     async def index(self, req):
         return web.FileResponse(WEB / "index.html", headers={
@@ -530,6 +586,36 @@ class Server:
                 res = {"task_id": await d.run_ui_tool(data["tool"], dict(data.get("args") or {}))}
             elif typ == "ui.read":                # Files workspace: folder listing / search, read-only
                 res = await d.run_ui_read(str(data.get("tool")), dict(data.get("args") or {}))
+            elif typ == "overlay.drag":           # desktop companion: the core moves its window after the cursor
+                ph = data.get("phase")
+                res = await self.overlay.drag_start(data.get("ox", 32), data.get("oy", 32)) if ph == "start" \
+                    else self.overlay.drag_move() if ph == "move" else await self.overlay.drag_end()
+            elif typ == "voice.presence":         # the window's mic is on/off: the desktop companion yields to it
+                self.core.bus.publish("voice.presence", {"client": str(data.get("client", "window"))[:20],
+                                                         "listening": bool(data.get("listening"))})
+                res = {}
+            elif typ == "overlay.size":
+                res = await self.overlay.resize(int(data.get("w", 64)), int(data.get("h", 64)))
+            elif typ == "overlay.place":
+                res = await self.overlay.place_default()
+            elif typ in ("overlay.state", "overlay.settings"):
+                db = self.core.db
+                if typ == "overlay.settings":
+                    for k, key in (("wake", "wake_listen"), ("enabled", "overlay_enabled")):
+                        if k in data:
+                            db.set_kv(key, bool(data[k]))
+                            self.core.audit.write("overlay." + key, on=bool(data[k]))
+                res = {"wake": bool(db.get_kv("wake_listen", False)), "enabled": bool(db.get_kv("overlay_enabled", True))}
+                if typ == "overlay.settings":
+                    self.core.bus.publish("overlay.settings", res)
+            elif typ in ("overlay.launch", "window.open"):
+                # The person pressed a button: open the desktop companion / the main window (never closes anything).
+                import subprocess as _sp
+                import sys as _sys
+                _sp.Popen([_sys.executable, "-m", "jarvis", "overlay" if typ == "overlay.launch" else "open"],
+                          cwd=str(WEB.parent), stdin=_sp.DEVNULL, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                          start_new_session=True)
+                res = {"ok": True}
             elif typ == "files.roots":            # Files workspace: the folders JARVIS may read (paths only)
                 cfg = self.core.config
                 roots = [str(r) for r in cfg.read_roots if r.is_dir()]

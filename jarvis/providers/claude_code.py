@@ -19,6 +19,7 @@ import tempfile
 import time
 
 from ..db import Database
+from ..config import limit
 from .base import AIProvider, Cap, GenResult, Health, ProviderFailure, StepRequest, usage_of
 
 INSPECT_TOOLS = ["Read", "Glob", "Grep"]
@@ -39,9 +40,11 @@ GATED = {"install": ["Bash(pip install:*)", "Bash(pip3 install:*)", "Bash(uv add
 SYSTEM = ("Ты работаешь как исполнитель внутри ассистента JARVIS. Работай только в текущей папке. Доводи задачу до "
           "конца сам: если чего-то не знаешь — найди в интернете (WebSearch/WebFetch); если папка пустая — создай всё "
           "нужное с нуля (для сайта — готовые к открытию index.html, стили, скрипты, тексты, без заглушек). "
-          "Не используй sudo и системные пакетные менеджеры. Устанавливать зависимости и инструменты (npm, pip, uv) и "
-          "скачивать файлы можно, только если это явно разрешено для задачи; иначе сделай без них (например, сайт на "
-          "чистом HTML/CSS/JS) или остановись и напиши, что именно требуется. Проверь результат (запусти, открой, "
+          "Не используй sudo и системные пакетные менеджеры. Если для задачи нужен инструмент, которого нет, — найди готовый "
+          "(GitHub, PyPI, npm, crates.io, релизы с бинарниками) и поставь для пользователя (uv tool install, pipx, venv "
+          "в папке, npm install, бинарник в ~/.local/bin) — когда установка и скачивание разрешены для задачи (обычно "
+          "да); иначе сделай без них или назови точно, что требуется. Не сдавайся на первой ошибке: ищи решение. "
+          "Проверь результат (запусти, открой, "
           "прогони тесты, если они есть). Если просят ЗАПУСТИТЬ сайт или программу так, чтобы она продолжала "
           "работать, запускай её полностью отвязанной от себя, например: setsid -f python3 -m http.server 8000 "
           "--bind 127.0.0.1 >/dev/null 2>&1 </dev/null (свободный порт подбери сам; ВСЕГДА только адрес 127.0.0.1, "
@@ -89,13 +92,16 @@ def browser_mcp(workdir: str | None) -> str:
     return json.dumps({"mcpServers": {"browser": {"command": "npx", "args": args}}})
 
 
-def build_argv(prompt: str, mode: str, model: str = "", budget: float = 2.0, max_turns: int = 80,
+def build_argv(prompt: str, mode: str, model: str = "", budget: float = 0.0, max_turns: int = 0,
                allow: set[str] | None = None, workdir: str | None = None) -> list[str]:
     tools = CHANGE_TOOLS if mode == "change" else INSPECT_TOOLS
     argv = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--restricted",
             "--strict-mcp-config", "--no-session-persistence", "--permission-mode", "dontAsk",
-            "--tools", ",".join(tools), "--allowedTools", *tools, "--max-turns", str(max_turns),
-            "--max-budget-usd", f"{budget:.2f}", "--append-system-prompt", SYSTEM]
+            "--tools", ",".join(tools), "--allowedTools", *tools, "--append-system-prompt", SYSTEM]
+    if max_turns and max_turns > 0:
+        argv[argv.index("--append-system-prompt"):argv.index("--append-system-prompt")] = ["--max-turns", str(max_turns)]
+    if budget and budget > 0:
+        argv[argv.index("--append-system-prompt"):argv.index("--append-system-prompt")] = ["--max-budget-usd", f"{budget:.2f}"]
     if mode == "change" and "browser" in (allow or set()):
         i = argv.index("--strict-mcp-config")
         argv[i + 1:i + 1] = ["--mcp-config", browser_mcp(workdir)]
@@ -199,7 +205,7 @@ class ClaudeCodeProvider(AIProvider):
         from .claude_chat import context_block
         prompt = (context_block(req.context) + "\n\n" if req.context else "") + req.instruction
         argv = build_argv(prompt, req.mode, self.config.claude_model, self.config.claude_budget_usd,
-                          allow=set(getattr(req, "permissions", []) or []), workdir=req.workdir)
+                          getattr(self.config, "claude_max_turns", 0), allow=set(getattr(req, "permissions", []) or []), workdir=req.workdir)
         t0 = time.perf_counter()
         proc = await asyncio.create_subprocess_exec(*argv, cwd=req.workdir, env=_clean_env(),
                                                     stdin=asyncio.subprocess.DEVNULL,
@@ -229,7 +235,7 @@ class ClaudeCodeProvider(AIProvider):
                     elif t == "result":
                         result = d
                         return              # the answer is complete: never wait for EOF (a server it started may hold it)
-            await asyncio.wait_for(read(), self.config.claude_timeout_s)
+            await asyncio.wait_for(read(), limit(self.config.claude_timeout_s))
             try:
                 await asyncio.wait_for(proc.wait(), 10)
             except asyncio.TimeoutError:

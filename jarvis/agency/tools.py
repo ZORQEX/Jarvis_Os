@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from ..providers.base import Cap, ProviderFailure
+from ..config import limit
 from ..tools.base import (Risk, Tool, ToolContext, ToolInputError, ToolResult, ToolSpec, Verification,
                           run_cmd)
 from .verifier import verify_step
@@ -48,7 +49,7 @@ class AgentGenerate(Tool):
                 "instruction": {"type": "string", "maxLength": 2000},
                 "context_labels": {"type": "array"}, "context_chars": {"type": "integer"},
                 "sensitivity": {"type": "string"}}},
-            risk=Risk.LOW, side_effects="none", timeout_s=180, model_callable=False,
+            risk=Risk.LOW, side_effects="none", timeout_s=None, model_callable=False,   # research takes what it needs
             verification="Результат не пустой; у поиска есть источники; числа в тексте есть во входных данных")
 
     def validate(self, args, ctx):
@@ -103,7 +104,7 @@ class ClaudeInspect(Tool):
             description="Internal: Claude Code reads a project folder (no edits, no commands).",
             params={"type": "object", "required": ["instruction", "workdir"], "properties": {
                 "instruction": {"type": "string", "maxLength": 2000}, "workdir": {"type": "string", "maxLength": 500}}},
-            risk=Risk.LOW, side_effects="none", timeout_s=config.claude_timeout_s + 30, model_callable=False,
+            risk=Risk.LOW, side_effects="none", timeout_s=limit(config.claude_timeout_s) and config.claude_timeout_s + 30, model_callable=False,
             verification="Claude Code завершил работу без ошибки; использовались только инструменты чтения")
 
     def validate(self, args, ctx):
@@ -135,7 +136,7 @@ class ClaudeChange(Tool):
             params={"type": "object", "required": ["instruction", "workdir"], "properties": {
                 "instruction": {"type": "string", "maxLength": 2000}, "workdir": {"type": "string", "maxLength": 500},
                 "permissions": {"type": "array", "default": []}}},
-            risk=Risk.HIGH, side_effects="local", timeout_s=config.claude_timeout_s + 330, model_callable=False,
+            risk=Risk.HIGH, side_effects="local", timeout_s=limit(config.claude_timeout_s) and config.claude_timeout_s + 330, model_callable=False,
             verification="Список изменённых файлов по git; JARVIS сам перезапускает тесты проекта",
             impact="Claude Code сможет менять файлы и запускать команды в этой папке (без sudo, системных пакетов и "
                    "git push). Если папка не под git, JARVIS сначала сделает резервную копию. Потом покажет изменённые "
@@ -226,8 +227,8 @@ class ComputerTask(ClaudeChange):
                 "something — never answer that there is no tool for it. Give a complete, detailed instruction in the "
                 "user's language (what to build, style, content, technology). For a new thing set new_folder to a "
                 "short latin name (it is created in ~/Projects); for an existing folder set folder (any folder in "
-                "the home directory). Put 'install' in allow if packages/tools must be installed, 'download' if "
-                "files must be fetched, 'browser' if websites must be opened, clicked, filled or read like a "
+                "the home directory). Installing user-level tools (pip/uv/npm/cargo, GitHub releases) and downloading are "
+                "always allowed; put 'browser' in allow if websites must be opened, clicked, filled or read like a "
                 "person would (a separate browser without the user's logins). The user "
                 "confirms first; work may take several minutes; the result lists changed files."),
             params={"type": "object", "required": ["instruction"], "properties": {
@@ -235,7 +236,7 @@ class ComputerTask(ClaudeChange):
                 "new_folder": {"type": "string", "maxLength": 60},
                 "folder": {"type": "string", "maxLength": 500},
                 "allow": {"type": "array", "items": {"type": "string", "enum": sorted(PERM_RU)}}}},
-            risk=Risk.HIGH, side_effects="local", timeout_s=config.claude_timeout_s + 330, model_callable=True,
+            risk=Risk.HIGH, side_effects="local", timeout_s=limit(config.claude_timeout_s) and config.claude_timeout_s + 330, model_callable=True,
             verification="Список изменённых/созданных файлов; JARVIS сам перезапускает тесты проекта, если они есть",
             impact="Claude Code создаст или изменит файлы в этой папке и сможет запускать там команды (без sudo и "
                    "системных пакетов). Существующая папка без git сначала копируется в резервную копию.")
@@ -259,7 +260,9 @@ class ComputerTask(ClaudeChange):
         perms = a.get("allow") or []
         if not isinstance(perms, list) or any(p not in PERM_RU for p in perms):
             raise ToolInputError("Недопустимое разрешение")
-        out = {"instruction": a["instruction"].strip(), "permissions": sorted(set(perms))}
+        # Getting the tools a job needs is part of doing it: user-level installs and downloads are always allowed
+        # (no sudo, no system packages); the person confirms the whole job once.
+        out = {"instruction": a["instruction"].strip(), "permissions": sorted(set(perms) | {"install", "download"})}
         if not out["instruction"]:
             raise ToolInputError("Пустое задание")
         if a.get("folder"):

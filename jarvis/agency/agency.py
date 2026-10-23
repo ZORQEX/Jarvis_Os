@@ -71,6 +71,13 @@ def jarvis_state_line(director) -> str:
             continue
         word = {"connected": "подключено", "connecting": "подключается"}.get(st, "нужен вход" if st == "error" else "не подключено")
         bits.append(f"{p.title} — {word}")
+    try:
+        from ..skills import list_skills
+        skills = [x["name"] for x in list_skills(director.config)][:30]
+    except Exception:   # noqa: BLE001
+        skills = []
+    if skills:
+        bits.append("навыки: " + ", ".join(skills))
     return f"[Состояние JARVIS: {'; '.join(bits)}]\n" if bits else ""
 
 

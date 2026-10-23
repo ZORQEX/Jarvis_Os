@@ -142,7 +142,8 @@ await check("chat: local command renders a real result", async () => {
 
 await check("streaming renderer shows text as it arrives", async () => {
   // Rendering check: feeds the UI the same events the core sends (assistant.delta) for an existing turn.
-  const tid = await J(() => window.__jarvis.S.messages.find((m) => m.role === "user")?.task_id);
+  const tid = await J(() => { const S = window.__jarvis.S;      // a real task of this run (not a navigation one)
+    return [...S.messages].reverse().find((m) => m.role === "user" && ["tool", "local"].includes(S.tasks[m.task_id]?.route))?.task_id; });
   const r = await J(async (tid) => {
     const { S, link } = window.__jarvis;
     const t = S.tasks[tid];
@@ -338,6 +339,33 @@ await check("settings (moved module) work: privacy, theme", async () => {
   await shot("15-light-tasks");
   await J(() => window.__jarvis.nav("settings"));
   await page.click('[data-theme-set=""]');
+});
+
+await check("desktop companion page: card, ask, confirmation", async () => {
+  const ov = await ctx.newPage();
+  ov.on("pageerror", (e) => errors.push("overlay pageerror: " + e.message));
+  await ov.setViewportSize({ width: 64, height: 64 });
+  await ov.goto(`http://127.0.0.1:${port}/overlay?t=${token}`);
+  await ov.waitForFunction(() => window.__overlay?.S.connected === true, null, { timeout: 8000 });
+  assert(await ov.title() === `JARVIS · компаньон :${port}`, "title " + await ov.title());
+  await ov.waitForTimeout(300);
+  await ov.screenshot({ path: `${outDir}/40-overlay-orb.png` });
+  await ov.setViewportSize({ width: 360, height: 470 });
+  await ov.click("#ovOrb");
+  await ov.waitForFunction(() => document.getElementById("ov").dataset.expanded === "1", null, { timeout: 3000 });
+  await ov.fill("#ovInput", "Состояние системы");
+  await ov.keyboard.press("Enter");
+  await ov.waitForFunction(() => document.querySelector("#ovMainBody .reply")?.textContent.includes("Система"), null, { timeout: 8000 });
+  await ov.waitForTimeout(300);
+  await ov.screenshot({ path: `${outDir}/41-overlay-reply.png` });
+  const tid = await ov.evaluate(async () => (await window.__overlay.link.request("submit", { text: "запиши заметку: из компаньона", source: "text" })).task_id);
+  await ov.waitForSelector('#ovMainBody [data-o="approve"]', { timeout: 6000 });
+  await ov.screenshot({ path: `${outDir}/42-overlay-confirm.png` });
+  await ov.click('#ovMainBody [data-o="approve"]');
+  await page.waitForFunction((t) => window.__jarvis.S.tasks[t]?.state === "completed", tid, { timeout: 8000 });
+  const st = await ov.evaluate(() => window.__overlay.link.request("overlay.state"));
+  assert(st.enabled === true, "overlay state " + JSON.stringify(st));
+  await ov.close();
 });
 
 await check("layout: no overflow or overlap at 1280×720, 1440×900, 1920×1080", async () => {

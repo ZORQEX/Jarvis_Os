@@ -6,8 +6,12 @@ import { setLevel } from "./companion.js";
 const now = () => performance.timeOrigin + performance.now();   // epoch ms, same clock as the core
 
 export class Voice {
-  constructor({ link, onState, onError, onTurn, onOutput }) {
+  constructor({ link, onState, onError, onTurn, onOutput, wake = false, client = "window" }) {
     this.link = link;
+    // Wake listening (desktop companion): the mic stays open, every phrase is recognised on this computer and only
+    // the ones starting with «Джарвис» (or a direct follow-up) are acted on — the core drops the rest unseen.
+    this.wake = wake;
+    this.client = client;
     this.onOutput = onOutput || (() => {});
     this.outputChecked = 0;
     this.onState = onState;
@@ -124,7 +128,7 @@ export class Voice {
       if (this.recent.length > 15) this.recent.shift();
       const loud = this.recent.reduce((n, v) => n + (v ? 1 : 0), 0);
       if (speaking ? loud >= 8 : this.voiced >= need) this.startSegment();
-      if (this.conversation && now() - this.idleSince > 180000) {   // 3 min without speech: stop listening
+      if (this.conversation && !this.wake && now() - this.idleSince > 180000) {   // 3 min without speech: stop listening
         this.conversation = false; this.closeMic(); this.onError("Разговор завершён: 3 минуты тишины");
       }
       return;
@@ -134,7 +138,7 @@ export class Voice {
     const dur = this.seg.length * 20;
     if ((this.silent >= this.silenceMs && dur > 300) || dur > 30000) { this.endSegment(); return; }
     const early = Math.min(this.earlyMs, this.silenceMs - 400);
-    if (!this.probe && early >= 300 && this.silent >= early && dur - this.silent >= 400) this.startProbe();
+    if (!this.probe && !this.wake && early >= 300 && this.silent >= early && dur - this.silent >= 400) this.startProbe();
   }
 
   startSegment() {
@@ -144,7 +148,7 @@ export class Voice {
     this.silent = 0;
     if (this.audio) this.bargeIn();
     this.set("recording");
-    this.link.request("voice.warm").catch(() => {});        // warm the cloud connection while the user speaks
+    if (!this.wake) this.link.request("voice.warm").catch(() => {});   // warm the cloud connection while the user speaks
   }
 
   // Recognise the phrase during the pause. The user may go on talking: then the probe is simply dropped.
@@ -176,7 +180,9 @@ export class Voice {
     try {
       let r = null;
       if (reuse) r = await this.link.request("voice.commit", { probe_id: reuse, ...times }, 45000).catch(() => null);
-      if (!r) r = await this.link.request("voice.transcribe", { audio_b64: await b64(encodeWav(frames)), mime: "audio/wav", ...times }, 45000);
+      if (!r) r = await this.link.request("voice.transcribe", { audio_b64: await b64(encodeWav(frames)), mime: "audio/wav",
+        wake: this.wake && this.conversation, client: this.client, ...times }, 45000);   // a pressed mic needs no «Джарвис»
+      if (r.ignored) { this.set(this.listening ? "listening" : null); return; }   // not addressed to JARVIS
       if (r.task_id && r.turn) this.turnOf.set(r.task_id, r.turn);
       if (r.turn) this.turnOf.set("notice-" + r.turn, r.turn);
       this.onTurn(r);

@@ -21,6 +21,10 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   `screenshot_dir`, `read_scopes` inside that home, or tools write into the real ~/Documents.
 - Never `pkill -f "jarvis serve"` from a shell whose own command line contains that string (it kills the shell).
 - Real app: `jarvis` (core on 127.0.0.1:8791, window app id `chrome-localhost__-Default`, title ends with JARVIS).
+- Desktop companion: `jarvis overlay` (own Chromium profile, pinned Hyprland window titled «JARVIS · компаньон»;
+  a dev core on another port uses «… :<port>», so it never moves the real one). Moves/resizes go through
+  `jarvis/overlay.py` (Hyprland socket). Wake listening drops unaddressed speech before any turn or log.
+- Skills: `jarvis/skills.py`, folder `~/.local/share/jarvis-skills` (config `skills_dir`); limits are 0 = none.
 
 ## Rules
 - Every action goes through `Gateway.execute` (validation → policy → approval → run → verify → audit).

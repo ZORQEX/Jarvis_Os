@@ -70,6 +70,9 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     for t in (AgentGenerate(manager), ClaudeInspect(manager, config), ClaudeChange(manager, config),
               ComputerTask(manager, config), OpenUrl(), SitePublish(github, config)):
         registry.tools[t.spec.id] = t
+    from .skills import SkillCreate, SkillList, SkillRun     # abilities JARVIS builds for itself
+    for t in (SkillList(config), SkillRun(config), SkillCreate(manager, config)):
+        registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
     flora = None
     try:

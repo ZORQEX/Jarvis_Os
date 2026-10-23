@@ -22,6 +22,7 @@ def cfg(home):
     c = Config()
     c.read_scopes = [str(home / "files")]
     c.write_dir = str(home / "out")
+    c.skills_dir = str(home / "skills")
     c.screenshot_dir = str(home / "shots")
     c.approval_ttl_s = 5
     with socket.socket() as sock:          # never collide with a running JARVIS

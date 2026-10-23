@@ -60,6 +60,11 @@ class Paths:
         return self.state / "server.log"
 
 
+def limit(seconds: float | int | None) -> float | None:
+    """A configured limit → asyncio timeout (None = wait as long as it takes)."""
+    return float(seconds) if seconds and seconds > 0 else None
+
+
 PRIVACY_PROFILES = ("AUTHORIZED_CLOUD", "PRIVATE_LOCAL", "STRICT_OFFLINE")
 
 
@@ -78,13 +83,16 @@ class Config:
     claude_voice_model: str = "claude-haiku-5-5"
     # Claude Code as the computer/code executor: empty model = the CLI's own default
     claude_model: str = ""
-    claude_budget_usd: float = 5.0          # per Claude Code job: a whole site or app needs more than an edit
-    claude_timeout_s: float = 1800.0        # a whole site or app can take a while
+    # No limits on thinking time by default: research, builds and installs take what they need and give a result.
+    # «Стоп» / the Stop button / emergency stop end any of them at once. 0 = no limit.
+    claude_budget_usd: float = 0.0          # per Claude Code job (0 = no cap)
+    claude_timeout_s: float = 0.0           # Claude Code jobs, research, one-off steps, one conversation answer
+    claude_max_turns: int = 0               # Claude Code steps per job (0 = no cap)
     code_workspaces: list[str] = field(default_factory=lambda: ["~/Projects"])
     # Claude Code may work in any folder of the home directory (the user asked for it), never in keys, passwords,
     # browser profiles, sessions or JARVIS's own data (SECRET_PATHS) — those are also denied to its file tools.
     claude_home_wide: bool = True
-    max_tool_rounds: int = 12          # tool calls Claude may make for one request
+    max_tool_rounds: int = 0           # tool calls in one answer (0 = no cap; «стоп» ends a stuck loop)
     ai_timeout_s: float = 120.0
     piper_voice: str = "ru_RU-denis-medium"   # emergency fallback voice if Silero cannot speak
     history_turns: int = 12
@@ -95,6 +103,7 @@ class Config:
         "~/Documents", "~/Projects", "~/Downloads", "~/Desktop", "~/Pictures", "~/Work", "~/Music", "~/Videos",
     ])
     write_dir: str = "~/Documents/Jarvis"
+    skills_dir: str = "~/.local/share/jarvis-skills"   # abilities JARVIS builds for itself (jarvis/skills.py)
     screenshot_dir: str = "~/Pictures/Jarvis"
     # Spoken/typed app names -> argv. Only these can be launched.
     apps: dict[str, list[str]] = field(default_factory=dict)

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru" translate="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JARVIS · компаньон</title>
+  <meta name="color-scheme" content="dark light">
+  <meta name="google" content="notranslate">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/overlay.css">
+  <script type="module" src="/static/js/overlay.js"></script>
+</head>
+<body class="ov-body">
+  <div class="ov" id="ov" data-expanded="0" data-mode="OFFLINE">
+    <button class="ov-orb" id="ovOrb" aria-label="JARVIS">
+      <span class="ov-face" id="ovFace"></span>
+      <span class="ov-mic" id="ovMic" hidden></span>
+      <span class="ov-badge" id="ovBadge" hidden></span>
+    </button>
+    <section class="ov-card" id="ovCard" aria-label="JARVIS">
+      <header class="ov-head" id="ovHead">
+        <span class="ov-mini" id="ovMini"></span>
+        <div class="ov-title"><b id="ovLabel">JARVIS</b><span id="ovSub"></span></div>
+        <div class="ov-tools">
+          <button class="icon-btn" id="ovWake" aria-pressed="false" title="Слушать «Джарвис»"></button>
+          <button class="icon-btn" id="ovMain" title="Открыть окно JARVIS"></button>
+          <button class="icon-btn" id="ovClose" title="Свернуть (Esc)"></button>
+        </div>
+      </header>
+      <div class="ov-detail" id="ovDetail"></div>
+      <div class="phases ov-phases" id="ovPhases" hidden></div>
+      <div class="ov-body-main" id="ovMainBody"></div>
+      <form class="cd-ask ov-ask" id="ovAsk" autocomplete="off">
+        <input type="text" id="ovInput" aria-label="Спросить JARVIS" placeholder="Спросить JARVIS…">
+        <button type="button" class="icon-btn mic" id="ovTalk" aria-label="Сказать фразу"></button>
+        <button type="submit" class="icon-btn go" id="ovGo" aria-label="Отправить" disabled></button>
+      </form>
+    </section>
+  </div>
+</body>
+</html>

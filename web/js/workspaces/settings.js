@@ -81,6 +81,15 @@ function renderSettings() {
       </tbody></table>
     </div>
     <div class="panel">
+      <h2>Компаньон на рабочем столе</h2>
+      <div class="muted" style="font-size:13.5px">Маленький JARVIS поверх всех окон и рабочих столов: нажмите — откроется карточка,
+        перетащите — переместится в любое место экрана. Если включить микрофон, достаточно сказать «Джарвис, …» —
+        речь распознаётся на этом компьютере, фразы без «Джарвис» сразу отбрасываются и нигде не сохраняются.</div>
+      <div class="field"><button class="btn primary" id="ovLaunch">Показать компаньон</button></div>
+      <label class="toggle"><input type="checkbox" id="ovWakeT"> Слушать «Джарвис» (микрофон включён постоянно)</label>
+      <label class="toggle"><input type="checkbox" id="ovAuto"> Открывать компаньон вместе с окном JARVIS</label>
+    </div>
+    <div class="panel">
       <h2>Интерфейс</h2>
       <div class="field">
         <button class="btn ${!document.documentElement.dataset.theme ? "primary" : ""}" data-theme-set="">Как в системе</button>
@@ -91,6 +100,16 @@ function renderSettings() {
       <label class="toggle"><input type="checkbox" id="devToggle" ${ctx.S.dev ? "checked" : ""}> Режим разработчика: показывать решения директора (исполнители, причины, кандидаты)</label>
     </div>
   </div>`;
+  ctx.link.request("overlay.state").then((st) => {
+    const w = $("#ovWakeT", el), au = $("#ovAuto", el);
+    if (!w) return;
+    w.checked = !!st.wake; au.checked = st.enabled !== false;
+    w.onchange = () => ctx.link.request("overlay.settings", { wake: w.checked }).then(() => w.checked && ctx.link.request("overlay.launch"))
+      .catch((er) => ctx.toast(er.message, "err"));
+    au.onchange = () => ctx.link.request("overlay.settings", { enabled: au.checked }).catch((er) => ctx.toast(er.message, "err"));
+  }).catch(() => {});
+  $("#ovLaunch", el).addEventListener("click", () => ctx.link.request("overlay.launch")
+    .then(() => ctx.toast("Компаньон появится в правом верхнем углу", "ok")).catch((er) => ctx.toast(er.message, "err")));
   wireAgency(el, { link: ctx.link, S: ctx.S, toast: ctx.toast, rerender: () => { renderSettings(); ctx.onChange(); } });
   renderPublish();
   $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {

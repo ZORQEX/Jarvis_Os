@@ -345,11 +345,16 @@ class WhatsAppProvider(Provider):
     SAFE_BUTTONS = ["Понятно", "OK", "ОК", "Ок", "Продолжить", "Закрыть", "Не сейчас", "Позже", "Пропустить",
                     "Got it", "Continue", "Close", "Not now", "Later", "Skip", "Dismiss"]
 
+    # Measured 2026-10-21: a modal dialog covered the search box. Measured 2026-10-23: a «what's new» popover from
+    # #wa-popovers-bucket (role=dialog WITHOUT aria-modal, close button labelled only by aria-label) covered it and
+    # every «напиши маме» failed with «страница не отвечает».
+    POPUPS = ("[role='dialog'][aria-modal='true']", "div[data-animate-modal-popup='true']", "[role='alertdialog']",
+              "#wa-popovers-bucket [role='dialog']", "#wa-popovers-bucket [data-testid='popover']")
+
     async def _dismiss_popups(self) -> None:
-        """Measured 2026-10-21: a modal dialog covered the search box and every click timed out after 30 s."""
         for _ in range(4):
             dlg = None
-            for sel in ("[role='dialog'][aria-modal='true']", "div[data-animate-modal-popup='true']"):
+            for sel in self.POPUPS:
                 el = await self.page.query_selector(sel)
                 if el and await el.is_visible():
                     dlg = el
@@ -362,7 +367,8 @@ class WhatsAppProvider(Provider):
                 self.last_dialog = ""
             pressed = False
             for label in self.SAFE_BUTTONS:
-                btn = await dlg.query_selector(f"button:has-text('{label}'), div[role='button']:has-text('{label}')")
+                btn = await dlg.query_selector(f"[aria-label='{label}'], button:has-text('{label}'), "
+                                               f"div[role='button']:has-text('{label}')")
                 if btn and await btn.is_visible():
                     try:
                         await btn.click(timeout=3000)
@@ -374,12 +380,26 @@ class WhatsAppProvider(Provider):
                 await self.page.keyboard.press("Escape")
             await asyncio.sleep(0.6)
 
-    async def _click(self, el) -> None:
+    async def _click(self, el, field: bool = True) -> None:
         try:
             await el.click(timeout=5000)
-        except Exception:   # noqa: BLE001 — something covers it: close pop-ups once and retry
-            await self._dismiss_popups()
-            await el.click(timeout=5000)
+            return
+        except Exception:   # noqa: BLE001 — something covers it: close pop-ups and retry
+            pass
+        await self._dismiss_popups()
+        try:
+            await el.click(timeout=4000)
+            return
+        except Exception:   # noqa: BLE001
+            pass
+        # Still covered by a WhatsApp layer we do not know yet: act on the element itself, never on screen coordinates
+        # (those would hit the layer). A field gets focus (typing goes there); a chat row gets its own click event.
+        # Sending still checks the open chat's header before typing, so a wrong chat is never written to.
+        self.last_dialog = (getattr(self, "last_dialog", "") or "") + " [covered: element used directly]"
+        if field:
+            await el.evaluate("(e) => e.focus()")
+        else:
+            await el.dispatch_event("click")
 
     # ---------------------------------------------------------------- contacts
     async def search(self, name: str) -> list[Contact]:
@@ -469,7 +489,7 @@ class WhatsAppProvider(Provider):
                 break
         if not target:
             raise CommsError(f"Чат «{key}» не найден в WhatsApp", "not_found")
-        await self._click(target)
+        await self._click(target, field=False)
         head = await self._first(SEL_HEADER_TITLE, 10)
         title = ""
         if head:
