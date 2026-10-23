@@ -165,6 +165,13 @@ class Overlay:
             self._save(x, y)                              # remember where the orb sits
         return {"x": x, "y": y, "w": w, "h": h}
 
+    async def close(self) -> dict:
+        """Take the companion off the screen (Super+Shift+J or «jarvis overlay» brings it back)."""
+        win = await self.window()
+        if win:
+            await hypr(f"dispatch closewindow address:{win['address']}")
+        return {"closed": bool(win)}
+
     async def place_default(self) -> dict:
         win = await self.window()
         if not win:

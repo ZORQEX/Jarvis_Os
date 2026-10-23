@@ -601,6 +601,8 @@ class Server:
                 res = await self.overlay.resize(int(data.get("w", 64)), int(data.get("h", 64)))
             elif typ == "overlay.place":
                 res = await self.overlay.place_default()
+            elif typ == "overlay.close":
+                res = await self.overlay.close()
             elif typ in ("overlay.state", "overlay.settings"):
                 db = self.core.db
                 if typ == "overlay.settings":

@@ -22,6 +22,7 @@ companion.mount($("#ovFace"));
 companion.mount($("#ovMini"));
 $("#ovMain").innerHTML = ICON.open;
 $("#ovClose").innerHTML = ICON.minus;
+$("#ovHide").innerHTML = ICON.eyeOff;
 $("#ovTalk").innerHTML = ICON.mic;
 $("#ovGo").innerHTML = ICON.arrowUp;
 
@@ -173,6 +174,7 @@ function draggable(el, onClick) {
 draggable($("#ovOrb"), () => expand("user"));
 draggable($("#ovHead"), null);
 $("#ovClose").addEventListener("click", collapse);
+$("#ovHide").addEventListener("click", () => link.request("overlay.close").catch(() => {}));
 $("#ovMain").addEventListener("click", () => link.request("window.open").catch(() => {}));
 $("#ovWake").addEventListener("click", async () => {
   try { applySettings(await link.request("overlay.settings", { wake: !S.wake })); } catch { }
