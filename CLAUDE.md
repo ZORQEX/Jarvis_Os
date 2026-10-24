@@ -12,6 +12,10 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
 - `config/omarchy/` opt-in Waybar/Hyprland snippets; applied only by `scripts/omarchy-integrate.sh apply`.
 - `tests/` pytest (core, server, comms, voice, AI loop with scripted provider); `tests/ui/` playwright-core driver.
   The «Флора» demo project was removed on 2026-10-24 at the user's request (git history has it).
+- `fashion/` the «Заказы» app (factories, customers, deposits, documents): git subtree of morph-rq/alina-fashion-ai
+  (FastAPI + SQLAlchemy, Jinja pages, CRLF in some files — keep them). Own venv ~/.local/share/jarvis/fashion/.venv,
+  own tests (`cd fashion && <venv>/python -m pytest -q -o addopts=""`); JARVIS's pytest/ruff skip it.
+  Keep changes small and marked so `git subtree pull --prefix=fashion <url> main --squash` still merges.
 
 ## Commands
 - Tests: `uv run pytest -q` (tests pick a free port and an isolated JARVIS_HOME).
@@ -38,6 +42,11 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,
   then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Settings →
   «Самоулучшение». Tests use a temporary repo (monkeypatch `REPO`/`WORK`) — never the real one.
+- «Заказы» (`jarvis/fashion.py`): the core starts the app (127.0.0.1:`fashion_port` 8797, data <data>/fashion,
+  FASHION_AI_PROVIDER=claude-code), the window frames it (CSP frame-src that origin only, `workspaces/orders.js`).
+  `/api/jarvis/claims` decides if a phrase is about orders (codes as GigaAM writes them, brands, seasons, an answer to
+  a pending proposal) → `Director._run_fashion` → `/api/agent/message` in the shared dialog (kv fashion_conversation,
+  adopted by every app page); spoken text = the app's short `speech`. Dev core: set another `fashion_port`.
 - Memory (`jarvis/memory.py`, table `memory`): «запомни, что …» / «что ты обо мне помнишь» / «забудь, что …»;
   `memory_line` goes into the state line of every AI request; the AI may save lasting facts itself (memory_save).
 - Living speech: `router.simplify` strips fillers / «можешь» / infinitives so «Мне нужно открыть папку с колледжем»

@@ -323,3 +323,25 @@ Found in the real JARVIS's records: the 4 «WhatsApp Web не дал найти 
 | A covering pop-up is closed before clicking (was: 5 s click attempt first) | VERIFIED LOCAL | popover test 5.8 → < 1.3 s; unknown layer 9.1 → 4.1 s |
 | Real WhatsApp send with the new code | NOT VERIFIED yet | needs the real core restarted and a message to self |
 | Problem journal: a request done fine later is not reported | VERIFIED LOCAL | test_a_problem_that_went_away_is_not_in_the_journal; real records (read-only): WhatsApp 4 → 1, e-mail failure gone |
+
+## «Заказы»: the fashion-orders app inside JARVIS (2026-10-25)
+
+The client's Excel assistant (factories, customers AA / IDS / SS, markups, deposits, documents) is
+[morph-rq/alina-fashion-ai](https://github.com/morph-rq/alina-fashion-ai), vendored as `fashion/` (git subtree, squashed;
+`git subtree pull --prefix=fashion … main --squash` brings its updates). Its own suite runs in its own venv:
+`cd fashion && ~/.local/share/jarvis/fashion/.venv/bin/python -m pytest -q -o addopts=""`.
+
+| Requirement (from the client's brief) | Status | Evidence |
+|---|---|---|
+| Factory Excel → items, photos, sizes, prices, customers, percentages; a newer file compared with the ledger | VERIFIED LOCAL (synthetic factory workbook) | fashion suite 396 passed, 11 skipped (the 11 need the client's real workbook, not on this machine); live upload → review → «Сохранить в учёт» in the browser |
+| Factory PDF | PARTIAL | articles in a PDF are matched with the orders; a PDF alone does not create orders |
+| Orders split per customer (separate Excel + PDF each, only that customer's lines, leak-checked) | VERIFIED LOCAL | test_customer_documents_contain_only_that_customer_and_match (PDF had black boxes for Cyrillic on Linux → Noto/Liberation/DejaVu fonts added) |
+| Customer markups independent of the factory's; 50 % deposits of customer and factory sums; what the owner adds | VERIFIED LOCAL | fashion settlement tests; live: «IDS 35 %» → deposit €1 125 → €1 518.75, owner €1 215 → €821.25 |
+| Add / cancel items, sizes, readiness, shipments, payments | VERIFIED LOCAL (upstream) | fashion suite (ledger actions, Ready lists, shipments, payments) |
+| Assistant without an API key: Claude Code (the user's subscription), the app's typed tools over MCP, nothing saved without «Подтвердить» | VERIFIED MOCK + LIVE | test_claude_code.py (5, scripted CLI speaks real MCP); live: «Какая вещь у AA самая дорогая и сколько AA должна внести предоплаты?» → 2 tool calls, exact sums, 8.4 s |
+| JARVIS starts / restarts / stops the app; data outside the code; window may frame only that origin | VERIFIED LOCAL | test_fashion.py (the real app on a free port; CSP frame-src) |
+| Voice through JARVIS (local STT/TTS instead of ElevenLabs): phrase about orders → the app's assistant, same dialog as the workspace, short answer spoken | VERIFIED LIVE (recorded voice into the companion, dev core) | «Джарвис, поставь ай ди эс 35 %» → card in «Заказы» (window switched by itself); «Джарвис, да, сохрани» → saved, page shows the new figures |
+| Customer codes as the recogniser writes them («СС», «ИДС», «ID», «S», «Excel EPDF») | VERIFIED LOCAL | test_what_the_local_recogniser_writes (+ sizes and «Apple ID» left alone) |
+| «АА» spoken as letters | NOT RELIABLE | GigaAM wrote «эй эй» as «я ей» and «А-А» as nothing (synthetic voice); a customer alias the owner says is the workaround |
+| Its own JARVIS commands stay JARVIS's («открой папку заказы», «который час») | VERIFIED LOCAL | test_jarvis_keeps_its_own_commands |
+| With the real owner's voice and real factory files | NOT VERIFIED | needs the client |

@@ -92,6 +92,13 @@ HF_HOME="$STT/hf" "$STT/.venv/bin/python" -c "import onnx_asr; onnx_asr.load_mod
 HF_HOME="$STT/hf" "$STT/.venv/bin/python" -c "import onnx_asr; onnx_asr.load_model('nemo-parakeet-tdt-0.6b-v3', quantization='int8')"
 [[ -s "$STT/ru_50k.txt" ]] || curl -fsSL -o "$STT/ru_50k.txt" "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ru/ru_50k.txt"
 
+# «Заказы»: the fashion-orders app (fashion/, git subtree of morph-rq/alina-fashion-ai), own virtualenv; JARVIS starts
+# it (jarvis/fashion.py), data lives in ~/.local/share/jarvis/fashion. Its assistant uses Claude Code (the user's
+# subscription). Customer PDFs need a Cyrillic font (Noto / Liberation / DejaVu); old .xls files need LibreOffice.
+FASHION="$HOME/.local/share/jarvis/fashion"
+mkdir -p "$FASHION" && (cd "$FASHION" && { [[ -x .venv/bin/python ]] || uv venv -q --python 3.12 .venv; } \
+  && uv pip install -q --python .venv/bin/python -r "$ROOT/fashion/requirements.txt")
+
 # Browser control for Claude Code tasks the user allows (Microsoft Playwright MCP, pinned; uses /usr/bin/chromium).
 command -v npx >/dev/null && npx -y @playwright/mcp@0.0.83 --help >/dev/null 2>&1 || true
 
