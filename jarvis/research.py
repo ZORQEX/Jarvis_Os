@@ -84,8 +84,7 @@ _TECH = [re.compile(p, re.I) for p in (
     r"documentation|kernel|driver|linux|arch|hyprland|python|node|rust|go|java(script)?|typescript|docker|systemd|bash|"
     r"git|npm|pip|cuda|gpu|compile|build|deprecat\w*)\b", r"\b\w+\(\)|--\w+|\w+\.\w+\(",
     r"(ошибк|установ|настро|драйвер|библиотек|документац)")]
-_SENSITIVE = [re.compile(p) for p in (r"[\w.+-]+@[\w-]+\.[\w.]+", r"\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b",
-                                      r"\+?\d[\d\s().-]{8,}\d")]
+_SENSITIVE = [re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")]
 _THOROUGH = re.compile(r"\b(in[- ]depth|thorough(ly)?|deep[- ]dive|detailed (report|analysis)|comprehensive|"
                        r"with (evidence|sources)|fact[- ]check|investigate)\b|подробн\w+ (исследован|анализ|отч[её]т)|"
                        r"глубок\w+ (анализ|исследован)|исследуй|проверь факты|с доказательствами", re.I)
@@ -115,9 +114,10 @@ def normalize_query(query: str) -> str:
 
 
 def redact(query: str) -> str:
-    """E-mail addresses, card and phone numbers never reach a search engine."""
-    for r in _SENSITIVE:
-        query = r.sub(" ", query)
+    """E-mail addresses, card and phone numbers (10+ digits) never reach a search engine; a price stays."""
+    query = _SENSITIVE[0].sub(" ", query)
+    query = re.sub(r"\+?\d[\d\s().-]{8,}\d", lambda m: " " if sum(c.isdigit() for c in m.group(0)) >= 10 else m.group(0),
+                   query)
     return re.sub(r"\s+", " ", query).strip()
 
 

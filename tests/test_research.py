@@ -86,6 +86,7 @@ async def searx(core):
 def test_query_cleanup_and_modes():
     assert normalize_query("Джарвис, найди мне актуальную информацию о Bitcoin в интернете") == "Bitcoin"
     assert redact("напиши ivan@mail.ru про +7 701 123 45 67 коробки") == "напиши про коробки"
+    assert redact("карта 4400 4300 1234 5678 и квартира за 12 345 678 тенге") == "карта и квартира за 12 345 678 тенге"
     assert classify("Какая столица Японии") == "quick"
     assert classify("Найди 15 поставщиков картонных коробок в Алматы") == "adaptive"
     assert classify("сравни Prusa Core One и Bambu Lab P1S") == "adaptive"
