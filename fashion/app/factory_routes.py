@@ -69,18 +69,32 @@ def _analyse(token: str, path: Path, filename: str, season_hint: str | None) -> 
             _write_status(token, state="cancelled", message="Отменено")
             return
         suffix = path.suffix.lower()
+        pdf_meta = None
         if suffix == ".pdf":
-            from pypdf import PdfReader
-            reader = PdfReader(str(path))
-            text = "\n".join((page.extract_text() or "") for page in reader.pages[:5])
-            _write_status(token, state="reference", progress=1, pages=len(reader.pages), text=text[:6000],
-                          message="PDF сохранён как справочный документ. Суммы из PDF не переносятся автоматически.")
-            return
+            # A factory proforma's item table (with photos) becomes a workbook the Excel reader understands (JARVIS).
+            from app import pdf_order
+            converted = path.with_name("from-pdf.xlsx")
+            try:
+                pdf_meta = pdf_order.pdf_to_workbook(path, converted)
+            except Exception:  # noqa: BLE001 - an unreadable PDF stays a reference document
+                pdf_meta = None
+            if not pdf_meta or not pdf_meta["rows"]:
+                from pypdf import PdfReader
+                reader = PdfReader(str(path))
+                text = "\n".join((page.extract_text() or "") for page in reader.pages[:5])
+                _write_status(token, state="reference", progress=1, pages=len(reader.pages), text=text[:6000],
+                              message="В PDF не нашлось таблицы позиций (например, это скан) — сохранён как справочный "
+                                      "документ; артикулы из него сверяются с заказами.")
+                return
+            path = converted
         if suffix == ".xls":
             path = factory_import.convert_legacy(path)
         with SessionLocal() as db:
             known = _known_tokens(db)
         analysis = factory_import.analyze_workbook(path, filename, known, season_hint)
+        if pdf_meta:
+            analysis.warnings += pdf_meta["warnings"] + [
+                f"Прочитано из PDF: позиций {pdf_meta['rows']}, фото {pdf_meta['photos']}. Проверьте строки перед сохранением."]
         if token in _cancelled:
             _write_status(token, state="cancelled", message="Отменено")
             return
