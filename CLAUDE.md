@@ -47,6 +47,14 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   `/api/jarvis/claims` decides if a phrase is about orders (codes as GigaAM writes them, brands, seasons, an answer to
   a pending proposal) → `Director._run_fashion` → `/api/agent/message` in the shared dialog (kv fashion_conversation,
   adopted by every app page); spoken text = the app's short `speech`. Dev core: set another `fashion_port`.
+  Factory PDFs: `fashion/app/pdf_order.py` (pdfplumber table + photos → factory-style workbook → analyze_workbook).
+  Russian: `fashion/app/i18n_ru.py` middleware (FASHION_LANG=ru) — add phrases there, never edit upstream templates.
+- The computer (from jarvis-os): `tools/machine.py` (processes, disk, diagnostics, brightness, appearance, audio
+  devices, network, power), `tools/desk.py` (clipboard, media, OCR), `tools/daily.py` (weather, briefing) with fast
+  routes in `router._caps_route`; one risk per tool (look = LOW, end/delete = MODERATE, power = HIGH). Never run the
+  changing ones against the real desktop from tests; `screen_locked()` (hyprlock) blocks capture and typing.
+- Dictation (`jarvis/dictation.py`): `jarvis dictate` / Super+Alt+D / «Джарвис, диктовка»; while on, `_wake_text`
+  accepts every phrase and `_after_stt` types it (wtype) into the window recorded at start; «Джарвис, …» stays a command.
 - Memory (`jarvis/memory.py`, table `memory`): «запомни, что …» / «что ты обо мне помнишь» / «забудь, что …»;
   `memory_line` goes into the state line of every AI request; the AI may save lasting facts itself (memory_save).
 - Living speech: `router.simplify` strips fillers / «можешь» / infinitives so «Мне нужно открыть папку с колледжем»

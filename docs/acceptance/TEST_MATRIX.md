@@ -334,7 +334,7 @@ The client's Excel assistant (factories, customers AA / IDS / SS, markups, depos
 | Requirement (from the client's brief) | Status | Evidence |
 |---|---|---|
 | Factory Excel → items, photos, sizes, prices, customers, percentages; a newer file compared with the ledger | VERIFIED LOCAL (synthetic factory workbook) | fashion suite 396 passed, 11 skipped (the 11 need the client's real workbook, not on this machine); live upload → review → «Сохранить в учёт» in the browser |
-| Factory PDF | PARTIAL | articles in a PDF are matched with the orders; a PDF alone does not create orders |
+| Factory PDF (proforma) creates orders like Excel: items, photos, sizes, customers, the factory's % | VERIFIED LOCAL (synthetic proforma) | test_pdf_order.py: the PDF gives exactly the Excel fixture's analysis; upload → review (photos) → saved; a scan stays a reference |
 | Orders split per customer (separate Excel + PDF each, only that customer's lines, leak-checked) | VERIFIED LOCAL | test_customer_documents_contain_only_that_customer_and_match (PDF had black boxes for Cyrillic on Linux → Noto/Liberation/DejaVu fonts added) |
 | Customer markups independent of the factory's; 50 % deposits of customer and factory sums; what the owner adds | VERIFIED LOCAL | fashion settlement tests; live: «IDS 35 %» → deposit €1 125 → €1 518.75, owner €1 215 → €821.25 |
 | Add / cancel items, sizes, readiness, shipments, payments | VERIFIED LOCAL (upstream) | fashion suite (ledger actions, Ready lists, shipments, payments) |
@@ -345,3 +345,17 @@ The client's Excel assistant (factories, customers AA / IDS / SS, markups, depos
 | «АА» spoken as letters | NOT RELIABLE | GigaAM wrote «эй эй» as «я ей» and «А-А» as nothing (synthetic voice); a customer alias the owner says is the workaround |
 | Its own JARVIS commands stay JARVIS's («открой папку заказы», «который час») | VERIFIED LOCAL | test_jarvis_keeps_its_own_commands |
 | With the real owner's voice and real factory files | NOT VERIFIED | needs the client |
+| Russian interface of the whole orders app | VERIFIED LOCAL | test_i18n_ru.py; all 43 pages scanned: 998 English strings → 79 (data, the browser's «No file chosen», a few JS labels) |
+
+## The computer and the desk, from morph-rq/jarvis-os (2026-10-25)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Weather (Open-Meteo, no key; city from memory), daily briefing (weather, reminders, scheduled messages, decisions waiting, «Заказы» proposals, failed task, low battery) | VERIFIED LIVE (read-only) | Москва / Лиссабон answered in 0.8 s; «в Москве» → Москва by population (was the hamlet Москверо) |
+| What slows the computer (programs summed), end a program (MODERATE; never session/system/JARVIS processes) | VERIFIED LOCAL | test_ending_a_program_never_touches_session_or_jarvis (a real child process; zombies count as ended) |
+| Disk space + what can be cleaned; cleanup of caches only (MODERATE; Trash only when asked; links not followed) | VERIFIED LOCAL | test_cleanup_empties_only_the_chosen_caches; live scan: 3.9 GB of caches here |
+| Health check: CPU, memory, disks, battery wear, temperatures, failed services, journal errors | VERIFIED LIVE (read-only) | 0.5 s on this laptop |
+| Brightness and keyboard backlight, theme light/dark/by name, wallpaper, do-not-disturb, night light, speakers/headphones/microphone, internet/Wi-Fi/Bluetooth, power profile, sleep/reboot/power off (HIGH), music, clipboard (password-manager copies refused), local OCR of the screen | VERIFIED LOCAL (parsers on real output; read-only calls live) | test_machine.py (41); changing the real desktop is not done in tests |
+| A locked screen is said at once (screenshot, OCR, dictation never types into the lock screen) | VERIFIED LOCAL | test_locked_screen_is_said_at_once, test_never_types_into_the_lock_screen (grim hung > 10 s while hyprlock was on) |
+| Dictation into the window in focus (Super+Alt+D, «Джарвис, диктовка»), commands still work, no Enter in terminals | VERIFIED MOCK | test_dictation.py (10) through the companion's real voice path; not typed on the real desktop yet |
+| Not ported yet | NOT IMPLEMENTED | calendar + ICS, meeting notes, Telegram bot to talk to JARVIS from the phone, proactive notices, smart home, maps, documents engine, Gemini Live (JARVIS is Claude-only, ADR-005) |
