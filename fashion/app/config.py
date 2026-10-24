@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     # Recovery: snapshot interval and how many verified local snapshots to keep (remote archives are never auto-deleted).
     recovery_interval_hours: int = 6
     recovery_keep_local: int = 30
+    # The JARVIS window that embeds this app (its «Заказы» workspace), e.g. http://127.0.0.1:8791; set by JARVIS.
+    jarvis_origin: str = ""
     model_config = SettingsConfigDict(env_prefix="FASHION_", env_file=".env")
 
     @property

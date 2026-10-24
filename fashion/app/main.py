@@ -125,6 +125,15 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
 
 
 @app.middleware("http")
+async def refuse_cross_site_writes(request: Request, call_next):
+    """A web page from another site open in the same browser must not change data here (CSRF): an unsafe request
+    the browser marks as cross-site is refused. The app's own pages, an embedding JARVIS window and scripts are fine."""
+    if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("sec-fetch-site") == "cross-site":
+        return Response("Cross-site request refused", status_code=403)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def protect_hosted_app(request: Request, call_next):
     """Require HTTP Basic credentials only when deployment credentials are set."""
     username = settings.app_username.strip()
@@ -2335,3 +2344,5 @@ from app.voice import install_voice  # noqa: E402
 install_voice(app, templates, context, get_db)
 from app.copilot import install_copilot  # noqa: E402
 install_copilot(app, templates, context, get_db)
+from app.jarvis_routes import install_jarvis  # noqa: E402
+install_jarvis(app, get_db)

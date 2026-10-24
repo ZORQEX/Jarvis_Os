@@ -455,9 +455,9 @@
   });
   $('[data-history-list]', history_).addEventListener('click', (e) => {
     const b = e.target.closest('[data-conv]'); if (!b) return;
-    conversation = b.dataset.conv; local.set('copilot-conversation', conversation); history_.open = false; loadConversation();
+    conversation = b.dataset.conv; local.set('copilot-conversation', conversation); history_.open = false; loadConversation(); tellJarvis();
   });
-  $('[data-new-chat]', dock).addEventListener('click', () => { conversation = newId(); local.set('copilot-conversation', conversation); local.set('copilot-last-screen', ''); loadConversation(); input.focus(); });
+  $('[data-new-chat]', dock).addEventListener('click', () => { conversation = newId(); local.set('copilot-conversation', conversation); local.set('copilot-last-screen', ''); loadConversation(); tellJarvis(); input.focus(); });
 
   /* ---------- Hints (grounded, at most one shown, dismissals remembered) ---------- */
   (async () => {
@@ -842,6 +842,32 @@
       else if (!dock.hidden && !document.querySelector('dialog[open]')) closeDock();
     }
   });
+
+  /* ---------- Inside JARVIS (its «Заказы» workspace) ----------
+   * JARVIS hears the owner and sends spoken requests about orders to /api/agent/message itself, with this same
+   * conversation; it speaks the answer with its own voice and then tells this page to show the turn. Messages are
+   * accepted only from the JARVIS window's origin (FASHION_JARVIS_ORIGIN). */
+  const jarvis = config.jarvis && window.parent !== window ? config.jarvis : null;
+  function tellJarvis() {
+    if (jarvis) window.parent.postMessage({ type: 'fashion.state', conversation, path: location.pathname + location.search,
+      title: ($('main h1')?.textContent || document.title).trim().slice(0, 120) }, jarvis);
+  }
+  if (jarvis) {
+    document.body.classList.add('in-jarvis');
+    [mic, $('[data-dock-mic]', dock)].forEach((b) => { if (!b) return;
+      b.classList.remove('is-off'); b.title = 'Говорить с JARVIS (скажите «Джарвис, …» или нажмите)';
+      b.addEventListener('click', (e) => { e.stopImmediatePropagation(); window.parent.postMessage({ type: 'fashion.listen' }, jarvis); }, true); });
+    window.addEventListener('message', (e) => {
+      if (e.origin !== jarvis || !e.data || typeof e.data !== 'object' || e.data.type !== 'jarvis.turn') return;
+      if (/^[a-f0-9]{16}$/.test(e.data.conversation || '') && e.data.conversation !== conversation) {
+        conversation = e.data.conversation; local.set('copilot-conversation', conversation);
+      }
+      if (e.data.navigate) { navigate(e.data.navigate); return; }      // the dock re-opens there with this conversation
+      if (e.data.committed && !slot) { location.reload(); return; }    // the page under the dock shows the new figures
+      openDock(); loadConversation();
+    });
+    tellJarvis();
+  }
 
   refreshContext();
   chips();
