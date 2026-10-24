@@ -73,6 +73,9 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     from .skills import SkillCreate, SkillList, SkillRun     # abilities JARVIS builds for itself
     for t in (SkillList(config), SkillRun(config), SkillCreate(manager, config)):
         registry.tools[t.spec.id] = t
+    from .improve import ImproveIssues, SelfImprove, SelfImproveApply     # JARVIS improves its own code
+    for t in (ImproveIssues(db), SelfImprove(manager, config), SelfImproveApply(config)):
+        registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
     director = Director(db=db, bus=bus, audit=audit, tasks=tasks, policy=policy, approvals=approvals,
                         gateway=gateway, ai=claude, scheduler=scheduler, config=config,

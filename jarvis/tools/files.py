@@ -44,7 +44,9 @@ class SearchFiles(Tool):
             "query": {"type": "string", "minLength": 1, "maxLength": 200},
             "folder": {"type": "string", "maxLength": 500,
                        "description": "Optional absolute folder to limit the search to"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+            "kind": {"type": "string", "enum": ["any", "dir", "file"], "default": "any",
+                     "description": "Only folders (dir) or only files (file)"}}},
         risk=Risk.LOW, side_effects="none", timeout_s=20,
         verification="Каждый найденный путь проверен на существование",
     )
@@ -97,6 +99,9 @@ class SearchFiles(Tool):
                         if is_dir and name not in SKIP_DIRS:
                             stack.append(Path(e.path))
                         n = _norm(name)
+                        kind = args.get("kind") or "any"
+                        if kind != "any" and (kind == "dir") != is_dir:
+                            continue
                         if all(w in n for w in words):
                             try:
                                 st = e.stat(follow_symlinks=False)

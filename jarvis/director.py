@@ -348,7 +348,7 @@ class Director:
             elif route.kind == "skill":
                 await self._run_skill_route(tid, cid, route)
             elif route.kind == "search_open":
-                await self._run_search_open(tid, cid, route)
+                await self._run_search_open(tid, cid, route, text)
             elif route.kind == "comms":
                 if self.comms is None:
                     self._finish(tid, cid, "Модуль связи не подключён в этой сборке.", meta={"route": "local"})
@@ -470,11 +470,22 @@ class Director:
                 text += f" {last[:300]}"
         self._finish(tid, cid, text, meta=meta, result={"status": "ok", "step_id": out.step_id})
 
-    async def _run_search_open(self, tid, cid, route: rt.Route) -> None:
+    async def _run_search_open(self, tid, cid, route: rt.Route, text: str = "") -> None:
         out = await self.execute(tid, cid, "search_files", route.args, route.why)
         if out.status != "ok":
             return self._finish(tid, cid, self.outcome_text(out), failed=True, meta={"route": "local"})
         hits = out.result.data["results"]
+        folder = route.args.get("kind") == "dir"
+        if folder and not hits and text and self.agency:
+            # «Открой папку College» for «колледж»: the name was said differently — the conversation finds it.
+            return await self.agency.run(self, tid, cid, text)
+        if folder and len(hits) > 1:
+            q = route.args["query"].casefold()
+            named = [h for h in hits if h["name"].casefold().replace("ё", "е").startswith(q)]
+            top = min((len(Path(h["path"]).parts) for h in named), default=0)
+            best = [h for h in named if len(Path(h["path"]).parts) == top]
+            if len(best) == 1:
+                hits = best                    # «колледж», not «колледж/Лабораторные/колледж-1»
         if len(hits) == 1:
             out2 = await self.execute(tid, cid, "open_path", {"path": hits[0]["path"]}, "Единственный результат поиска")
             return self._finish(tid, cid, self.outcome_text(out2), meta={"route": "local"},

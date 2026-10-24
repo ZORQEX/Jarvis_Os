@@ -32,6 +32,12 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   Numbers/symbols → words: `voice/textnorm.py` (loaded by path in the workers). Each runs in its own venv under
   `~/.local/share/jarvis/` (install.sh). ONNX sessions: few threads, no spinning (4–6× less CPU on this laptop). Browser VAD is `web/js/core/vad.js` (unit-tested; clicks ≠ voice);
   barge-in = `voice.barge` (stops speech only, never the work). `tests/ui/voice-mic.mjs` feeds a WAV as the mic.
+- Self-improvement (`jarvis/improve.py`): `collect_issues` ranks problems from JARVIS's own records (repeats, failures,
+  slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,
+  then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Settings →
+  «Самоулучшение». Tests use a temporary repo (monkeypatch `REPO`/`WORK`) — never the real one.
+- Living speech: `router.simplify` strips fillers / «можешь» / infinitives so «Мне нужно открыть папку с колледжем»
+  runs locally; only tool/search/reply/answer/ui routes are taken from the simplified phrase (never comms or control).
 - Several tasks in one request: `router.split_tasks` (sequence words only: «первое / далее / потом / во-вторых», «1) 2)»;
   never inside quotes or a message body) → `Director._submit_batch` runs them one after another. «Стоп» / Esc / barge-in
   stop only the answer being heard (`SpeechManager.playlog` knows what plays when); other tasks keep running.

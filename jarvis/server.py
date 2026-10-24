@@ -726,6 +726,10 @@ class Server:
                 res = await audio_output(fix=bool(data.get("fix")))
                 if data.get("fix"):
                     self.core.audit.write("voice.output_fixed", volume=res.get("volume_pct"))
+            elif typ == "improve.issues":         # Settings → Самоулучшение: problems from JARVIS's own records
+                from .improve import collect_issues, pending_branches
+                res = {"issues": collect_issues(self.core.db, min(60.0, max(1.0, float(data.get("days") or 7)))),
+                       "branches": pending_branches()}
             elif typ == "voice.turns":
                 res = d.speech.turns(int(data.get("limit", 20))) if d.speech else []
             elif typ == "tool.run":

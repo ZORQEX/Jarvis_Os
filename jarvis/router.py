@@ -167,6 +167,17 @@ def strip_wake(text: str) -> str:
 
 
 def route(text: str, ctx: dict | None = None) -> Route | None:
+    r = _route(text, ctx)
+    if r is None:
+        s = simplify(norm(text))
+        if s:
+            r2 = _route(s, ctx)
+            if r2 and r2.kind in ("tool", "search_open", "reply", "answer", "ui"):
+                return r2                    # a quick command said in living speech
+    return r
+
+
+def _route(text: str, ctx: dict | None = None) -> Route | None:
     ctx = ctx or {}
     raw = strip_wake(text)
     t = norm(text)
@@ -363,7 +374,49 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         if fm:
             return Route("search_open", "search_files", {"query": _clean_query(fm.group(1))},
                          why="Поиск файла, затем открытие")
+        dm = re.fullmatch(r"(?:папк[уаи]|folder)\s+(?:с\s+|со\s+|под названием\s+|с названием\s+|named\s+)?(.+)", target)
+        if dm and len(dm.group(1)) <= 60:
+            q = " ".join(_stem(w) for w in _clean_query(dm.group(1)).split())
+            return Route("search_open", "search_files", {"query": q, "kind": "dir"}, why="Поиск папки, затем открытие")
     return None
+
+
+_ENDINGS = re.compile(r"(?:ами|ями|ого|его|ому|ему|ыми|ими|ом|ем|ой|ей|ою|ею|ах|ях|ам|ям|ую|юю|ые|ие|ый|ий|ы|и|а|я|у|ю|е)$")
+
+
+def _stem(word: str) -> str:
+    """«колледжем» → «колледж», «лабораторные» → «лабораторн»: a folder is found whatever case it was said in."""
+    w = word.casefold()
+    return _ENDINGS.sub("", w) if len(w) >= 6 and re.fullmatch(r"[а-яё]+", w) else w
+
+
+# --- living speech → the same quick commands ----------------------------------------------------------------------
+# «Мне нужно, знаешь что, открыть папку с колледжем», «Слушай, открой браузер», «Можешь открыть телеграм?» went to the
+# AI and waited 5–10 s for what JARVIS does by itself in a fraction of a second (measured 2026-10-24).
+_FILLER = re.compile(r"^(?:(?:слушай|послушай|смотри|хорошо|окей|ок|ладно|так|ну|а|и|теперь|давай|короче|в общем|"
+                     r"знаешь что|знаешь|пожалуйста|будь добр|будь любезен|э+|м+|джарвис)(?:\s+|$))+")
+_ASK = re.compile(r"^(?:(?:мне\s+)?(?:нужно|надо|хочу(?: чтобы ты)?)|(?:ты\s+)?(?:можешь|сможешь|не мог бы ты)|"
+                  r"можно|попробуй)\s+")
+_INF = {"открыть": "открой", "найти": "найди", "запустить": "запусти", "закрыть": "закрой", "показать": "покажи",
+        "сделать": "сделай", "включить": "включи", "выключить": "выключи", "поставить": "поставь",
+        "переключиться": "переключись", "перейти": "перейди", "записать": "запиши", "напомнить": "напомни",
+        "убавить": "убавь", "прибавить": "прибавь", "поискать": "поищи"}
+
+
+def simplify(t: str) -> str:
+    """A normalised phrase without the words around the command (see above); «» if nothing changes."""
+    s = t
+    for _ in range(4):
+        s2 = _FILLER.sub("", _ASK.sub("", _FILLER.sub("", s)))
+        if s2 == s:
+            break
+        s = s2
+    head, _, rest = s.partition(" ")
+    if head in _INF:
+        s = (_INF[head] + " " + rest).strip()
+    s = re.sub(r"^(\w+) мне ", r"\1 ", s)
+    s = re.sub(r" (?:пожалуйста|please)$", "", s).strip()
+    return s if s != t else ""
 
 
 # Workspaces of the JARVIS window. «Открой Telegram» still opens the Telegram app; the window's own Telegram

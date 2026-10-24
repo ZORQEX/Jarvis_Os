@@ -297,3 +297,14 @@ Measured on this laptop (i5-1235U, 23 GB, no GPU); samples and scripts in the se
 | Waiting for «Джарвис»: the second recogniser ran on room noise | FIXED | only for a phrase with a wake-like word (test_wake_like_words_only_run_the_second_recogniser) |
 | «Джарвис— …» (dash after the name) dropped by the companion | FIXED → VERIFIED LIVE (recorded voice) | test_name_followed_by_a_dash_is_addressed; three tasks in one phrase done in order |
 
+## Self-improvement and living speech (2026-10-24)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Problem journal from JARVIS's own records (repeats within 2 min, failed tasks by error, spoken answers > 6 s, not heard, «не понял») | VERIFIED LOCAL | test_journal_finds_repeats_failures_and_slow_answers; real data: 32 slow answers (worst 42.8 s, messages before the local parser), 4 WhatsApp contact-search failures |
+| Change on a separate branch/worktree, the running copy untouched, JARVIS runs the suite itself | VERIFIED MOCK | test_change_happens_on_a_separate_tested_branch_and_applies_only_on_request (scripted Claude Code, temporary repo) |
+| Failing tests are never applied; only `improve/…` branches | VERIFIED MOCK | test_failing_tests_are_never_applied |
+| Both steps need the person's confirmation (HIGH risk) | VERIFIED LOCAL | test_tools_need_the_persons_confirmation |
+| Living speech → local command (no AI, no wait) | VERIFIED LOCAL | test_living_speech.py (7 phrasings; negation, «стоп», messages unchanged) |
+| «Открой папку с колледжем» opens the folder itself, any grammatical case; unknown name → the conversation | VERIFIED LOCAL | test_the_folder_itself_opens_not_a_folder_inside_it |
+
