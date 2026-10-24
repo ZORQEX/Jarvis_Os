@@ -125,6 +125,19 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
 
 
 @app.middleware("http")
+async def russian_pages(request: Request, call_next):
+    """FASHION_LANG=ru (set by JARVIS): the English pages are shown in Russian (app/i18n_ru.py)."""
+    response = await call_next(request)
+    if settings.lang.strip().lower() != "ru" or not response.headers.get("content-type", "").startswith("text/html"):
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    from app.i18n_ru import translate_html
+    text = translate_html(body.decode("utf-8", "replace")).replace('<html lang="en"', '<html lang="ru"', 1)
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+    return Response(text, status_code=response.status_code, headers=headers, media_type="text/html")
+
+
+@app.middleware("http")
 async def refuse_cross_site_writes(request: Request, call_next):
     """A web page from another site open in the same browser must not change data here (CSRF): an unsafe request
     the browser marks as cross-site is refused. The app's own pages, an embedding JARVIS window and scripts are fine."""

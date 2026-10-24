@@ -66,6 +66,7 @@ class FashionService:
                     "FASHION_AI_PROVIDER": "claude-code", "FASHION_PUBLIC_BASE_URL": self.url,
                     "FASHION_JARVIS_ORIGIN": f"http://127.0.0.1:{self.config.port}",
                     "FASHION_CLAUDE_MODEL": str(getattr(self.config, "fashion_claude_model", "") or "sonnet"),
+                    "FASHION_LANG": "ru",
                     "PYTHONUNBUFFERED": "1"})
         return env
 
