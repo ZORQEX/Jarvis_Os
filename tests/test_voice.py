@@ -82,7 +82,7 @@ async def test_fast_path_answers_without_any_model_call(core, speech):
 def test_system_status_no_longer_catches_every_skolko():
     from jarvis.router import route
     assert route("сколько будет 25% от 800").kind == "answer"
-    assert route("сколько места на диске").tool == "system_info"
+    assert route("сколько места на диске").tool == "disk_usage"
 
 
 # ---------------------------------------------------------------- sentence buffer

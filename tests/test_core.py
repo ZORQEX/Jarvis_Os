@@ -43,7 +43,7 @@ def test_recover_after_restart_blocks_running(core):
 # ---------------------------------------------------------------- router (no model calls)
 @pytest.mark.parametrize("text,tool,args", [
     ("Джарвис, состояние системы", "system_info", {}),
-    ("сколько места на диске?", "system_info", {}),
+    ("сколько места на диске?", "disk_usage", {}),          # free space + what can be cleaned
     ("громкость 30", "volume_set", {"level": 30}),
     ("сделай громкость тридцать", "volume_set", {"level": 30}),
     ("тише", "volume_set", {"delta": -10}),

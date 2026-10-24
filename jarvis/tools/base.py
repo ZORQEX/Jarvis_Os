@@ -156,6 +156,15 @@ class CmdResult:
     ms: float
 
 
+def screen_locked() -> bool:
+    """The session is locked (hyprlock): screen capture blocks until it is unlocked (measured: grim hung > 10 s)."""
+    import subprocess
+    try:
+        return subprocess.run(["pgrep", "-x", "hyprlock"], capture_output=True, timeout=2).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 async def run_cmd(argv: list[str], timeout: float = 10.0, max_out: int = 200_000,
                   env: dict | None = None, detach: bool = False, cwd: str | None = None) -> CmdResult:
     t0 = time.perf_counter()

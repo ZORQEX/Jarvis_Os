@@ -56,6 +56,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     tools += [FolderCreate(), FileWrite(config), FolderList(), FileTrash(), ShellRead()]   # quick file actions
     from .tools.window import WindowShow
     tools.append(WindowShow(bus))               # show a workspace of the JARVIS window (the server sets presence)
+    from .tools import desk, machine
+    tools += [cls() for cls in machine.TOOLS + desk.TOOLS]   # the computer and the desk (ported from jarvis-os)
     tools += extra_tools or []
     registry = Registry(tools)
     gateway = Gateway(registry, policy, approvals, tasks, bus, audit, config)
@@ -83,6 +85,9 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     if fashion.enabled():
         for t in (FashionAsk(fashion), FashionAttach(fashion, config)):
             registry.tools[t.spec.id] = t
+    from .tools.daily import DailyBriefing, Weather
+    for t in (Weather(db), DailyBriefing(db, fashion if fashion.enabled() else None)):
+        registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
     director = Director(db=db, bus=bus, audit=audit, tasks=tasks, policy=policy, approvals=approvals,
                         gateway=gateway, ai=claude, scheduler=scheduler, config=config,

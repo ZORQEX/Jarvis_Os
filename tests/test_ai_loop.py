@@ -22,7 +22,8 @@ def fake(core):
 
 async def test_model_tool_call_runs_through_gateway(core, fake):
     g = fake([[("system_info", {}), "Свободно много места."]])
-    tid = await core.director.submit("проверь, всё ли в порядке с компьютером")
+    # («проверь, всё ли в порядке с компьютером» is now a local health check, without the AI)
+    tid = await core.director.submit("хватит ли компьютеру ресурсов, чтобы монтировать видео?")
     t = await wait_done(core, tid)
     assert t["state"] == S.COMPLETED
     assert [s["tool_id"] for s in t["steps"]] == ["agent_chat", "system_info"]

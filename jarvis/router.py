@@ -185,6 +185,161 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
     return r
 
 
+# Programs people close by name («закрой телеграм»): the spoken name → what process_end looks for.
+CLOSE_APPS = {"телеграм": "telegram", "telegram": "telegram", "браузер": "chromium", "хром": "chromium",
+              "хромиум": "chromium", "chromium": "chromium", "firefox": "firefox", "файрфокс": "firefox",
+              "спотифай": "spotify", "spotify": "spotify", "вскод": "code", "vs code": "code", "обсидиан": "obsidian",
+              "obsidian": "obsidian", "дискорд": "discord", "discord": "discord", "стим": "steam", "steam": "steam",
+              "зум": "zoom", "zoom": "zoom", "либре офис": "soffice", "libreoffice": "soffice", "mpv": "mpv"}
+_ON, _OFF = r"\b(?:включи|зажги|вруби)\b", r"\b(?:выключи|отключи|погаси|убери|выруби)\b"
+
+
+def _caps_route(t: str) -> Route | None:
+    """Everyday computer commands without the AI: weather, briefing, what slows the computer, disk space and
+    cleanup, health check, brightness and the keyboard backlight, theme / wallpaper / do-not-disturb / night light,
+    sound devices, internet, power, music, the clipboard, text on the screen."""
+    def tool(tid, args, why):
+        return Route("tool", tid, args, why=why)
+
+    # weather and the day
+    m = re.search(r"\bпогод\w*(?: (?:сейчас|сегодня|завтра|на улице|на неделю))*(?: (?:в|во) (?P<city>[\w -]+?))?"
+                  r"(?: (?:сейчас|сегодня|завтра|на неделю))?$", t)
+    if m or re.fullmatch(r"(?:что|как) на улице|(?:холодно|тепло|жарко) ли (?:сегодня|сейчас|на улице)|"
+                         r"нужен ли (?:сегодня )?зонт|будет ли (?:сегодня |завтра )?дождь|what s the weather|weather", t):
+        args = {"city": m.group("city").strip()} if m and m.group("city") else {}
+        if m and "недел" in t:
+            args["days"] = 7
+        return tool("weather", args, "Open-Meteo")
+    if re.fullmatch(r"(?:дай |сделай |покажи |расскажи |какая )?(?:утренн\w+ |дневн\w+ |вечерн\w+ )?(?:брифинг|сводк\w+)"
+                    r"(?: на сегодня| дня| на день)?|что (?:у меня )?(?:сегодня|на сегодня)(?: интересного| важного| по плану)?|"
+                    r"какие (?:у меня )?планы на сегодня|(?:daily )?briefing", t):
+        return tool("daily_briefing", {}, "Погода, напоминания, очередь сообщений, решения")
+
+    # what slows the computer, programs
+    if re.search(r"(?:что|кто|какая программа|какие программы|какой процесс|какие процессы)(?: сейчас)? (?:тормоз\w+|груз\w+|"
+                 r"нагруж\w+|ест|едят|жр\w+|занима\w+)|почему (?:всё |все |компьютер |ноутбук |комп )?(?:тормоз\w+|лагает|виснет)|"
+                 r"топ процессов|какие (?:программы|процессы) (?:запущены|работают)", t):
+        return tool("processes", {"sort": "memory" if re.search(r"памят|оператив|ram", t) else "cpu"}, "/proc")
+    m = re.fullmatch(r"(?:закрой|заверши|убей|выключи) (?:программу |процесс |приложение )(?P<name>[\w .-]{2,40}?)"
+                     r"(?P<force> принудительно)?", t) or \
+        re.fullmatch(r"(?:закрой|заверши|убей|выруби) (?P<name>" + "|".join(sorted(CLOSE_APPS, key=len, reverse=True))
+                     + r")(?P<force> принудительно)?", t)
+    if m:
+        name = CLOSE_APPS.get(m.group("name"), m.group("name"))
+        return tool("process_end", {"name": name, **({"force": True} if m.group("force") else {})}, "Завершить программу")
+
+    # disk
+    if re.search(r"(?:почисти|очисти|освободи)(?: мне)? (?:диск|место|кэш\w*|компьютер от мусора|мусор)", t):
+        return tool("disk_cleanup", {}, "Только кэши программ — с вашего подтверждения")
+    if re.fullmatch(r"(?:очисти|почисти|освободи) корзину", t):
+        return tool("disk_cleanup", {"items": ["trash"]}, "Корзина — с вашего подтверждения")
+    if re.search(r"(?:сколько|много ли|есть ли)(?: у меня)? (?:свободного )?места(?: на диске| на компьютере| на ноутбуке)?|"
+                 r"место на диске|диск (?:заполнен|забит)|(?:что|чем) занят диск|disk space", t):
+        return tool("disk_usage", {}, "Файловая система")
+
+    # health
+    if re.search(r"(?:проверь|продиагностируй|протестируй) (?:систему|компьютер|ноутбук|комп)|диагностик\w*|"
+                 r"(?:все|всё) ли (?:в порядке|нормально|хорошо) с (?:компьютером|системой|ноутбуком)|"
+                 r"почему (?:компьютер|ноутбук|комп) (?:греется|шумит)|health check", t):
+        return tool("diagnostics", {}, "/proc, /sys, systemctl, журнал")
+
+    # brightness, keyboard backlight
+    if re.search(r"подсветк\w* клавиатур\w*|клавиатур\w* подсветк\w*", t):
+        if re.search(_OFF, t):
+            return tool("brightness", {"target": "keyboard", "on": False}, "brightnessctl")
+        if re.search(r"ярче|сильнее|больше|прибавь", t):
+            return tool("brightness", {"target": "keyboard", "delta": 34}, "brightnessctl")
+        if re.search(r"тусклее|слабее|меньше|убавь", t):
+            return tool("brightness", {"target": "keyboard", "delta": -34}, "brightnessctl")
+        return tool("brightness", {"target": "keyboard", "on": True}, "brightnessctl")
+    m = re.search(r"яркост\w* (?:экрана )?(?:на )?(\d{1,3})(?: процент\w*|%)?$", t)
+    if m and int(m.group(1)) <= 100:
+        return tool("brightness", {"target": "screen", "level": int(m.group(1))}, "brightnessctl")
+    if re.search(r"(?:сделай )?(?:экран )?(?:по)?ярче|(?:прибавь|увеличь|добавь) яркост\w*|яркост\w* (?:на максимум|выше)", t):
+        return tool("brightness", {"target": "screen", "level": 100} if "максимум" in t else
+                    {"target": "screen", "delta": 15}, "brightnessctl")
+    if re.search(r"(?:сделай )?(?:экран )?(?:по)?темнее|(?:убавь|уменьши|снизь) яркост\w*|яркост\w* (?:на минимум|ниже)", t):
+        return tool("brightness", {"target": "screen", "level": 10} if "минимум" in t else
+                    {"target": "screen", "delta": -15}, "brightnessctl")
+
+    # look
+    if re.search(r"(?:тёмн|темн)\w* тем\w*", t) and not re.search(_OFF, t):
+        return tool("appearance", {"action": "dark"}, "Темы Omarchy")
+    if re.search(r"светл\w* тем\w*", t) and not re.search(_OFF, t):
+        return tool("appearance", {"action": "light"}, "Темы Omarchy")
+    m = re.fullmatch(r"(?:смени|поменяй|поставь|включи) тему(?: на)? (?P<name>[\w -]{3,30})", t)
+    if m:
+        return tool("appearance", {"action": "theme", "theme": m.group("name")}, "Темы Omarchy")
+    if re.fullmatch(r"(?:какие (?:есть |у меня )?темы|список тем|смени тему|поменяй тему)", t):
+        return tool("appearance", {"action": "themes"}, "Темы Omarchy")
+    if re.search(r"(?:смени|поменяй|следующ\w+|друг\w+|новы\w+) обо\w+|обо\w+ (?:смени|поменяй)", t):
+        return tool("appearance", {"action": "wallpaper"}, "Обои Omarchy")
+    if re.search(r"не беспокоить|без уведомлений|тишин\w+ уведомлен", t) or re.search(_OFF + r" уведомления", t):
+        off = bool(re.search(_OFF + r" (?:режим )?не беспокоить", t))
+        return tool("appearance", {"action": "dnd_off" if off else "dnd_on"}, "mako")
+    if re.search(_ON + r" уведомления", t):
+        return tool("appearance", {"action": "dnd_off"}, "mako")
+    if re.search(r"ночн\w+ (?:режим|свет|подсветк)|тепл\w+ экран|night light", t):
+        return tool("appearance", {"action": "night_off" if re.search(_OFF, t) else "night_on"}, "hyprsunset")
+
+    # sound devices
+    m = re.search(r"(?:переключи|выведи|пусти|переведи) (?:звук|аудио) (?:на|в) (?P<name>[\w -]{2,40})$", t)
+    if m:
+        return tool("audio_devices", {"action": "output", "name": m.group("name")}, "PipeWire (wpctl)")
+    m = re.search(r"(?:переключи|смени|поменяй) микрофон (?:на )?(?P<name>[\w -]{2,40})$", t)
+    if m:
+        return tool("audio_devices", {"action": "input", "name": m.group("name")}, "PipeWire (wpctl)")
+    if re.search(r"(?:какие|список)(?: есть)? (?:звуковые|аудио) ?устройств\w*|куда (?:идет|выводится) звук|какие микрофоны", t):
+        return tool("audio_devices", {"action": "list"}, "PipeWire (wpctl)")
+
+    # internet
+    if re.search(r"(?:есть ли|работает ли|проверь|пропал|нет|не работает|нету) интернет\w*|интернет\w* (?:работает|есть|"
+                 r"пропал|не работает|отвалился)|(?:какой|проверь) пинг|(?:какой|к какому) (?:у меня )?(?:wi ?fi|вайфа\w+|"
+                 r"вай фа\w+)|подключен ли (?:интернет|wi ?fi|вайфай)", t):
+        return tool("network_status", {}, "Соединение с интернетом, iwctl")
+
+    # power
+    if re.search(r"режим\w* (?:энергосбережени\w+|экономи\w+)|экономь (?:батарею|заряд)|сбереги батарею", t):
+        return tool("power_profile", {"profile": "power-saver"}, "powerprofilesctl")
+    if re.search(r"режим\w* (?:производительност\w+|максимальн\w+ мощност\w+)|максимальн\w+ производительност", t):
+        return tool("power_profile", {"profile": "performance"}, "powerprofilesctl")
+    if re.search(r"сбалансированн\w+ (?:режим|питани)|обычн\w+ режим питания", t):
+        return tool("power_profile", {"profile": "balanced"}, "powerprofilesctl")
+    if re.search(r"какой (?:сейчас )?режим питания", t):
+        return tool("power_profile", {"profile": "status"}, "powerprofilesctl")
+    if re.fullmatch(r"(?:выключи|погаси|отключи) (?:экран|монитор|дисплей)", t):
+        return tool("power_profile", {"profile": "screen-off"}, "Hyprland DPMS")
+    if re.search(r"(?:переведи|отправь|уложи) (?:компьютер|ноутбук|комп) (?:в сон|спать|в спящий режим)|усыпи (?:компьютер|ноутбук|комп)|"
+                 r"^спящий режим$", t):
+        return tool("power_action", {"action": "suspend"}, "systemd — с вашего подтверждения")
+    if re.fullmatch(r"перезагрузи (?:компьютер|ноутбук|комп|систему)|перезагрузка (?:компьютера|системы)", t):
+        return tool("power_action", {"action": "reboot"}, "systemd — с вашего подтверждения")
+    if re.fullmatch(r"(?:выключи|выруби|отключи) (?:компьютер|ноутбук|комп)|выключение компьютера", t):
+        return tool("power_action", {"action": "poweroff"}, "systemd — с вашего подтверждения")
+    if re.fullmatch(r"выйди из (?:сеанса|системы|аккаунта)", t):
+        return tool("power_action", {"action": "logout"}, "uwsm — с вашего подтверждения")
+
+    # music and video
+    if re.search(r"(?:следующ\w+|друг\w+) (?:трек|песн\w+|композици\w+|видео)|переключи (?:трек|песню)|next (?:track|song)", t):
+        return tool("media", {"action": "next"}, "playerctl")
+    if re.search(r"предыдущ\w+ (?:трек|песн\w+|композици\w+)|(?:верни|включи) (?:прошл\w+|предыдущ\w+) (?:песн\w+|трек)", t):
+        return tool("media", {"action": "previous"}, "playerctl")
+    if re.search(r"(?:музык\w*|песн\w+|трек|видео|плеер) на паузу|пауз\w+ (?:музык\w*|песн\w+|видео)|(?:останови|выключи) "
+                 r"(?:музыку|песню|плеер)|pause (?:music|the music)", t):
+        return tool("media", {"action": "pause"}, "playerctl")
+    if re.fullmatch(r"(?:включи|продолжи|возобнови) (?:музыку|воспроизведение|песню|трек)|play music|resume music", t):
+        return tool("media", {"action": "play"}, "playerctl")
+    if re.search(r"что (?:сейчас )?(?:играет|за (?:песня|трек|музыка))|какая (?:сейчас )?(?:песня|музыка) играет", t):
+        return tool("media", {"action": "status"}, "playerctl")
+
+    # clipboard, text on the screen
+    if re.fullmatch(r"(?:что|покажи что) (?:у меня )?в буфере(?: обмена)?|прочитай буфер(?: обмена)?", t):
+        return tool("clipboard", {"action": "read"}, "wl-paste")
+    if re.search(r"(?:прочитай|что написано) (?:текст )?(?:на|с) экран\w*|прочитай экран|что на экране написано", t):
+        return tool("screen_text", {}, "grim + Tesseract на этом компьютере")
+    return None
+
+
 def _route(text: str, ctx: dict | None = None) -> Route | None:
     ctx = ctx or {}
     raw = strip_wake(text)
@@ -246,6 +401,11 @@ def _route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("reply", reply="time", why="Время и дата")
     if re.search(r"(статус|состояние) задач|что ты (сейчас )?делаешь|какие задачи|task status", t):
         return Route("reply", reply="tasks", why="Статус задач")
+
+    # --- the computer and the desk (tools/machine.py, desk.py, daily.py — ported from jarvis-os) ---------------
+    r = _caps_route(t)
+    if r:
+        return r
 
     # --- system ----------------------------------------------------------------
     if re.search(r"(состояние|статус|как (там )?(дела у )?) ?(системы|компьютера|ноутбука)|"

@@ -11,7 +11,7 @@ import struct
 import time
 from pathlib import Path
 
-from .base import (Risk, Tool, ToolError, ToolInputError, ToolResult, ToolSpec,
+from .base import (screen_locked, Risk, Tool, ToolError, ToolInputError, ToolResult, ToolSpec,
                    Verification, run_cmd)
 
 # name aliases -> (argv, expected window class regex, display name)
@@ -270,6 +270,8 @@ class Screenshot(Tool):
     async def run(self, args, ctx):
         if not shutil.which("grim"):
             raise ToolError("Утилита grim не установлена")
+        if screen_locked():
+            raise ToolError("Экран заблокирован — снимок будет возможен после разблокировки")
         out_dir = ctx.config.expand(ctx.config.screenshot_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / time.strftime("Снимок %Y-%m-%d %H-%M-%S.png")
