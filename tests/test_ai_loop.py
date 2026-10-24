@@ -45,14 +45,13 @@ async def test_model_cannot_skip_approval(core, fake, home):
 
 
 async def test_model_cannot_call_ui_only_or_unknown_tools(core, fake):
-    g = fake([[("flora_send", {"draft_id": "x"}), ("shell_exec", {"cmd": "rm -rf ~"}), "Не могу."]])
+    g = fake([[("message_send", {"deliveries": [], "body": "x"}), ("shell_exec", {"cmd": "rm -rf ~"}), "Не могу."]])
     tid = await core.director.submit("сделай что-нибудь полезное с почтой")
     t = await wait_done(core, tid)
     states = {s["tool_id"]: s["state"] for s in t["steps"]}
-    assert states.get("flora_send") in (None, "invalid", "denied")   # not model-callable: never runs
+    assert states.get("message_send") in (None, "invalid", "denied")   # not model-callable: never runs
     assert "shell_exec" not in states
     assert [r["status"] for r in g.tool_results] == ["invalid", "invalid"]
-    assert not core.director.flora.mail.sent_all()
 
 
 async def test_send_request_is_never_executed_without_mail_and_approval(core, fake):
@@ -61,7 +60,7 @@ async def test_send_request_is_never_executed_without_mail_and_approval(core, fa
     await wait_done(core, tid)
     msg = core.director.messages(core.director.conversation_id())[-1]["text"]
     assert "Ничего не отправлено" in msg or "модуль связи" in msg
-    assert not g.calls and not core.director.flora.mail.sent_all()
+    assert not g.calls and not core.db.all("SELECT 1 FROM comm_jobs")
 
 
 async def test_provider_error_is_reported_not_faked(core, fake):

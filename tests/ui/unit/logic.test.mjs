@@ -130,7 +130,7 @@ test("dock detection and stored state validation", () => {
 // ---------------------------------------------------------------- intent router (window level)
 for (const [text, viewId] of [["перейди в задачи", "tasks"], ["Джарвис, домой", "home"], ["вернись на главную", "home"],
   ["перейди в телеграм", "telegram"], ["перейди в WhatsApp", "whatsapp"], ["открой раздел файлы", "files"],
-  ["переключись на вкладку почта", "mail"], ["покажи задачи", "tasks"], ["перейди во флору", "flora"],
+  ["переключись на вкладку почта", "mail"], ["покажи задачи", "tasks"],
   ["открой вкладку настройки", "settings"]]) {
   test(`navigation: «${text}»`, () => assert.deepEqual(classify(text), { kind: "nav", view: viewId }));
 }
@@ -193,7 +193,7 @@ test("groups, retry and status mapping", () => {
 test("workspace registry is complete and unique", () => {
   const ids = ALL.map((w) => w.id);
   assert.equal(new Set(ids).size, ids.length);
-  for (const id of ["home", "chat", "tasks", "browser", "telegram", "whatsapp", "mail", "files", "flora", "settings"]) assert.ok(byId(id), id);
+  for (const id of ["home", "chat", "tasks", "browser", "telegram", "whatsapp", "mail", "files", "settings"]) assert.ok(byId(id), id);
   for (const w of WORKSPACES) { assert.ok(w.title && w.icon && w.context, w.id); assert.ok(Array.isArray(w.tools), w.id); }
 });
 test("tool status follows the real connection, never assumed", () => {

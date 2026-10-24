@@ -41,9 +41,6 @@ export const WORKSPACES = [
   { id: "files", title: "Файлы", icon: "folder", hotkey: "8", context: "Файлы", module: "files",
     tools: [{ id: "files.list", label: "Просмотр папок", needs: "core" }, { id: "files.search", label: "Поиск файлов", needs: "core" },
       { id: "files.open", label: "Открыть в приложении", needs: "core" }, { id: "files.ask", label: "Спросить JARVIS о файле", needs: "core" }] },
-  { id: "flora", title: "Флора", icon: "flora", hotkey: "9", context: "Проект «Флора» · демо-данные",
-    tools: [{ id: "flora.inbox", label: "Разбор почты", needs: "core" }, { id: "flora.compare", label: "Сравнение смет", needs: "core" },
-      { id: "flora.draft", label: "Черновик ответа", needs: "core" }] },
 ];
 
 /** Reachable from the palette and links, not shown in the sidebar list. */

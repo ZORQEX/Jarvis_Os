@@ -1,6 +1,7 @@
 # Active milestone: 3 — connected productivity (start)
 
-Done: milestone 1 (working JARVIS), milestone 2 (Flora on synthetic data), WorkOS window milestone 1
+Done: milestone 1 (working JARVIS), milestone 2 (Flora on synthetic data — removed
+2026-10-24 at the user's request), WorkOS window milestone 1
 (workspaces, global companion, task center, palette — ADR-006). See TEST_MATRIX.md.
 
 ## Next, in order

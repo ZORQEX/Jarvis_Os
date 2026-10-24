@@ -71,7 +71,6 @@ export const ICON = {
   tasks: '<svg viewBox="0 0 24 24"><path d="m4 6.5 1.6 1.6L8.5 5M4 12.5l1.6 1.6 2.9-3.1M4 18.5l1.6 1.6 2.9-3.1"/><path d="M11.5 7h8.5M11.5 13h8.5M11.5 19h8.5"/></svg>',
   telegram: '<svg viewBox="0 0 24 24"><path d="M21 3 10 14"/><path d="M21 3 14.5 21l-4.5-7-7-4.5z"/></svg>',
   whatsapp: '<svg viewBox="0 0 24 24"><path d="M4.5 19.5 5.6 16A8 8 0 1 1 8.6 18.6z"/><path d="M9.2 8.6c.2-.5.5-.6.9-.6.4 0 .6.6.8 1.1.2.5-.6 1-.4 1.5.5 1 1.3 1.8 2.3 2.3.5.2 1-.6 1.5-.4.5.2 1.1.4 1.1.8 0 .4-.1.8-.6 1-1.4.6-3.5-.3-4.6-1.5-1.2-1.1-2-3.2-1.5-4.2z"/></svg>',
-  flora: '<svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8.5 7V5.5A1.5 1.5 0 0 1 10 4h4a1.5 1.5 0 0 1 1.5 1.5V7M3 12.5h18M10.5 12.5v2h3v-2"/></svg>',
   settings: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg>',
   send: '<svg viewBox="0 0 24 24"><path d="M21 3 10 14"/><path d="M21 3 14.5 21l-4.5-7-7-4.5z"/></svg>',
   history: '<svg viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3.5 4.5V9H8"/><path d="M12 7.5V12l3 2"/></svg>',
@@ -158,8 +157,7 @@ function agentLabel(title) {
 const TITLES = { system_info: "Система", search_files: "Поиск", read_file: "Чтение", open_path: "Открытие",
   create_note: "Заметка", app_open: "Приложение", window_list: "Окна", workspace_switch: "Рабочий стол",
   volume_set: "Звук", screenshot: "Снимок экрана", notify: "Уведомление", reminder_create: "Напоминание",
-  cloud_send: "Облако", flora_inbox: "Почта «Флоры»", flora_compare: "Сравнение смет", flora_draft: "Черновик",
-  flora_send: "Отправка (демо)", agent_generate: "ИИ-шаг", agent_chat: "Ответ", claude_code_inspect: "Claude Code",
+  cloud_send: "Облако", agent_generate: "ИИ-шаг", agent_chat: "Ответ", claude_code_inspect: "Claude Code",
   claude_code_change: "Claude Code", open_url: "Ссылка", folder_list: "Папка", message_send: "Сообщение",
   message_deliver: "Доставка", message_cancel: "Отмена сообщения", contact_find: "Поиск контакта", contact_save: "Контакт",
   file_write: "Запись файла", folder_create: "Новая папка", file_trash: "В корзину", computer_task: "Claude Code",
@@ -179,10 +177,6 @@ export function resultCard(step) {
     case "note": return noteCard(d);
     case "file_preview": return previewCard(d);
     case "reminder": return reminderCard(d);
-    case "flora_inbox": return floraInboxCard(d);
-    case "flora_compare": return floraCompareCard(d);
-    case "flora_draft": return floraDraftCard(d);
-    case "flora_sent": return floraSentCard(d);
     case "agent_result": return agentCard(d);
     default: return "";
   }
@@ -289,61 +283,7 @@ export function decisionCard(dec, dev = false) {
     ${(dec.notes || []).length ? `<div class="faint" style="font-size:12px;padding:0 14px 10px">${dec.notes.map(esc).join("<br>")}</div>` : ""}</div>`;
 }
 
-// ---------------------------------------------------------------- Flora cards
-const TYPE_RU = { DECISION_REQUIRED: "решение", QUESTION: "вопрос", PROMISE: "обещание", FYI: "к сведению" };
-export const typeBadge = (t) => `<span class="tbadge ${esc(t)}">${esc(TYPE_RU[t] || t)}</span>`;
-export const ruDate = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("ru-RU", { weekday: "short", day: "numeric", month: "long" });
-export const rub = (v, cur = "RUB") => v == null ? "—" : Math.round(v).toLocaleString("ru-RU") + (cur === "RUB" ? " ₽" : " €");
-
-function floraInboxCard(d) {
-  const a = d.analysis;
-  if (!a) return "";
-  const rows = a.items.slice(0, 6).map((i) => `<button class="row" data-nav="flora" data-flora-item="${esc(i.id)}">
-    ${typeBadge(i.type)}<span class="t"><div>${esc(i.subject)}</div><div class="p">${esc(i.from.name)}</div></span>
-    <span class="r">${i.deadline ? "до " + esc(ruDate(i.deadline)) : ""}</span></button>`).join("");
-  return `<div class="card"><div class="card-head">${ICON.mail}<strong>Флора · входящие</strong><span class="demo-badge">демо</span>
-    <span class="faint" style="margin-left:auto">${a.items.length} по проекту · ${a.excluded.length} скрыто</span></div>
-    <div class="rows flora-rows">${rows}</div>
-    <div class="card-foot"><button class="btn" data-nav="flora">Открыть проект</button></div></div>`;
-}
-
-function floraCompareCard(d) {
-  const c = d.comparison;
-  const an = c.anomalies.map((x) => `<div class="callout warn">${ICON.alert}<span>${esc(x.text)} — ячейка <code>${esc(x.cell)}</code>: <code>${esc(x.formula || "")}</code></span></div>`).join("");
-  return `<div class="card"><div class="card-head">${ICON.file}<strong>Сметы «Флоры»</strong><span class="demo-badge">демо</span></div>
-    <div class="stats"><div class="stat"><div class="k">Согласовано (v1)</div><div class="v">${rub(c.base_total)}</div></div>
-      <div class="stat"><div class="k">Предложено (v2)</div><div class="v">${rub(c.new_total)}</div></div>
-      <div class="stat"><div class="k">Разница</div><div class="v" style="color:var(--warn)">+${rub(c.delta)}</div><div class="sub">по строкам, с НДС</div></div></div>
-    <div style="padding:0 14px 14px;display:flex;flex-direction:column;gap:8px">${an}
-    <button class="btn" style="align-self:flex-start" data-nav="flora" data-flora-tab="quotes">Подробное сравнение</button></div></div>`;
-}
-
-function floraDraftCard(d) {
-  const dr = d.draft;
-  return `<div class="card"><div class="card-head">${ICON.mail}<strong>Черновик</strong><span class="faint">кому: ${esc(dr.to_name)}</span>
-    <span class="pill" style="margin-left:auto">не отправлен</span></div>
-    <pre class="preview-text" style="font-family:var(--font);font-size:13.5px">${esc(dr.body)}</pre>
-    <div class="card-foot"><button class="btn" data-nav="flora" data-flora-tab="reply">Открыть и править</button></div></div>`;
-}
-
-function floraSentCard(d) {
-  return `<div class="card"><div class="card-head">${ICON.check}<strong>${d.duplicate ? "Уже было отправлено" : "Отправлено"} (демо)</strong>
-    <span class="faint">${esc(d.to)} · ${esc(d.provider_message_id)}</span></div></div>`;
-}
-
 // ---------------------------------------------------------------- approval card
-function packet(p) {
-  return `<dl class="packet">
-    <dt>Канал</dt><dd>Демо-почта (письмо не покидает компьютер)</dd>
-    <dt>От</dt><dd>client@demo.example</dd>
-    <dt>Кому</dt><dd>${esc(p.to)}</dd>
-    <dt>Тема</dt><dd>${esc(p.subject)}</dd>
-    <dt>Вложения</dt><dd>нет</dd>
-    <dt>Проект</dt><dd>Флора · версия черновика ${esc(p.version)}</dd>
-    <dt>Текст</dt><dd><pre>${esc(p.body)}</pre></dd>
-  </dl>`;
-}
-
 const CH_RU = { telegram: "Telegram", whatsapp: "WhatsApp", email: "Почта" };
 
 function messagePacket(a, open) {
@@ -379,7 +319,6 @@ export function approvalCard(a) {
       <span class="risk ${esc(a.risk)}">${esc(risk)}</span></div>
     <div class="what">${esc(s.action || s.title)}</div>
     <div class="why">${esc(s.impact || [s.reason, effects].filter(Boolean).join(" · "))}</div>
-    ${a.tool_id === "flora_send" ? packet(a.args) : ""}
     ${a.tool_id === "message_send" ? messagePacket(a, open) : ""}
     ${open ? editable.map((k) => `<textarea data-edit="${esc(k)}" aria-label="Изменить: ${esc(k)}">${esc(a.args[k])}</textarea>`).join("") : ""}
     ${open ? `<div class="actions">

@@ -45,7 +45,7 @@ await shot("01-home");
 
 await check("sidebar: every workspace opens", async () => {
   const ids = await J(() => [...document.querySelectorAll("#nav [data-nav]")].map((b) => b.dataset.nav));
-  assert(ids.length === 9, "expected 9 workspaces, got " + ids.length);
+  assert(ids.length === 8, "expected 8 workspaces, got " + ids.length);
   for (const id of ids) {
     await page.click(`#nav [data-nav="${id}"]`);
     await waitView(id);
@@ -372,7 +372,7 @@ await check("layout: no overflow or overlap at 1280×720, 1440×900, 1920×1080"
   const report = {};
   for (const [w, h] of [[1280, 720], [1440, 900], [1920, 1080]]) {
     await page.setViewportSize({ width: w, height: h });
-    for (const id of ["home", "chat", "tasks", "browser", "telegram", "files", "flora", "settings"]) {
+    for (const id of ["home", "chat", "tasks", "browser", "telegram", "files", "settings"]) {
       await J((x) => window.__jarvis.nav(x), id);
       await page.waitForTimeout(220);
       const r = await J(() => {

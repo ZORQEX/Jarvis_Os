@@ -82,11 +82,16 @@ class Server:
         self.sockets: set[web.WebSocketResponse] = set()
         from .overlay import Overlay
         self.overlay = Overlay(core.db, core.config.port)
-        self._speech_owner: dict[str, str] = {}        # task id → the client that should play its speech
+        self._mic: dict = {}                            # socket → its microphone is open (the main window)
         self._wake_until = 0.0                          # follow-up window after «Джарвис, …»
         wt = core.director.gw.registry.get("window_show")
         if wt:
             wt.presence = lambda: bool(self.sockets)      # is a JARVIS window connected right now
+
+    @property
+    def _speech_owner(self) -> dict[str, str]:
+        """Task id → the window that plays its speech (kept by the director: a series of tasks keeps its window)."""
+        return self.core.director.speech_owner
 
     # ------------------------------------------------------------------ security
     def _hosts(self) -> set[str]:
@@ -210,17 +215,42 @@ class Server:
         """Wake listening: the phrase to act on, or None if it was not for JARVIS. A recording may start with other
         speech («…телевизор… Джарвис, который час»): the command is what follows the name. While or right after JARVIS
         speaks, a phrase that repeats what it just said is its own voice through the speakers, not the person."""
-        from .router import find_wake, wake_len
+        from .router import find_wake
         t = (text or "").strip()
         if not t:
             return None
-        sp = self.core.director.speech
-        if sp and len(t.split()) >= 3 and not wake_len(t) and sp.is_echo(t):
+        t = self._strip_echo(t, data)
+        if not t:
             return None
         if data.get("barge") or self._addressed(t):
             return t
         pos = find_wake(t)
-        return t[pos:] if pos > 0 else None
+        return t[pos:] if pos >= 0 else None
+
+    def _strip_echo(self, text: str, data: dict) -> str:
+        """Drop what the microphone heard of JARVIS's own voice — from this window or the other one (the companion
+        and the main window run in separate browsers, so neither's echo cancellation knows the other's sound)."""
+        sp = self.core.director.speech
+        if not sp or not text:
+            return text
+        t0, t1 = data.get("speech_start"), data.get("speech_end")
+        try:
+            t0, t1 = (float(t0), float(t1)) if t0 and t1 else (None, None)
+        except (TypeError, ValueError):
+            t0 = t1 = None
+        return sp.strip_echo(text, t0, t1).strip()
+
+    def _voice_active(self, on: bool, data: dict) -> None:
+        """The window heard the person start (or stop) talking: JARVIS does not start a sentence over them, and a
+        cut-off phrase waits for its end."""
+        sp = self.core.director.speech
+        now_ = time.time()
+        self._voice_until = now_ + 30 if on else 0.0
+        if not on:
+            self._voice_quiet_at = now_
+        # The always-on companion hears a TV too: only a conversation with JARVIS holds its voice back.
+        if sp and (not data.get("wake") or now_ < self._wake_until):
+            sp.hold_until = now_ + 30 if on else 0.0
 
     def _addressed(self, text: str) -> bool:
         """Wake listening: is this phrase for JARVIS? «Джарвис…» at the start, an answer within 20 s of the last
@@ -261,6 +291,7 @@ class Server:
         """One spoken request: STT → Director (same path as typed text) → streamed speech."""
         d = self.core.director
         local = d.stt
+        self._voice_active(False, data)
         if data.get("wake"):
             return await self._voice_wake(data)
         audio = self._voice_audio(data)
@@ -301,6 +332,7 @@ class Server:
         pr = getattr(self, "_probes", {}).pop(str(data.get("probe_id")), None)
         if not pr:
             raise ValueError("probe expired")
+        self._voice_active(False, data)
         if data.get("wake"):
             return await self._wake_turn(pr["text"], data, pr["bytes"], pr["stt_start"], pr["stt_end"])
         sp = self.core.director.speech
@@ -316,6 +348,11 @@ class Server:
         if sp:
             sp.annotate(turn, stt_model=getattr(d.stt, "last_model", None) or d.stt.name, transcript=text)
         self.core.audit.write("voice.transcribed", bytes=nbytes, chars=len(text), turn=turn)
+        heard, text = text, self._strip_echo(text, data)
+        if heard.strip() and not text:                 # only JARVIS's own voice through the speakers
+            if sp:
+                sp.annotate(turn, route="echo")
+            return {"text": "", "ignored": True, "turn": turn}
         if not text.strip():
             if sp:
                 from .voice.tts import NOT_HEARD_BY_LANG, phrase
@@ -328,24 +365,51 @@ class Server:
             text = frag[0] + " " + text
         self._fragment = None
         if data.get("submit", True) and is_fragment(text):
-            self._fragment = (text.rstrip(" .,…"), time.time())
+            self._hold_fragment(text, turn, data)
             if sp:
                 sp.annotate(turn, route="fragment")
             return {"text": text, "turn": turn, "pending": True}
+        return await self._submit_turn(text, turn, data)
+
+    async def _submit_turn(self, text: str, turn: str | None, data: dict) -> dict:
+        d = self.core.director
+        sp = d.speech
         task_id = None
+        client = str(data.get("client") or "window")[:20]
+        d._own("notice-" + str(turn), client)          # the companion's answers are spoken by the companion only
         if data.get("submit", True):
             if sp:
                 sp.mark(turn, "request_start")
-            task_id = await d.submit(text, "voice", turn=turn)
-        if data.get("client") == "overlay":            # its answer is spoken by the desktop companion only
-            for k in (task_id, "notice-" + str(turn)):
-                if k:
-                    self._speech_owner[k] = "overlay"
-            if len(self._speech_owner) > 500:
-                self._speech_owner = dict(list(self._speech_owner.items())[-200:])
+            task_id = await d.submit(text, "voice", turn=turn, client=client)
         if task_id or data.get("wake"):
             self._wake_until = time.time() + 20       # «…а ещё…» right after the answer needs no «Джарвис»
         return {"text": text, "task_id": task_id, "turn": turn}
+
+    def _hold_fragment(self, text: str, turn: str | None, data: dict) -> None:
+        """A cut-off phrase («Отправь маме в…») waits for its end — but not forever: when the person says nothing more
+        it is done as it is (JARVIS asks what is missing). Before 2026-10-24 it was silently dropped after 15 s, and
+        «Расскажи что-нибудь» (wrongly taken for cut off) got no answer at all."""
+        self._fragment = (text.rstrip(" .,…"), time.time(), turn, {k: data.get(k) for k in ("client", "wake")})
+        self._frag_gen = getattr(self, "_frag_gen", 0) + 1
+        spawn(self._fragment_timeout(self._frag_gen), "voice-fragment")
+
+    async def _fragment_timeout(self, gen: int) -> None:
+        while True:
+            await asyncio.sleep(0.25)
+            frag = getattr(self, "_fragment", None)
+            if not frag or gen != self._frag_gen:
+                return                                   # the rest came: joined and answered already
+            if time.time() < getattr(self, "_voice_until", 0):
+                continue                                 # the person is saying the rest right now
+            if time.time() - max(frag[1], getattr(self, "_voice_quiet_at", 0)) >= FRAGMENT_WAIT_S:
+                break
+        self._fragment = None
+        text, _, turn, data = frag
+        self.core.audit.write("voice.fragment_done", turn=turn)
+        try:
+            await self._submit_turn(text, turn, data)
+        except Exception as e:   # noqa: BLE001
+            self.core.audit.write("voice.fragment_failed", error=repr(e)[:200])
 
     async def _check_providers(self):
         """Startup health: Claude Code sign-in status (no usage); then the conversation process is started, so the
@@ -375,7 +439,8 @@ class Server:
         while True:
             ev = await q.get()
             dead = []
-            owner = self._speech_owner.get(ev.get("task_id") or "") if str(ev.get("kind", "")).startswith("speech.") else None
+            owner = self.core.director.speech_owner.get(ev.get("task_id") or "") \
+                if str(ev.get("kind", "")).startswith("speech.") else None
             if owner == "overlay" and ev.get("kind") == "speech.end":
                 # «…а ещё…» without «Джарвис» counts from when JARVIS stopped talking, not from the question.
                 self._wake_until = max(self._wake_until, time.time() + 12)
@@ -426,9 +491,6 @@ class Server:
     async def artifact(self, req):
         cfg = self.core.config
         roots = [cfg.expand(cfg.screenshot_dir), cfg.expand(cfg.write_dir), self.core.paths.artifacts]
-        if self.core.director.flora:
-            from .flora.mail import FIXTURES
-            roots.append(FIXTURES.resolve())
         try:
             p = Path(req.query.get("path", "")).resolve()
         except (OSError, ValueError):
@@ -500,6 +562,8 @@ class Server:
                 spawn(self._handle(ws, data), "ws-request")
         finally:
             self.sockets.discard(ws)
+            if self._mic.pop(ws, False) and not any(self._mic.values()):
+                self.core.bus.publish("voice.presence", {"client": "window", "listening": False})
         return ws
 
     def _voices(self) -> dict:
@@ -528,6 +592,7 @@ class Server:
         eng = self.core.director.speech.engine if self.core.director.speech else None
         try:
             audio = await (eng.preview_en(v["id"]) if en else eng.preview(v["id"]))
+            self.core.director.speech.played(tid, PREVIEW_EN if en else PREVIEW, audio)    # for the echo check
             bus.publish("speech.audio", {"seq": 1, "text": PREVIEW_EN if en else PREVIEW, "mime": "audio/wav",
                                          "audio_b64": base64.b64encode(audio).decode()}, tid)
             bus.publish("speech.end", {"segments": 1}, tid)
@@ -541,8 +606,9 @@ class Server:
         rid = data.get("req_id")
         d = self.core.director
         typ = data.get("type")
-        self.core.audit.write("ui." + str(typ)[:40], **{k: v for k, v in redact(data).items()
-                                                        if k in ("type", "id", "task_id", "profile", "op")})
+        if typ not in QUIET_UI:
+            self.core.audit.write("ui." + str(typ)[:40], **{k: v for k, v in redact(data).items()
+                                                            if k in ("type", "id", "task_id", "profile", "op")})
         try:
             if typ == "submit":
                 res = {"task_id": await d.submit(str(data.get("text", "")), data.get("source", "text"),
@@ -577,10 +643,14 @@ class Server:
                 res = await self._voice_probe(data)
             elif typ == "voice.commit":
                 res = await self._voice_commit(data)
-            elif typ == "voice.interrupt":
-                res = {"message": await d.control("interrupt")}
+            elif typ == "voice.interrupt":        # Esc / the stop button while JARVIS talks: that answer only
+                res = {"message": await d.control("quiet", task_ids=[str(x) for x in data.get("tasks") or []][:20])}
             elif typ == "voice.barge":            # the person started talking over JARVIS: stop the voice, not the work
-                res = {"message": await d.control("stop_speech")}
+                res = {"message": await d.control("stop_speech",
+                                                  task_ids=[str(x) for x in data.get("tasks") or []][:20])}
+            elif typ == "voice.active":           # the person started / stopped talking (before the phrase is sent)
+                self._voice_active(bool(data.get("on")), data)
+                res = {}
             elif typ == "voice.metric":
                 if d.speech and data.get("field") == "first_audio_played":
                     d.speech.mark(str(data.get("turn")), "first_audio_played", float(data.get("ts") or time.time()))
@@ -652,6 +722,8 @@ class Server:
                 res = await self.overlay.drag_start(data.get("ox", 32), data.get("oy", 32)) if ph == "start" \
                     else self.overlay.drag_move() if ph == "move" else await self.overlay.drag_end()
             elif typ == "voice.presence":         # the window's mic is on/off: the desktop companion yields to it
+                if str(data.get("client", "window")) == "window":
+                    self._mic[ws] = bool(data.get("listening"))
                 self.core.bus.publish("voice.presence", {"client": str(data.get("client", "window"))[:20],
                                                          "listening": bool(data.get("listening"))})
                 res = {}
@@ -668,7 +740,8 @@ class Server:
                         if k in data:
                             db.set_kv(key, bool(data[k]))
                             self.core.audit.write("overlay." + key, on=bool(data[k]))
-                res = {"wake": bool(db.get_kv("wake_listen", False)), "enabled": bool(db.get_kv("overlay_enabled", True))}
+                res = {"wake": bool(db.get_kv("wake_listen", False)), "enabled": bool(db.get_kv("overlay_enabled", True)),
+                       "window_listening": any(self._mic.values())}
                 if typ == "overlay.settings":
                     self.core.bus.publish("overlay.settings", res)
             elif typ in ("overlay.launch", "window.open"):
@@ -737,8 +810,6 @@ class Server:
                 res = {"providers": d.providers.describe()}
             elif str(typ).startswith("comms.") and self.core.comms:
                 res = await self._comms(typ, data)
-            elif typ == "flora.action" and d.flora:
-                res = await d.flora.ui_action(d, data)
             else:
                 raise ValueError(f"Неизвестный запрос: {typ}")
             await ws.send_str(json.dumps({"type": "reply", "req_id": rid, "ok": True, "data": res},
@@ -751,27 +822,44 @@ class Server:
                 pass
 
 
+QUIET_UI = {"voice.active"}  # sent at every sound the always-on companion takes for speech: not worth an audit line
 FRAGMENT_TTL_S = 15.0
+FRAGMENT_WAIT_S = 4.0       # a cut-off phrase with no continuation after this much quiet is done as it is
 _DANGLING = {"в", "во", "на", "и", "а", "но", "или", "что", "чтобы", "для", "к", "ко", "по", "с", "со", "у", "о", "об",
              "мне", "ему", "ей", "моей", "моему", "моим", "контакту", "сообщение", "письмо", "текст", "который", "которая",
-             "это", "этому", "этой", "про", "потом", "затем", "ещё", "еще", "также", "через", "до", "после", "из", "от",
-             "за", "под", "над", "при", "без", "около", "как", "где", "когда", "если", "потому", "чем", "ли", "либо",
-             "нибудь", "мой", "моя", "мое", "моё", "мои", "мою", "моих", "свой", "свою", "свои", "the", "to", "and"}
+             "этому", "этой", "про", "затем", "через", "до", "после", "из", "от", "за", "под", "над", "при", "без",
+             "около", "если", "потому", "либо", "мой", "моя", "мое", "моё", "мои", "мою", "моих", "свой", "свою",
+             "свои", "the", "to", "and"}
+# «какую-нибудь» / «какой-то» wait for a noun; «что-нибудь», «кто-то» end a phrase («Расскажи что-нибудь.»).
+_DANGLING_HYPHEN = re.compile(r"как(?:ой|ая|ое|ие|ую|ого|ому|им|их|ими)-(?:нибудь|то|либо)|"
+                              r"ч(?:ей|ья|ьё|ье|ьи|ью)-(?:нибудь|то|либо)")
 _VERB_ONLY = re.compile(r"(джарвис\s*)?(отправь|напиши|пошли|скажи|сообщи|передай|запланируй|напомни|открой|найди)"
                         r"(\s+(сообщение|письмо|мне|ему|ей|в|на))?")
 
 
 def is_fragment(text: str) -> bool:
-    """A phrase that obviously continues: a bare command verb, or ending on a preposition/conjunction/«моей»."""
-    t = re.sub(r"[^\w\s:]", " ", text.lower().replace("ё", "е")).strip()
-    if not t or len(t) > 300:
+    """A phrase that obviously continues: a bare command verb, or ending on a preposition/conjunction/«моей»/«какую-то».
+    Measured 2026-10-24: «Джарвис, расскажи что-нибудь.» was split at the hyphen, ended on «нибудь» and was held as
+    cut off — JARVIS said nothing, three times in a row."""
+    low = text.lower().replace("ё", "е")
+    t = re.sub(r"[^\w\s:-]", " ", low)
+    t = re.sub(r"(?<![\w])-|-(?![\w])", " ", t).strip()          # dashes, but not the hyphen inside a word
+    if not t or len(t) > 1200:
         return False
     if text.rstrip().endswith((":", ",", "—", "-")):
         return True
+    if text.rstrip().endswith("?"):
+        return False                                             # a question is a whole phrase
     if _VERB_ONLY.fullmatch(re.sub(r"\s+", " ", t)):
         return True
     words = t.split()
-    return bool(words) and words[-1] in _DANGLING and len(words) < 25
+    if not words:
+        return False
+    if re.search(r"(?:^|\s)(?:а|и|но)\s+(?:потом|затем|далее|дальше|ещ[её]|также|после этого)$", t):
+        return True                                              # «Открой браузер, а потом…»
+    if "-" in words[-1]:
+        return bool(_DANGLING_HYPHEN.fullmatch(words[-1]))
+    return words[-1] in _DANGLING
 
 
 _SEND_VERB = re.compile(r"^(джарвис[\s,]*)?(отправь|напиши|пошли|скажи|сообщи|передай|черкни|ответь)\b", re.I)

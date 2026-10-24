@@ -94,6 +94,7 @@ export class Voice {
 
   closeMic() {
     this.closeWhenQuiet = false;
+    if (this.seg) this.active(false);
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.node?.disconnect(); this.node = null;
@@ -158,6 +159,7 @@ export class Voice {
     this.preroll = [];
     if (this.audio) this.duck(true);
     this.set("recording");
+    this.active(true);                         // the core does not start talking over the person meanwhile
     if (!this.wake) this.link.request("voice.warm").catch(() => {});   // warm the cloud connection while the user speaks
   }
 
@@ -185,13 +187,14 @@ export class Voice {
     const probe = this.probe; this.probe = null;
     const speechEnd = viaProbe ? viaProbe.speechEnd : now() - this.vad.silent;
     const voicedMs = this.vad.voiceMs;
-    if (!viaProbe && voicedMs < 200) { this.duck(false); this.set(this.listening ? "listening" : null); return; }
+    if (!viaProbe && voicedMs < 200) { this.duck(false); this.active(false); this.set(this.listening ? "listening" : null); return; }
     // The probe already recognised exactly this phrase (no voice since): reuse it instead of a second recognition.
     const reuse = probe && probe.id && probe.seg === frames && probe.mark === this.voiceFrames ? probe.id : null;
     this.voiceFrames = 0;
     this.idleSince = now();
     if (this.once && !this.conversation) { this.once = false; this.closeWhenQuiet = true; }
     this.set("transcribing");
+    this.talking = false;                      // the phrase itself tells the core the person stopped
     const times = { speech_start: this.segStart / 1000, speech_end: speechEnd / 1000 };
     try {
       let r = null;
@@ -206,6 +209,7 @@ export class Voice {
       this.onTurn(r);
     } catch (e) {
       this.duck(false);
+      this.active(false);
       this.onError(e.message);
     }
     this.set(this.listening ? "listening" : (this.audio ? "speaking" : null));
@@ -279,21 +283,32 @@ export class Voice {
     if (this.gain && this.out) this.gain.gain.setTargetAtTime(this.ducked ? 0.15 : 1, this.out.currentTime, 0.03);
   }
 
+  // The person started (true) or stopped (false) talking; the core holds JARVIS's next sentence meanwhile.
+  active(on) {
+    if (on === !!this.talking) return;
+    this.talking = on;
+    this.link.request("voice.active", { on, wake: this.wake && this.conversation }).catch(() => {});
+  }
+
+  heardTasks() { return [...new Set(this.playing.map((x) => x.task).filter(Boolean))]; }
+
   bargeIn() {                                 // the person talks over JARVIS: stop the voice and listen (the work goes on)
     this.ducked = false;
+    const tasks = this.heardTasks();
     for (const x of this.playing) this.dropped.add(x.task);
     this.stopSpeaking();
     if (this.gain && this.out) this.gain.gain.setValueAtTime(1, this.out.currentTime);
     if (this.state !== "recording") this.set("interrupted");
-    this.link.request("voice.barge").catch(() => {});
+    this.link.request("voice.barge", { tasks }).catch(() => {});
   }
 
-  stopAll() {                                 // Esc / stop button
+  stopAll() {                                 // Esc / stop button: this answer stops, other tasks go on
+    const tasks = this.heardTasks();
     for (const x of this.playing) this.dropped.add(x.task);
     this.stopSpeaking();
     this.duck(false);
-    if (this.seg) { this.seg = null; this.vad.close(); }
-    this.link.request("voice.interrupt").catch(() => {});
+    if (this.seg) { this.seg = null; this.vad.close(); this.active(false); }
+    this.link.request("voice.interrupt", { tasks }).catch(() => {});
   }
 }
 

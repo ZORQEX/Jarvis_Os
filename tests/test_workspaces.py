@@ -20,7 +20,6 @@ from conftest import wait_done
     ("открой раздел файлы", "files"),
     ("переключись на вкладку почта", "mail"),
     ("покажи задачи", "tasks"),
-    ("перейди во флору", "flora"),
     ("открой вкладку настройки", "settings"),
 ])
 def test_navigation_phrases(text, view):

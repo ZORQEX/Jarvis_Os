@@ -87,10 +87,6 @@ def test_router_ordinal_reference_to_last_results():
     assert r.args == {"path": "/b"}
 
 
-def test_router_flora():
-    assert router.route("Джарвис, проверь почту. Что важного пришло по Флоре?").kind == "flora"
-
-
 # ---------------------------------------------------------------- policy & paths
 def test_path_scope_rejects_traversal_and_symlink_escape(tmp_path):
     root = tmp_path / "allowed"

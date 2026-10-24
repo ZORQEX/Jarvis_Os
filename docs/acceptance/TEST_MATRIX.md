@@ -1,4 +1,4 @@
-# Test matrix — milestone 1 + Flora (2026-10-20)
+# Test matrix — milestone 1 (2026-10-20) and later updates
 
 Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests: `uv run pytest -q` → 266 passed, 6 skipped (live, opt-in); `JARVIS_LIVE=1 uv run pytest tests/test_live.py` → 6 passed (2026-10-22).
 
@@ -9,7 +9,7 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | App launch verified by new Hyprland window | VERIFIED LOCAL | «открой калькулятор» → `org.gnome.Calculator` window detected, 274 ms |
 | Volume set + read-back | VERIFIED LOCAL | wpctl read-back 60% |
 | File search scoped; path traversal / symlink escape refused; executables not opened | VERIFIED LOCAL | test_core.py |
-| Moderate/high risk require approval; digest-bound; edit-before-approve executes edited args only | VERIFIED LOCAL | test_core.py, test_flora.py |
+| Moderate/high risk require approval; digest-bound; edit-before-approve executes edited args only | VERIFIED LOCAL | test_core.py, test_comms.py |
 | Approval expiry; approval persisted across restart and resumes once | VERIFIED LOCAL | test_approval_expires, test_persisted_approval_survives_restart |
 | Pause holds next step; cancel kills running step; emergency stop blocks side effects until cleared | VERIFIED LOCAL | test_pause_holds_next_step, test_cancel_running_task, test_estop_* |
 | Restart marks interrupted tasks blocked (no blind replay) | VERIFIED LOCAL | test_recover_after_restart_blocks_running |
@@ -20,12 +20,7 @@ Environment: Omarchy 3.8.3, Hyprland 0.56.2, Chromium 154, Python 3.14.8. Tests:
 | Gemini live call / model availability | BLOCKED | no API key configured |
 | Voice push-to-talk → Gemini transcription; Gemini TTS | IMPLEMENTED UNVERIFIED | needs key; LISTENING shown only while a real mic stream is open |
 | Wake word, PipeWire-native capture | NOT IMPLEMENTED | next milestones |
-| Flora triage: marketing «СРОЧНО» excluded, injection quarantined, decisions with source quotes | VERIFIED MOCK | test_triage_excludes_marketing_and_injection |
-| Quote compare: line totals recomputed, wrong total formula detected (F10), EUR quote «not comparable» | VERIFIED MOCK | test_numbers_are_recomputed_not_invented |
-| Contradiction (W-3P height 2100 vs 2000) shown with both sources, unresolved | VERIFIED MOCK | test_cost_claim_and_contradiction_detected |
-| Draft from evidence; send needs high-risk approval; edit after request invalidates; no duplicate send | VERIFIED MOCK | test_send_*, test_edit_after_approval_request_invalidates |
-| Drawing revisions B/C compare, zoom/pan, annotations as sidecar (sources unchanged) | VERIFIED MOCK | test_sources_never_modified…, UI run flora-05 (3 shapes saved) |
-| Gmail / Calendar / Drive | NOT IMPLEMENTED | provider interface in `jarvis/flora/mail.py` |
+| Gmail / Calendar / Drive | NOT IMPLEMENTED | — |
 | Waybar indicator | VERIFIED LOCAL (temporary bar instance, copy of user config) | not installed into the user's bar |
 | Hyprland bindings Super+H / Super+Shift+H | IMPLEMENTED UNVERIFIED | `config/omarchy/hypr-jarvis.conf`, applied only on request |
 | systemd user service | IMPLEMENTED UNVERIFIED | `scripts/install.sh --service` |
@@ -116,7 +111,7 @@ Tests: `uv run pytest -q` → 352 passed, 6 skipped; `node --test tests/ui/unit/
 - Core idle: 0.0% CPU, ~39 MB PSS. Window (Chromium, 10 processes): ~380 MB PSS, idle 1.9% of one core
   (was 25% before removing infinite idle animations).
 - Local commands (p50/p95 ms, 40 runs): system 16.6/26.8, windows 8.3/10.0, file search 4.3/5.5,
-  time 1.9/2.1, Flora triage 14.2/20.7, quote compare 12.1/15.5.
+  time 1.9/2.1.
 
 ## AI agency (2026-10-21)
 
@@ -209,7 +204,7 @@ Tests: `uv run pytest -q` → 352 passed, 6 skipped; `node --test tests/ui/unit/
 | «Отправь себе в WhatsApp» never searches contacts | VERIFIED LIVE | before: matched another person's chat containing «Себя» (approval card, denied, nothing sent); now own number read from WhatsApp Web, sent to «Вы (заметки)» in 6 s, ✓ |
 | Real sends after the audit | VERIFIED LIVE (to self) | Telegram №168012; e-mail found in «Отправленные»; WhatsApp «прочитано»; schedule + cancel by command |
 | Reminder fires on time; STRICT_OFFLINE blocks Claude, local commands work | VERIFIED LIVE (dev JARVIS) | «через 1 минуту» fired at the minute; offline: windows list answered locally |
-| UI scenarios | VERIFIED LOCAL | drive.mjs smoke, approval-deny, view, flora, comms, commsqr, two, voiceui, agency → 0 console errors |
+| UI scenarios | VERIFIED LOCAL | drive.mjs smoke, approval-deny, view, comms, commsqr, two, voiceui, agency → 0 console errors |
 
 ## Action history, voice confirmations, speed (2026-10-22)
 
@@ -266,4 +261,23 @@ Tests: `uv run pytest -q` → 352 passed, 6 skipped; `node --test tests/ui/unit/
 | Scheduled actions: create, run on time, survive restart, cancel, move | ADDED → VERIFIED LIVE | fired 02:37:51 to the second after a restart; cancelled one never ran; moved one ran at the new time (43 s later while the conversation was busy) |
 | Permissions: delete, dangerous command, send | VERIFIED LIVE | Trash deletion asks (HIGH); `rm -rf ~/Documents` not run |
 | Honest errors | VERIFIED LIVE | missing file → «Файл не найден»; session limit and failures reported, never «Готово» |
+
+## Tasks in a row, «стоп» for one answer, windows that do not hear each other, Flora removed (2026-10-24)
+
+Found in the real JARVIS's records (voice_turns, audit.jsonl) of the same day.
+
+| Problem / requirement | Status | Evidence |
+|---|---|---|
+| «Джарвис, расскажи что-нибудь» got no answer (3 times): split at the hyphen it ended on «нибудь», was held as a cut-off phrase and dropped after 15 s | FIXED → VERIFIED LOCAL | test_tell_me_something_is_a_whole_phrase |
+| A cut-off phrase with no continuation was silently dropped | FIXED: done as it is after 4 s of quiet (not while the person still talks) | test_cut_off_phrase_with_no_continuation_is_done_after_a_pause, test_the_rest_said_in_time_is_joined |
+| «Первое… А далее… и далее…» did only the message part (the whole request went to the messaging route) | FIXED: split on sequence words into tasks run one after another; plan shown in the chat | test_a_request_with_several_tasks_is_split_in_order (the user's exact phrase), test_tasks_said_together_run_one_after_another |
+| Never split a message text, quotes, «найди файлы сначала в загрузках, потом в документах» | VERIFIED LOCAL | test_a_single_task_is_not_split (7 cases) |
+| Esc / stop while one answer played cancelled every running answer (audit 15:30:11: two tasks, incl. the 3-part one) | FIXED: only the answer being heard stops; other tasks run on | test_silencing_one_answer_keeps_other_tasks_running |
+| «Стоп» during a series: the current task and the rest of the series | VERIFIED LOCAL | test_stop_during_a_series_does_not_start_the_rest |
+| Task cancelled before its first step stayed «created» forever | FIXED → VERIFIED LOCAL | same test (cancel cleans up a task that never started) |
+| Two tasks' answers spoken sentence by sentence mixed | FIXED: one stream speaks at a time | test_answers_of_two_tasks_are_not_mixed |
+| JARVIS starts a sentence while the person talks | FIXED: windows report `voice.active`; speech waits | test_jarvis_waits_while_the_person_is_talking |
+| Companion heard the main window's voice sample «Привет! Я Джарвис…» and took it as a command (15:33:37) | FIXED: the core knows what plays when and drops JARVIS's own sentences heard during the phrase | test_the_other_windows_voice_is_not_a_command, test_echo_sentences_are_cut_and_the_person_is_kept |
+| Companion started after the main window opened its mic kept listening too | FIXED: `overlay.state.window_listening`; a closed window frees the mic | test_companion_knows_the_main_window_has_the_microphone |
+| «Флора» (synthetic demo project) | REMOVED at the user's request: package, fixtures, workspace, tools, planner step, openpyxl | full suite green |
 

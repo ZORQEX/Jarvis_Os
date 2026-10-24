@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import re
 import time
+import wave
 
 from ..db import Database, new_id
 from ..events import EventBus
@@ -16,6 +18,53 @@ from .tts import ACKS_BY_LANG, clean_for_speech, phrase
 
 HARD = re.compile(r"[.!?…;:](?=\s)|\n+")
 SOFT = re.compile(r",(?=\s)")
+PLAY_TAIL_S = 0.6        # after a piece ends: the browser's output latency and the room's echo
+IDLE_YIELD_S = 2.0       # a stream waiting this long for more text (a tool runs, approval) lets another task speak
+
+
+def wav_seconds(audio: bytes, text: str = "") -> float:
+    """How long a piece of speech plays (from its WAV header; a rough estimate from the text otherwise)."""
+    try:
+        with wave.open(io.BytesIO(audio)) as w:
+            return w.getnframes() / float(w.getframerate())
+    except Exception:   # noqa: BLE001 — not a WAV (tests, cloud voices)
+        return max(0.4, len(text or "") * 0.065)
+
+
+_W = re.compile(r"\w+")
+
+
+def _words(s: str) -> list[str]:
+    return _W.findall((s or "").casefold().replace("ё", "е"))
+
+
+def _said(w: str, said: set[str]) -> bool:
+    if w in said:
+        return True
+    # «Джарви» for «Джарвис», «Колледже» for «Колледж»: one word is the start of the other (5+ letters)
+    return len(w) >= 5 and any(len(x) >= 5 and (x.startswith(w) or w.startswith(x)) for x in said)
+
+
+def strip_echo(heard: str, said_texts: list[str]) -> str:
+    """Remove from a transcript the sentences that are JARVIS's own voice heard through the speakers.
+    `said_texts` is what JARVIS's voice said while the phrase was being recorded. Measured 2026-10-24: the companion
+    heard the main window's voice sample «Привет! Я Джарвис. Так я буду звучать…» and took it for a command."""
+    said = set(_words(" ".join(said_texts)))
+    if not said or not (heard or "").strip():
+        return heard
+    sents = [x for x in re.split(r"(?<=[.!?…])\s+", heard.strip()) if x]
+    info = [(x, ws, sum(1 for w in ws if _said(w, said))) for x in sents for ws in [_words(x)]]
+    allw = sum(len(ws) for _, ws, _ in info)
+    if allw >= 2 and all(h == len(ws) for _, ws, h in info):
+        return ""                                    # every word of it was just said by JARVIS
+    echo = [len(ws) >= 3 and h / len(ws) >= 0.7 for _, ws, h in info]
+    changed = True
+    while changed:               # «Привет.» / «Я Джарвис.» between echoed sentences: echo too, if every word was said
+        changed = False
+        for i, (_, ws, h) in enumerate(info):
+            if not echo[i] and ws and h == len(ws) and ((i and echo[i - 1]) or (i + 1 < len(info) and echo[i + 1])):
+                echo[i] = changed = True
+    return " ".join(x for (x, *_), e in zip(info, echo) if not e).strip()
 
 
 class SentenceBuffer:
@@ -77,6 +126,7 @@ class SpeechStream:
         self.finished = False
         self.nseg, self.batch = 0, []
         self.fallback_told = False
+        self.idle_since = time.time()      # waiting for text (the answer is still being written / a tool runs)
         self.worker = asyncio.create_task(self._work(), name=f"speech-{task_id}")
 
     def say(self, text: str) -> None:
@@ -129,9 +179,13 @@ class SpeechStream:
     async def _work(self) -> None:
         try:
             while True:
+                if self.queue.empty():
+                    self.idle_since = time.time()
                 text = await self.queue.get()
+                self.idle_since = 0.0
                 if text is None:
                     break
+                await self.mgr.take_floor(self)      # one voice at a time, never over the person
                 self.mgr.mark(self.turn_id, "tts_start")
                 if self.seq == 0:
                     self.mgr.bus.publish("speech.synth", {}, self.task_id)    # real state: synthesizing speech
@@ -156,13 +210,16 @@ class SpeechStream:
         except asyncio.CancelledError:
             self.mgr.bus.publish("speech.cancelled", {}, self.task_id)
         finally:
-            self.mgr.streams.pop(self.task_id, None)
+            if self.mgr.streams.get(self.task_id) is self:
+                self.mgr.streams.pop(self.task_id, None)
+            if self.mgr.floor is self:
+                self.mgr.floor = None
 
     def _emit(self, text: str, audio: bytes) -> None:
         if self.cancelled or not audio:
             return
         self.mgr.mark(self.turn_id, "first_audio_sent")
-        self.mgr.spoken(text)
+        self.mgr.played(self.task_id, text, audio)
         self.seq += 1
         self.mgr.bus.publish("speech.audio", {"seq": self.seq, "text": text, "mime": "audio/wav",
                                               "audio_b64": base64.b64encode(audio).decode()}, self.task_id)
@@ -177,21 +234,71 @@ class SpeechManager:
         self.db, self.bus, self.engine = db, bus, engine
         self.streams: dict[str, SpeechStream] = {}
         self.lang = "ru"                 # the language the person spoke last (JARVIS's own phrases follow it)
-        self.recent: list[tuple[float, str]] = []      # what JARVIS said in the last seconds (echo check)
+        # What the speakers play and when: pieces are sent faster than they play and the window plays them one after
+        # another, so each piece sounds right after the previous one. Used to know which answer is being heard now
+        # («стоп» stops that one, not the other tasks) and for the echo check (only what sounded during the phrase).
+        self.play_end = 0.0
+        self.playlog: list[tuple[float, float, str, str]] = []      # (start, end, task id, text)
+        self.floor: SpeechStream | None = None      # the stream whose voice is going out now
+        self.hold_until = 0.0                        # the person is talking: JARVIS waits before saying more
+        self.silenced: tuple[float, list[str]] = (0.0, [])   # what a barge-in just cut off
         bus.listeners.append(self._on_event)
 
-    def spoken(self, text: str) -> None:
+    # ---------------------------------------------------------------- what is being heard
+    def played(self, task_id: str | None, text: str, audio: bytes = b"", seconds: float | None = None) -> None:
+        dur = seconds if seconds is not None else wav_seconds(audio, text)
         now_ = time.time()
-        self.recent = [(t, x) for t, x in self.recent if now_ - t < 30][-20:] + [(now_, text)]
+        start = max(now_, self.play_end)
+        self.play_end = start + dur
+        self.playlog = [x for x in self.playlog if now_ - x[1] < 60][-200:] + [(start, start + dur, task_id or "", text)]
 
-    def is_echo(self, heard: str) -> bool:
-        """Did the microphone just hear JARVIS's own voice? (most words of the phrase are in what it said lately)"""
-        words = re.findall(r"\w+", (heard or "").casefold().replace("ё", "е"))
-        if not words:
-            return False
-        said = set(re.findall(r"\w+", " ".join(x for t, x in self.recent if time.time() - t < 30).casefold()
-                              .replace("ё", "е")))
-        return bool(said) and sum(1 for w in words if w in said) / len(words) >= 0.7
+    def spoken(self, text: str) -> None:
+        self.played("", text)
+
+    def audible(self, t0: float | None = None, t1: float | None = None) -> list[str]:
+        """What JARVIS's voice said between t0 and t1 (epoch seconds); without times, in the last 30 s."""
+        if t0 is None or t1 is None:
+            t1 = time.time()
+            t0 = t1 - 30
+        return [x for a, b, _, x in self.playlog if a <= t1 + 0.3 and b + PLAY_TAIL_S >= t0]
+
+    def audible_tasks(self) -> list[str]:
+        """Tasks whose answer is being heard now or is queued to be heard."""
+        now_ = time.time()
+        out = [tid for a, b, tid, _ in self.playlog if tid and b > now_]
+        f = self.floor                    # its next piece is being synthesised right now
+        if f and not f.cancelled and not f.worker.done() and not f.idle_since:
+            out.append(f.task_id)
+        return list(dict.fromkeys(out))
+
+    def is_echo(self, heard: str, t0: float | None = None, t1: float | None = None) -> bool:
+        return bool((heard or "").strip()) and not strip_echo(heard, self.audible(t0, t1))
+
+    def strip_echo(self, heard: str, t0: float | None = None, t1: float | None = None) -> str:
+        said = self.audible(t0, t1)
+        return strip_echo(heard, said) if said else heard
+
+    def hush(self, tasks: list[str] | None = None) -> None:
+        """The windows stopped playing (all of it, or these tasks): nothing more of it will sound."""
+        now_ = time.time()
+        if tasks is None:
+            self.playlog = [(a, min(b, now_), t, x) for a, b, t, x in self.playlog if a <= now_]
+        else:
+            self.playlog = [(a, min(b, now_) if t in tasks else b, t, x) for a, b, t, x in self.playlog
+                            if not (t in tasks and a > now_)]
+        self.play_end = max([now_] + [b for _, b, _, _ in self.playlog])
+
+    async def take_floor(self, s: "SpeechStream") -> None:
+        """Answers of several tasks are spoken one after another, not mixed sentence by sentence; and JARVIS does not
+        start talking while the person is talking."""
+        while True:
+            f = self.floor
+            busy = (f is not None and f is not s and not f.cancelled and not f.worker.done()
+                    and not (f.idle_since and time.time() - f.idle_since > IDLE_YIELD_S))
+            if not busy and time.time() >= self.hold_until:
+                self.floor = s
+                return
+            await asyncio.sleep(0.05)
 
     # ---------------------------------------------------------------- telemetry
     def new_turn(self, speech_start: float | None = None, speech_end: float | None = None) -> str:
@@ -255,7 +362,10 @@ class SpeechManager:
             s = self.streams.pop(t, None)
             if s:
                 s.cancel()
+                if self.floor is s:
+                    self.floor = None
                 n += 1
+        self.hush(None if task_id is None else ids)
         return n
 
     def _on_event(self, kind: str, ev: dict | None = None) -> None:

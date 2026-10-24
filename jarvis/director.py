@@ -59,6 +59,13 @@ class Runtime:
     voice: bool = False          # answer is spoken (voice turn or "speak replies")
     turn: str | None = None      # voice telemetry id
     children: set = field(default_factory=set)   # actions the conversation started through tools (stopped with the task)
+    client: str | None = None    # the window that heard the request («overlay»: the desktop companion speaks the answer)
+    batch: dict | None = None    # one of several tasks said in one request (they run one after another)
+
+
+def _tasks_ru(n: int) -> str:
+    word = {2: "Две", 3: "Три", 4: "Четыре"}.get(n)
+    return f"{word} задачи" if word else f"{n} задач"
 
 
 def _set_event() -> asyncio.Event:
@@ -70,10 +77,10 @@ def _set_event() -> asyncio.Event:
 class Director:
     def __init__(self, *, db: Database, bus: EventBus, audit: AuditLog, tasks: TaskStore, policy: PolicyEngine,
                  approvals: Approvals, gateway: Gateway, ai, scheduler: Scheduler, config,
-                 flora=None, providers=None, agency=None):
+                 providers=None, agency=None):
         self.db, self.bus, self.audit, self.tasks = db, bus, audit, tasks
         self.policy, self.approvals, self.gw, self.ai = policy, approvals, gateway, ai
-        self.scheduler, self.config, self.flora = scheduler, config, flora
+        self.scheduler, self.config = scheduler, config
         self.providers, self.agency = providers, agency
         self.speech = None           # SpeechManager, set by the composition root
         self.stt = None              # LocalSTT (speech recognition on this computer)
@@ -82,6 +89,7 @@ class Director:
         self.github = None           # GitHub account for site publishing (publish.GitHub)
         self.hub = None              # CommsHub
         self.rt: dict[str, Runtime] = {}
+        self.speech_owner: dict[str, str] = {}   # task id → the window that plays its speech (default: the main one)
         self._last_finish: tuple[float, str] | None = None
         self._state = None
         self._flash_handle = None
@@ -139,7 +147,8 @@ class Director:
         return out
 
     # ------------------------------------------------------------------ entry point
-    async def submit(self, text: str, source: str = "text", turn: str | None = None, speak: bool = False) -> str:
+    async def submit(self, text: str, source: str = "text", turn: str | None = None, speak: bool = False,
+                     client: str | None = None) -> str:
         text = (text or "").strip()
         if not text:
             raise ValueError("empty")
@@ -170,12 +179,7 @@ class Director:
                 self.audit.write("approval.by_" + source, approval_id=pend[0]["id"], approve=yn)
                 self.decide(pend[0]["id"], yn)
                 return pend[0]["task_id"]
-        ctx = self.ctx(cid)
-        route = rt.route(text, ctx)
-        if route is None:
-            route = self._skill_route(text)
-        if self.comms and (route is None or route.kind not in ("control",)) and self.comms.answers_pending(text, ctx):
-            route = rt.Route("comms", args={"text": text}, why="Ответ на уточнение JARVIS", level=1)
+        route, answer = self._route_for(text, cid)
         # Control commands act immediately and are not tasks themselves.
         if route and route.kind == "control":
             self.add_message(cid, "user", text, meta={"source": source})
@@ -187,11 +191,35 @@ class Director:
                 if self.speech and source == "voice" and route.args["op"] == "interrupt":
                     self.speech.say("notice-" + (turn or "x"), reply, turn)
             return ""
+        # Several tasks in one request («первое… далее… потом…»): each becomes its own task, run one after another.
+        parts = None if answer or source not in ("voice", "text") else rt.split_tasks(text)
+        if parts:
+            return self._submit_batch(parts, text, cid, source, turn, speak, client)
+        return self._start_task(text, cid, route, source, turn, speak, client)
+
+    def _route_for(self, text: str, cid: str) -> tuple[rt.Route | None, bool]:
+        """The route for a request, and whether it answers a question JARVIS asked («Кому отправить?»)."""
+        ctx = self.ctx(cid)
+        route = rt.route(text, ctx)
+        if route is None:
+            route = self._skill_route(text)
+        if self.comms and (route is None or route.kind not in ("control",)) and self.comms.answers_pending(text, ctx):
+            return rt.Route("comms", args={"text": text}, why="Ответ на уточнение JARVIS", level=1), True
+        return route, False
+
+    def _start_task(self, text: str, cid: str, route: rt.Route | None, source: str, turn: str | None, speak: bool,
+                    client: str | None, batch: dict | None = None) -> str:
         level = route.level if route else 2
         tid = self.tasks.create(text, cid, route=(route.kind if route else "ai"), level=level)
-        self.add_message(cid, "user", text, tid, meta={"source": source})
-        runtime = Runtime(voice=source == "voice" or speak, turn=turn)
+        meta = {"source": source}
+        if batch:
+            meta["batch"] = [len(batch["tasks"]) + 1, len(batch["parts"])]
+        self.add_message(cid, "user", text, tid, meta=meta)
+        runtime = Runtime(voice=source == "voice" or speak, turn=turn, client=client, batch=batch)
         self.rt[tid] = runtime
+        if batch:
+            batch["tasks"].append(tid)
+        self._own(tid, client)
         if runtime.voice and self.speech:
             from .voice.lang import detect
             lang = detect(rt.strip_wake(text), self.speech.lang if source != "voice" else "ru")
@@ -199,10 +227,51 @@ class Director:
                 self.speech.lang = lang       # JARVIS's own short phrases follow the language the person speaks
             # Say less, do more: a spoken answer is its first ~3 sentences, the rest stays on screen.
             self.speech.start(tid, turn, max_chars=450 if route is None else 400, lang=lang)
-            self.speech.annotate(turn, task_id=tid, transcript=text, route=route.kind if route else "ai")
+            self.speech.annotate(turn, task_id=tid, route=route.kind if route else "ai",
+                                 **({} if batch else {"transcript": text}))
         runtime.task = asyncio.create_task(self._run(tid, cid, text, route), name=f"task-{tid}")
         self._touch()
         return tid
+
+    def _own(self, key: str | None, client: str | None) -> None:
+        if key and client and client != "window":
+            self.speech_owner[key] = client
+            if len(self.speech_owner) > 500:
+                self.speech_owner = dict(list(self.speech_owner.items())[-200:])
+
+    def _submit_batch(self, parts: list[str], text: str, cid: str, source: str, turn: str | None, speak: bool,
+                      client: str | None) -> str:
+        n = len(parts)
+        plan = "\n".join(f"{i}. {p}" for i, p in enumerate(parts, 1))
+        self.add_message(cid, "assistant", f"Задач: {n}, выполняю по очереди:\n{plan}", meta={"route": "batch", "level": 0})
+        self.audit.write("batch.started", parts=n)
+        if self.speech and turn:
+            self.speech.annotate(turn, transcript=text)
+        if self.speech and (source == "voice" or speak):
+            key = "batch-" + new_id("")
+            self._own(key, client)
+            self.speech.say(key, f"{_tasks_ru(n)}, делаю по очереди.", turn)
+        batch = {"parts": parts, "tasks": [], "stopped": False}
+        route, _ = self._route_for(parts[0], cid)
+        first = self._start_task(parts[0], cid, route, source, turn, speak, client, batch=batch)
+        spawn(self._run_batch(batch, cid, source, speak, client), "task-batch")
+        return first
+
+    async def _run_batch(self, batch: dict, cid: str, source: str, speak: bool, client: str | None) -> None:
+        """The next task starts when the previous one has ended (an approval or a question it asked is waited for)."""
+        for part in batch["parts"][1:]:
+            prev = self.rt.get(batch["tasks"][-1])
+            if prev and prev.task:
+                await asyncio.wait([prev.task])
+            if batch["stopped"] or self.policy.estop:
+                rest = len(batch["parts"]) - len(batch["tasks"])
+                self.add_message(cid, "assistant", f"Остальные задачи ({rest}) не выполнял: остановлено.",
+                                 meta={"route": "batch", "level": 0})
+                return
+            route, _ = self._route_for(part, cid)
+            if route and route.kind == "control":
+                route = None                    # a part never stops the others: it goes to the conversation
+            self._start_task(part, cid, route, source, None, speak, client, batch=batch)
 
     async def run_ui_tool(self, tool: str, args: dict) -> str:
         """A button in the UI asked for a tool directly (no text command)."""
@@ -291,12 +360,6 @@ class Director:
                 # «Перейди в задачи»: the window switches its workspace; nothing runs on the computer.
                 self.bus.publish("ui.navigate", {"view": route.args["view"]})
                 self._finish(tid, cid, route.reply, meta={"route": "local", "level": 0, "why": route.why})
-            elif route.kind == "flora":
-                if self.flora is None:
-                    self._finish(tid, cid, "Сценарий «Флора» ещё не подключён в этой сборке.",
-                                 meta={"route": "local"})
-                else:
-                    await self.flora.handle(self, tid, cid, text)
         except asyncio.CancelledError:
             self._safe_transition(tid, S.CANCELLED, error="Отменено пользователем")
             self.add_message(cid, "assistant", "Задача отменена.", tid, meta={"route": "control"})
@@ -445,8 +508,7 @@ class Director:
                     "- **Звук**: «громкость 40», «тише», «выключи звук»\n"
                     "- **Файлы**: «найди файл смета», затем «открой второй»; «открой загрузки»\n"
                     "- **Заметки и напоминания**: «запиши заметку: …», «напомни через 10 минут …»\n"
-                    "- **Снимок экрана** — после вашего подтверждения\n"
-                    "- **Флора**: «что важного по Флоре?» (демо-данные)\n\n"
+                    "- **Снимок экрана** — после вашего подтверждения\n\n"
                     f"ИИ-специалисты {ai}. Управление: «пауза», «продолжи», «отмени», «стоп» — экстренная остановка.")
         return ""
 
@@ -460,7 +522,7 @@ class Director:
             pass
 
     # ------------------------------------------------------------------ controls
-    async def control(self, op: str, task_id: str | None = None) -> str:
+    async def control(self, op: str, task_id: str | None = None, task_ids: list[str] | None = None) -> str:
         if op == "estop":
             return await self.estop()
         if op == "estop_clear" or op == "resume_all" and self.policy.estop:
@@ -473,18 +535,38 @@ class Director:
             self._touch()
             return "Экстренная остановка снята. Можно продолжать."
         if op in ("stop_speech", "interrupt", "quiet"):
-            self.bus.publish("speech.stop", {})
+            # Only the answer being heard stops (and what of it is still queued) — other tasks keep working and will
+            # still report. Measured 2026-10-24: «стоп» while one answer played also killed a 3-part task running
+            # in the background.
+            heard = list(task_ids or [])
             if self.speech:
-                self.speech.cancel()
+                heard = list(dict.fromkeys(heard + self.speech.audible_tasks()))
+                at, cut = self.speech.silenced
+                if not heard and time.time() - at < 15:
+                    heard = cut                       # «замолчи» right after cutting in: the answer that was cut off
+                for t in heard:
+                    self.speech.cancel(t)
+                self.speech.hush(heard or None)
+                if op == "stop_speech":
+                    self.speech.silenced = (time.time(), heard)
+            self.bus.publish("speech.stop", {} if op != "stop_speech" or not heard else {"tasks": heard})
             if op == "stop_speech":
                 return "Молчу."
             readonly = {"agent_chat", "agent_generate", "claude_code_inspect", "search_files", "read_file", "system_info",
-                        "window_list", "flora_inbox", "flora_compare", "folder_list", "shell_read", "contact_find"}
+                        "window_list", "folder_list", "shell_read", "contact_find"}
             stopped = []
-            for tid in list(self.rt):
+            live = [tid for tid in list(self.rt) if (t := self.tasks.get(tid))
+                    and S(t["state"]) in (S.CREATED, S.RUNNING, S.PLANNING, S.WAITING_APPROVAL, S.VERIFYING)]
+            targets = [t for t in heard if t in live]
+            if op == "interrupt" and not targets and live:
+                targets = live[-1:]                   # nothing being said: «стоп» stops the newest task
+            for tid in targets:
                 t = self.tasks.get(tid)
-                if not t or S(t["state"]) not in (S.RUNNING, S.PLANNING, S.WAITING_APPROVAL):
-                    continue
+                r = self.rt.get(tid)
+                if self.speech:
+                    self.speech.cancel(tid)           # its voice stops with it («Задача отменена» is not read out)
+                if op == "interrupt" and r and r.batch:
+                    r.batch["stopped"] = True         # «стоп» during a series: the rest is not started
                 if all(s["tool_id"] in readonly for s in t["steps"]):
                     await self.cancel(tid)            # an answer in progress: just dropped, nothing to report
                     continue
@@ -546,6 +628,14 @@ class Director:
                 await asyncio.wait_for(asyncio.shield(r.task), 3)
             except (asyncio.CancelledError, asyncio.TimeoutError, Exception):  # noqa: BLE001
                 pass
+            if self.rt.get(tid) is r and self.tasks.state(tid) not in TERMINAL:
+                # Cancelled before its first step ran (e.g. «стоп» right after the request): nothing cleaned it up.
+                self._safe_transition(tid, S.CANCELLED, error="Отменено пользователем")
+                t = self.tasks.get(tid)
+                if t and t.get("conversation_id"):
+                    self.add_message(t["conversation_id"], "assistant", "Задача отменена.", tid, meta={"route": "control"})
+                self.rt.pop(tid, None)
+                self._touch()
             self.audit.write("task.cancelled", task_id=tid)
             return "Отменил."
         t = self.tasks.get(tid) if tid else None

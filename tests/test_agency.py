@@ -210,9 +210,9 @@ async def test_show_last_mail_uses_mail_tool_without_ai(core, both):
     assert d["steps"][0]["executor"] == "mail_read" and d["steps"][0]["status"] == "blocked"
 
 
-async def test_estimates_tools_then_claude(core, both):
+async def test_estimates_go_to_claude(core, both):
     d = await plan(core, "Проверь две сметы, найди расхождения и подготовь письмо подрядчику")
-    assert chain(d) == [("compare_estimates", "flora_compare"), ("analyze", "claude"), ("write", "claude")]
+    assert chain(d) and all(executor == "claude" for _, executor in chain(d))      # no demo-only estimate tool
 
 
 async def test_named_document_is_read_locally_first(core, both, home):

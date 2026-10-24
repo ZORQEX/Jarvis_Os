@@ -74,17 +74,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     for t in (SkillList(config), SkillRun(config), SkillCreate(manager, config)):
         registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
-    flora = None
-    try:
-        from .flora.workflow import FloraWorkflow
-        flora = FloraWorkflow(paths, db, bus, audit, claude, config)
-        flora.approvals = approvals
-        for t in flora.tools():
-            registry.tools[t.spec.id] = t
-    except ImportError:
-        pass
     director = Director(db=db, bus=bus, audit=audit, tasks=tasks, policy=policy, approvals=approvals,
-                        gateway=gateway, ai=claude, scheduler=scheduler, config=config, flora=flora,
+                        gateway=gateway, ai=claude, scheduler=scheduler, config=config,
                         providers=manager, agency=agency)
     from .voice.speech import SpeechManager
     from .voice.tts import DEFAULT_VOICE, KokoroTTS, PiperTTS, SileroTTS, VoiceEngine

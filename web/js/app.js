@@ -110,9 +110,8 @@ function applySnapshot(d) {
 }
 
 // ------------------------------------------------------------------ events from the core
-let floraMod = null, commsMod = null, pendingFlora = null;
+let commsMod = null;
 function onEvent(ev) {
-  floraMod?.onEvent(ev);
   commsMod?.onEvent(ev);
   const tid = ev.task_id;
   // Answers to what was said to the desktop companion are spoken there, not here (no double voice).
@@ -200,7 +199,6 @@ function onEvent(ev) {
       break;
     case "conversation.new": link.request("snapshot").then(applySnapshot).catch(() => {}); break;
     case "ui.navigate":
-      if (ev.view === "flora") pendingFlora = { tab: ev.tab };
       nav(ev.view);
       break;
     case "providers": S.providers = ev.providers; S.provider = ev.provider; bus.emit("providers");
@@ -252,7 +250,7 @@ async function loadComms() {
 }
 
 // ------------------------------------------------------------------ workspaces
-const sections = { chat: $("#viewChat"), flora: $("#viewFlora"), comms: $("#viewComms"), settings: $("#viewSettings") };
+const sections = { chat: $("#viewChat"), comms: $("#viewComms"), settings: $("#viewSettings") };
 const views = {};
 const ctx = {
   S, bus, link, agent, desktop, voice, toast, nav: (id, p) => nav(id, p),
@@ -293,7 +291,6 @@ function nav(id, params = {}) {
   const v = viewFor(id);
   if (sections[id]) sections[id].hidden = false;
   if (id === "chat") { renderThread(); scrollToEnd(false); setTimeout(() => input.focus(), 0); }
-  else if (id === "flora") renderFlora();
   else if (id === "comms") renderComms();
   else v?.show?.(params);
   $$("[data-nav]", $("#sidebar")).forEach((b) => b.setAttribute("aria-selected", String(b.dataset.nav === id)));
@@ -321,19 +318,6 @@ async function renderComms() {
     await commsMod.render(el, { link, toast });
   } catch (e) {
     el.innerHTML = `<div class="page"><h1>Сообщения</h1><p class="lead">Модуль не загрузился: ${esc(e.message)}</p></div>`;
-  }
-}
-async function renderFlora() {
-  const el = $("#viewFlora");
-  try {
-    const mod = floraMod || (floraMod = await import("./flora.js"));
-    const p = pendingFlora; pendingFlora = null;
-    if (p?.tab) mod.setTab(p.tab);
-    if (p?.item) mod.selectItem(p.item);
-    await mod.render(el, { link, S, toast, submit: (t, s) => submit(t, { source: s }), nav });
-  } catch (e) {
-    console.error(e);
-    if (!floraMod) el.innerHTML = `<div class="page"><h1>Проект «Флора»</h1><p class="lead">Модуль не загрузился: ${esc(e.message)}</p></div>`;
   }
 }
 
@@ -478,7 +462,7 @@ function renderThread() {
 function heroHtml() {
   const h = new Date().getHours();
   const greet = h < 5 ? "Доброй ночи" : h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : "Добрый вечер";
-  const ideas = ["Что важного по Флоре?", "Состояние системы", "Найди файл смета", "Громкость 40",
+  const ideas = ["Состояние системы", "Найди файл смета", "Громкость 40",
     "Запиши заметку: позвонить фабрике", "Напомни через 10 минут проверить почту", "Сделай скриншот", "Что ты умеешь?"];
   return `<div class="hero"><h1>${greet}.</h1>
     <p>Скажите или напишите, что нужно сделать. Простые команды выполняются сразу, на этом компьютере.</p>
@@ -545,8 +529,8 @@ function metaLine(t, task) {
     const names = { claude: "Claude", claude_code: "Claude Code" };
     if (m.providers?.length) bits.push(`<span class="cloud">${ICON.spark.replace("<svg", '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${esc(m.providers.map((p) => names[p] || p).join(" → "))}</span>`);
     else bits.push("без ИИ");
-  } else if (m.route === "local" || m.route === "flora") {
-    bits.push(m.route === "flora" ? "демо-данные · локально" : "локально, без ИИ");
+  } else if (m.route === "local") {
+    bits.push("локально, без ИИ");
   }
   if (task.finished_at) bits.push(fmtMs((task.finished_at - task.created_at) * 1000));
   if (!bits.length) return "";
@@ -759,10 +743,7 @@ document.addEventListener("click", async (e) => {
   if (attachPop && !e.target.closest(".attach-pop, #attachBtn")) { attachPop.remove(); attachPop = null; }
   const t = e.target.closest("button, [data-open], [data-url]");
   if (!t) return;
-  if (t.dataset.nav) {
-    if (t.dataset.floraTab || t.dataset.floraItem) pendingFlora = { tab: t.dataset.floraTab, item: t.dataset.floraItem };
-    return nav(t.dataset.nav);
-  }
+  if (t.dataset.nav) return nav(t.dataset.nav);
   if (t.dataset.suggest) return submit(t.dataset.suggest, { source: "text", stay: S.view !== "chat" });   // stay in the workspace
   if (t.dataset.attach) { attachPop?.remove(); attachPop = null; return attachFile(t.dataset.attach); }
   if (t.dataset.attDel != null) { S.attachments.splice(+t.dataset.attDel, 1); return renderAttachments(); }

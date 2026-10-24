@@ -104,7 +104,7 @@ export function create(ctx) {
       <div><h2>${esc(t.request)}</h2>
         <div class="tc-meta" style="margin-top:6px"><span class="pill ${s.key}">${esc(s.label)}</span>
           <span>начата ${esc(fmtTime(t.created_at))}</span>${t.finished_at ? `<span>· заняла ${fmtMs((t.finished_at - t.created_at) * 1000)}</span>` : ""}
-          <span>· ${esc({ local: "на компьютере, без ИИ", tool: "на компьютере, без ИИ", ai: "через ИИ", comms: "сообщения", flora: "Флора (демо)", ui: "раздел окна" }[t.route] || t.route || "")}</span></div></div>
+          <span>· ${esc({ local: "на компьютере, без ИИ", tool: "на компьютере, без ИИ", ai: "через ИИ", comms: "сообщения", ui: "раздел окна" }[t.route] || t.route || "")}</span></div></div>
       <div class="tc-ctl">
         ${working ? `<button class="btn danger" data-t="cancel">${ICON.stop} Остановить</button>` : ""}
         ${["running", "planning"].includes(t.state) ? `<button class="btn ghost" data-t="pause">${ICON.pause} Пауза</button>` : ""}

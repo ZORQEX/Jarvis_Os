@@ -20,13 +20,12 @@ PREFS: dict[str, list[str]] = {
     Cap.TRANSLATION: ["claude"], Cap.DOC_ANALYSIS: ["claude"], Cap.GENERAL: ["claude"],
     Cap.DESKTOP_TOOLS: ["claude"], Cap.PLANNING: ["claude"],
 }
-TOOL_FOR = {"compare_estimates": "flora_compare", "read_mail": "mail_read", "send_message": "email_send",
+TOOL_FOR = {"read_mail": "mail_read", "send_message": "email_send",
             "read_file": "read_file"}
-TOOL_MISSING = {"mail_read": "Почта (Gmail) ещё не подключена — читать письма пока нельзя. Демо-ящик есть в проекте «Флора».",
+TOOL_MISSING = {"mail_read": "Почта (Gmail) ещё не подключена — читать письма пока нельзя.",
                 "email_send": "Сообщения и письма отправляет модуль связи — скажите, например: «Отправь Ивану в Telegram: "
-                              "текст» или «Напиши Сергею на почту, что документы готовы». Перед отправкой я переспрошу.",
-                "flora_compare": "Модуль смет недоступен."}
-LOCAL_DATA = {"compare_estimates", "read_mail", "inspect_code", "change_code", "vision_screen", "read_file", "files"}
+                              "текст» или «Напиши Сергею на почту, что документы готовы». Перед отправкой я переспрошу."}
+LOCAL_DATA = {"read_mail", "inspect_code", "change_code", "vision_screen", "read_file", "files"}
 
 
 def step_sensitivity(step: Step, by_id: dict[str, Step], sens: dict[str, str]) -> str:

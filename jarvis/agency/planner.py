@@ -31,7 +31,6 @@ R = {
     "send": re.compile(r"\b(отправь|отошли|разошли|опубликуй|перешли|отправить)\b"),
     "read_mail": re.compile(r"(покажи|открой|найди|прочитай|проверь)\s+(?:мне\s+)?(?:последн\w+\s+|нов\w+\s+)?"
                             r"(письм\w*|почт\w*)"),
-    "estimates": re.compile(r"\b(смет\w*|кп\b|коммерческ\w+ предложени\w*)"),
     "code_obj": re.compile(r"(?:исправь|почини|найди|устрани|проверь|посмотри|разберись)\w*\s+(?:с\s+)?(?:ошибк\w*|баг\w*)(?!.{0,20}\b(?:в|во)\s+"
                            r"(?:письм|текст|сообщени|документ|переводе|смет))|\b(код\w*|баг\w*|тест\w*|скрипт\w*|функци\w*|репозитори\w*|модул\w*|сборк\w*|"
                            r"компиляц\w*|лог\w*|traceback|python|javascript|typescript|rust|программ\w*|"
@@ -75,7 +74,7 @@ OVERRIDE_MAP = {"claude": "claude", "клод": "claude", "клауд": "claude"
                 "клод код": "claude_code", "клауд код": "claude_code"}
 HIGH_SENS = re.compile(r"\bпарол\w*|\bпаспорт\w*|\bномер\w* (?:банковск\w+ )?карт\w*|\bcvv|\bcvc|\bпин-?код\w*|"
                        r"\bснилс|\bseed[- ]фраз\w*|\bприватн\w* ключ\w*|private key|\bpassword", re.I)
-CONF = re.compile(r"флор\w*|смет\w*|договор\w*|письм\w* от|счёт|счет\b|кп\b|бюджет\w*|зарплат\w*")
+CONF = re.compile(r"смет\w*|договор\w*|письм\w* от|счёт|счет\b|кп\b|бюджет\w*|зарплат\w*")
 
 
 @dataclass
@@ -121,8 +120,6 @@ def classify_clause(c: str, prev: str | None) -> tuple[str, float]:
         return "files", 0.9
     if R["code_obj"].search(t) or R["system"].search(t):
         return ("change_code" if R["code_change"].search(t) else "inspect_code"), 0.9
-    if R["estimates"].search(t) and re.search(r"сравни|проверь|расхожд|разниц|сопостав", t):
-        return "compare_estimates", 0.9
     if R["research"].search(t):
         return "research", 0.9
     if R["translate"].search(t) and not R["write"].search(t):
@@ -140,7 +137,7 @@ def classify_clause(c: str, prev: str | None) -> tuple[str, float]:
         return "change_code", 0.75
     if prev in ("inspect_code", "change_code"):
         return "inspect_code", 0.6
-    if prev in ("research", "compare_estimates", "analyze", "read_mail") and re.search(VERBS, t):
+    if prev in ("research", "analyze", "read_mail") and re.search(VERBS, t):
         return "analyze", 0.6
     return "chat", 0.5
 
@@ -219,12 +216,12 @@ def classify_objective(steps: list[Step]) -> str:
     if "vision_screen" in acts:
         return "visual_diagnosis"
     if acts & {"write", "send_message", "translate"} and len(acts) > 1:
-        return "business_communication" if acts & {"research", "compare_estimates", "read_mail", "analyze"} else "writing"
+        return "business_communication" if acts & {"research", "read_mail", "analyze"} else "writing"
     if acts == {"write"} or acts == {"translate"}:
         return "writing"
     if acts == {"research"} or acts == {"research", "analyze"}:
         return "research"
-    if acts & {"compare_estimates", "analyze"}:
+    if acts & {"analyze"}:
         return "document_analysis"
     if acts == {"read_mail"}:
         return "mail"
@@ -237,7 +234,7 @@ def sensitivity_of(text: str, steps: list[Step]) -> str:
     t = text.casefold()
     if HIGH_SENS.search(t):
         return "HIGHLY_SENSITIVE"
-    local = {"compare_estimates", "read_mail", "inspect_code", "change_code", "vision_screen", "files", "read_file"}
+    local = {"read_mail", "inspect_code", "change_code", "vision_screen", "files", "read_file"}
     if CONF.search(t) or any(s.action in local for s in steps):
         return "CONFIDENTIAL"
     if all(s.action == "research" for s in steps):
@@ -267,7 +264,7 @@ PLANNER_PROMPT = """Разбей задачу пользователя на ша
 Допустимые action: research (поиск в интернете), analyze (сравнение/анализ данных), write (письмо/текст),
 translate (перевод), vision_screen (посмотреть на экран), chat (ответ/беседа/действия на компьютере),
 inspect_code (посмотреть код/логи), change_code (изменить код/файлы проекта, запустить тесты),
-compare_estimates (сравнить сметы проекта), read_mail (показать письма), send_message (отправить сообщение).
+read_mail (показать письма), send_message (отправить сообщение).
 Не больше 6 шагов. Не добавляй send_message, если пользователь не просил отправить. Задача:\n"""
 
 

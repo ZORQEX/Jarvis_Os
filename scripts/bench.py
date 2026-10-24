@@ -11,8 +11,7 @@ os.environ["JARVIS_HOME"] = tempfile.mkdtemp(prefix="jarvis-bench-")
 __import__("atexit").register(__import__("shutil").rmtree, os.environ["JARVIS_HOME"], True)
 from jarvis.app import build  # noqa: E402
 
-CMDS = ["состояние системы", "какие окна открыты", "найди файл смета", "который час", "Что важного по Флоре?",
-        "сравни сметы по флоре"]
+CMDS = ["состояние системы", "какие окна открыты", "найди файл смета", "который час", "сколько будет 25% от 800"]
 
 
 async def main(n: int):

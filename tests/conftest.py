@@ -3,6 +3,7 @@ import socket
 from pathlib import Path
 
 import pytest
+from aiohttp.test_utils import TestClient, TestServer
 
 from jarvis.app import build
 from jarvis.config import Config, Paths
@@ -176,3 +177,20 @@ def install(core, **providers):
             if getattr(p, "registry", "absent") is None:
                 p.registry = core.registry
     return providers
+
+
+# ---------------------------------------------------------------- the window's WebSocket (desktop companion tests)
+@pytest.fixture
+async def ws_client(core):
+    from jarvis.server import Server
+    srv = Server(core)
+    tc = TestClient(TestServer(srv.app, port=core.config.port))
+    await tc.start_server()
+    host = {"Host": f"127.0.0.1:{core.config.port}"}
+    await tc.get(f"/?t={srv.token}", headers=host)
+    ws = await tc.ws_connect("/ws", headers={**host, "Origin": f"http://127.0.0.1:{core.config.port}"})
+    await ws.receive()
+    tc.srv, tc.ws, tc.hdr = srv, ws, host
+    yield tc
+    await ws.close()
+    await tc.close()

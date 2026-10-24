@@ -22,7 +22,7 @@ from .tools import PROVIDER_NAMES
 
 ACTION_RU = {"files": "работа с файлами", "read_file": "чтение файла", "research": "поиск в интернете", "analyze": "анализ", "write": "текст", "translate": "перевод",
              "vision_screen": "анализ экрана", "chat": "ответ", "inspect_code": "просмотр кода",
-             "change_code": "изменение кода", "compare_estimates": "сравнение смет", "read_mail": "чтение почты",
+             "change_code": "изменение кода", "read_mail": "чтение почты",
              "send_message": "отправка"}
 RETRYABLE = {"auth", "quota", "network", "server", "unavailable", "model"}
 REFERS_BACK = re.compile(r"\b(это|этот|эту|его|её|ее|предыдущ\w*|выше|последн\w+ ответ)\b", re.I)
@@ -396,14 +396,7 @@ class Agency:
         if s.executor == "read_file":
             return StepOut(True, data.get("text", ""), [{"title": data.get("name"), "ref": data.get("path")}], None, None,
                            step_ref=out.step_id, verification=out.verification.as_dict() if out.verification else None)
-        if s.executor == "flora_compare":
-            c = data["comparison"]
-            rows = "\n".join(f"- {r['code']}: было {r['base']['sum'] if r['base'] else '—'}, стало "
-                             f"{r['new']['sum'] if r['new'] else '—'} ({r['status']})" for r in c["rows"])
-            text += "\n\nСтроки:\n" + rows
-        return StepOut(True, text, [{"title": f, "ref": f} for f in
-                                    (data.get("comparison", {}).get("base_file"), data.get("comparison", {}).get("new_file"))
-                                    if f], None, None, step_ref=out.step_id,
+        return StepOut(True, text, [], None, None, step_ref=out.step_id,
                        verification=out.verification.as_dict() if out.verification else None)
 
     async def _chat_step(self, director, tid, cid, s, on_delta, instruction: str | None = None,
@@ -518,7 +511,7 @@ class Agency:
 
     @staticmethod
     def _is_long(d: Decision) -> bool:
-        slow = {"research", "analyze", "inspect_code", "change_code", "files", "vision_screen", "compare_estimates"}
+        slow = {"research", "analyze", "inspect_code", "change_code", "files", "vision_screen"}
         return len(d.steps) > 1 or any(s.action in slow for s in d.steps) or \
             bool(re.search(r"подробн|детальн|расскажи (мне )?(всё|все|о|об|про)", d.objective, re.I))
 

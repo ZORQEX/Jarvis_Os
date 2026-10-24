@@ -53,6 +53,9 @@ const voice = new Voice({
 function applySettings(st) {
   const want = !!st?.wake;
   S.wake = want;
+  // The main window has the microphone (its conversation mode is on): wait until it lets go, even if the companion
+  // started after it — two open microphones hear each other's voice.
+  if (want && st?.window_listening) { S.yielded = true; if (voice.conversation) voice.toggleConversation(); render(); return; }
   if (want && !voice.conversation) voice.toggleConversation();          // mic open, «Джарвис» wakes it
   if (!want && voice.conversation) voice.toggleConversation();
   render();

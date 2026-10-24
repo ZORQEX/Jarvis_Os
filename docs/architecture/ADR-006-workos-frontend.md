@@ -45,3 +45,5 @@ The brief mentions React; the existing UI is a no-build ES-module app under a st
 - Idle CPU of the window unchanged (0 frames while idle; companion motion only in active states).
 - A Windows or Quickshell desktop integration replaces the core's desktop tools behind the same requests; the window
   code does not change.
+
+Update 2026-10-24: the «Флора» workspace (synthetic demo project) was removed at the user's request.

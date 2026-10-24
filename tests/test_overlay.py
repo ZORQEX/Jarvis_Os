@@ -1,11 +1,7 @@
 """Desktop companion: window geometry, wake listening (only «Джарвис…» reaches the director), speech ownership."""
 import json
 
-import pytest
-from aiohttp.test_utils import TestClient, TestServer
-
 from jarvis.overlay import clamp, default_spot, grow, logical
-from jarvis.server import Server
 
 from conftest import wait_for
 
@@ -24,21 +20,6 @@ def test_card_opens_away_from_the_nearest_edges():
     orb_bl = {"x": 10, "y": 640, "w": 64, "h": 64}              # bottom-left: opens up-right
     assert grow(orb_bl, 360, 470, AREA) == (10, 704 - 470)
     assert clamp(-50, 5000, 64, 64, AREA) == (4, 26 + 694 - 64 - 4)
-
-
-@pytest.fixture
-async def ws_client(core):
-    srv = Server(core)
-    tc = TestClient(TestServer(srv.app, port=core.config.port))
-    await tc.start_server()
-    host = {"Host": f"127.0.0.1:{core.config.port}"}
-    await tc.get(f"/?t={srv.token}", headers=host)
-    ws = await tc.ws_connect("/ws", headers={**host, "Origin": f"http://127.0.0.1:{core.config.port}"})
-    await ws.receive()
-    tc.srv, tc.ws, tc.hdr = srv, ws, host
-    yield tc
-    await ws.close()
-    await tc.close()
 
 
 async def request(tc, typ, rid, **payload):
@@ -60,7 +41,7 @@ async def test_overlay_page_and_token(ws_client):
 
 async def test_settings_persist_and_are_announced(ws_client, core):
     tc = ws_client
-    assert (await request(tc, "overlay.state", 1))["data"] == {"wake": False, "enabled": True}
+    assert (await request(tc, "overlay.state", 1))["data"] == {"wake": False, "enabled": True, "window_listening": False}
     m = await request(tc, "overlay.settings", 2, wake=True)
     assert m["data"]["wake"] is True and core.db.get_kv("wake_listen") is True
 

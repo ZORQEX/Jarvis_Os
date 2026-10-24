@@ -12,7 +12,7 @@ from .tools.desktop import APP_ALIASES
 
 @dataclass
 class Route:
-    kind: str                     # tool | reply | control | search_open | flora
+    kind: str                     # tool | reply | control | search_open | comms | connect | skill | ui | answer
     tool: str | None = None
     args: dict = field(default_factory=dict)
     reply: str | None = None
@@ -22,7 +22,7 @@ class Route:
 
 # Spellings the local recogniser produces for «Джарвис» (measured: «Джарис», «Джас», «Давис», «Джавис»).
 WAKE = re.compile(r"^\s*(?:hey|эй|хэй|хей|ok|окей)?\s*(?:джарвис|jarvis|жарвис|джервис|джарис|джавис|джаревис|"
-                  r"жарис|джас|давис|дарвис)(?=[\s,!.:]|$)[\s,!.:]*", re.I)
+                  r"жарис|джас|давис|дарвис)(?=[\s,!.:?…—–-]|$)[\s,!.:?…—–-]*", re.I)
 
 NUM_WORDS = {
     "ноль": 0, "один": 1, "одну": 1, "одна": 1, "одной": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5,
@@ -55,7 +55,10 @@ def _lev(a: str, b: str) -> int:
     return prev[-1]
 
 
-_FIRST_WORD = re.compile(r"^\s*(?:(?:hey|эй|хэй|хей|ok|окей)[\s,]+)?([^\W\d_]+)(?=[\s,!.:?]|$)[\s,!.:]*", re.I)
+# «Джарвис— первое, …»: after a pause GigaAM writes a dash right after the name (measured 2026-10-24: such phrases were
+# not recognised as addressed and the companion dropped them).
+_FIRST_WORD = re.compile(r"^\s*(?:(?:hey|эй|хэй|хей|ok|окей)[\s,]+)?([^\W\d_]+)(?=[\s,!.:?…—–-]|$)[\s,!.:?…—–-]*",
+                         re.I)
 
 
 def wake_len(text: str) -> int:
@@ -331,10 +334,6 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("tool", "search_files", {"query": _clean_query(m.group(1)),
                                               "folder": os.path.expanduser(folder)}, why="Поиск в папке")
 
-    # --- Flora workflow --------------------------------------------------------
-    if re.search(r"\bфлор[аеуыой]?\b|\bflora\b", t):
-        return Route("flora", args={"text": raw}, why="Проект «Флора» (демо-данные)", level=1)
-
     # --- open -------------------------------------------------------------------------
     # An exact path («открой файл /tmp/x.txt», «открой ~/Документы/a.pdf») is opened as written — never turned into a
     # search for a mangled name; a missing file is reported as missing.
@@ -379,13 +378,12 @@ UI_VIEWS = (
     ("whatsapp", r"ват[сц]ап\w*|вотсап\w*|вацап\w*|whats ?app"),
     ("mail", r"почт\w*|gmail|джимейл\w*"),
     ("files", r"файл\w*"),
-    ("flora", r"флор\w*"),
     ("settings", r"настройк\w*"),
     ("comms", r"сообщени\w*|очеред\w* сообщений"),
 )
 UI_TITLES = {"home": "Главная", "chat": "Беседа", "tasks": "Задачи", "history": "История действий",
              "browser": "Браузер", "telegram": "Telegram", "whatsapp": "WhatsApp", "mail": "Почта", "files": "Файлы",
-             "flora": "Флора", "settings": "Настройки", "comms": "Сообщения"}
+             "settings": "Настройки", "comms": "Сообщения"}
 _UI_NOUN = r"(?:раздел|вкладк[уа]|экран|страниц[уа]|рабочее пространство|пространство)"
 
 
@@ -410,3 +408,84 @@ def _clean_query(q: str) -> str:
     q = re.sub(r"\s+(?:пожалуйста|please)$", "", q.strip())
     q = re.sub(r"^(?:с названием|под названием|named|called)\s+", "", q)
     return q.strip()
+
+
+# --- several tasks in one request ------------------------------------------------------------------------------
+# «Первое, найди папку Колледж. А далее напиши в Телеграме Любимой «привет», и далее найди картинку шуруповёрта.»
+# Measured 2026-10-24: such a request went whole to the messaging route, which did only the message — the folder and
+# the picture were dropped. Split on explicit sequence words only (never on a bare «и»: «найди файл и открой его» is
+# one task), and never inside quotes or the text of a message after «напиши …:».
+_SEQ_OPEN = r"во[- ]первых|первое|перво-наперво|первая задача|первым делом|сначала|для начала"
+_SEQ_NEXT = (r"во[- ]вторых|в[- ]третьих|в[- ]четв[её]ртых|в[- ]пятых|второе|третье|четв[её]ртое|пятое|"
+             r"вторая задача|третья задача|четв[её]ртая задача|следующая задача|далее|дальше|потом|затем|"
+             r"после этого|после чего|а после|и наконец|наконец|напоследок|и напоследок|и ещё|а ещё|и еще|а еще|"
+             r"а также|также|кроме того")
+_SEQ = re.compile(r"(?<![\w-])((?:(?:и|а|но|ну|так)\s+)?)(?:(" + _SEQ_OPEN + r")|(" + _SEQ_NEXT + r"))(?![\w-])"
+                  r"|(?:(?<=\s)|^)(\d{1,2})[.)](?=\s)", re.I)
+_FRAMING = re.compile(r"задач|слушай|смотри|дослушай|послушай|говорю|скажу|итак|значит|короче|запомни|"
+                      r"запоминай|у меня|давай|нужно сделать|надо сделать|сделай вот", re.I)
+_LEAD = re.compile(r"^(?:[\s,.;:!?—–-]+|(?:э+(?:-э+)*|м+(?:-м+)*|ну|и|а|так|вот|это|тебе|мне|надо|нужно|нужно будет|будет|"
+                   r"задача|пожалуйста)(?![\w-])\s*)", re.I)
+_PREP = {"в", "во", "на", "к", "ко", "с", "со", "по", "у", "о", "об", "из", "от", "до", "за", "под", "над", "при",
+         "для", "про", "через", "без"}
+_SEND_COLON = re.compile(r"\b(?:напиши|отправь|скажи|передай|пошли|сообщи|ответь|черкни|написать|отправить)\b"
+                         r"[^.!?:]{0,80}:", re.I)
+
+
+def _protected(text: str) -> list[tuple[int, int]]:
+    spans = [(m.start(), m.end()) for m in re.finditer(r"«[^»]*»|\"[^\"]*\"|“[^”]*”|„[^“”]*[“”]", text)]
+    for m in _SEND_COLON.finditer(text):        # the message body: up to the end of its sentence
+        end = re.search(r"[.!?…](?:\s|$)", text[m.end():])
+        spans.append((m.end(), m.end() + end.end() if end else len(text)))
+    return spans
+
+
+def _clean_part(s: str) -> str:
+    s = s.strip()
+    while True:
+        n = _LEAD.sub("", s, count=1)
+        if n == s:
+            break
+        s = n
+    return re.sub(r"[\s,;:—–-]+$", "", s).strip()
+
+
+def split_tasks(text: str) -> list[str] | None:
+    """Several tasks said in a row → the tasks, in order; None for a single request."""
+    raw = strip_wake(text or "").strip()
+    if len(raw) < 12 or len(raw) > 3000:
+        return None
+    prot = _protected(raw)
+    cuts = []                                   # (start of the marker, end of the marker, is an opening marker)
+    for m in _SEQ.finditer(raw):
+        st = m.start()
+        if any(a <= st < b for a, b in prot):
+            continue
+        before = raw[:st].rstrip()
+        conj = bool(m.group(1))
+        if m.group(4) is None and before and not conj and before[-1] not in ".!?;,:—–-":
+            continue                            # «найди файлы сначала в загрузках»: not a new task
+        cuts.append((st, m.end(), bool(m.group(2)), int(m.group(4)) if m.group(4) else None))
+    nums = [c for c in cuts if c[3] is not None]          # «1) … 2) …» counts only as a list numbered from one
+    if nums and [c[3] for c in nums] != list(range(1, len(nums) + 1)) or len(nums) == 1:
+        cuts = [c for c in cuts if c[3] is None]
+    if not cuts:
+        return None
+    parts = []
+    pre = raw[:cuts[0][0]]
+    first_open = cuts[0][2]
+    if _clean_part(pre) and not (first_open and (_FRAMING.search(pre) or len(pre.split()) <= 2)):
+        parts.append(pre)
+    for i, (st, en, _, _) in enumerate(cuts):
+        parts.append(raw[en:cuts[i + 1][0]] if i + 1 < len(cuts) else raw[en:])
+    out: list[str] = []
+    for p in parts:
+        c = _clean_part(p)
+        words = c.split()
+        if out and (len(words) < 2 or words[0].lower() in _PREP):
+            out[-1] = out[-1] + " " + p.strip()     # «…сначала в загрузках, потом в документах»: one task
+            continue
+        if c:
+            out.append(c)
+    out = [_clean_part(x) for x in out if len(_clean_part(x).split()) >= 2]
+    return out[:8] if len(out) >= 2 else None

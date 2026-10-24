@@ -17,7 +17,6 @@ ACTIONS = {
     "change_code": (Cap.CODE, "provider"),
     "files": (Cap.FILESYSTEM, "provider"),       # create/save/move/download files via Claude Code
     "read_file": (None, "tool"),                 # deterministic: read a named local document
-    "compare_estimates": (None, "tool"),         # deterministic: flora_compare
     "read_mail": (None, "tool"),                 # deterministic: mail connector
     "send_message": (None, "tool"),              # external side effect: approval-gated
 }
