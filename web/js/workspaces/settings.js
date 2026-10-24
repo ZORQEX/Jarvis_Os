@@ -86,6 +86,13 @@ function renderSettings() {
       <div id="proactiveBox" style="margin-top:10px"><span class="faint">Загружаю…</span></div>
     </div>
     <div class="panel">
+      <h2>Умный дом</h2>
+      <div class="muted" style="font-size:13.5px">Через Home Assistant: «Включи свет на кухне», «Свет в спальне на 30 процентов»,
+        «Поставь кондиционер на 22 градуса», «Что включено дома?». Замки, ворота, сигнализацию и «весь свет» JARVIS трогает
+        только после вашего нажатия «Разрешить» (голосового «да» для них нет).</div>
+      <div id="homeBox" style="margin-top:10px"><span class="faint">Проверяю…</span></div>
+    </div>
+    <div class="panel">
       <h2>Телефон</h2>
       <div class="muted" style="font-size:13.5px">Свой бот Telegram: пишите или присылайте голосовые JARVIS с телефона — ответ придёт туда же.
         Файлы фабрик из чата попадают в «Заказы», остальные — в ~/Downloads/JARVIS. Отвечает только вашему телефону;
@@ -139,6 +146,7 @@ function renderSettings() {
   renderPublish();
   renderPhone();
   renderProactive();
+  renderHome();
   renderImprove();
   renderMemory();
   $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {
@@ -211,6 +219,27 @@ async function renderPublish(poll = 0) {
     try { await ctx.link.request("publish.github.begin", {}, 30000); } catch (er) { ctx.toast(er.message, "err"); }
     renderPublish();
   };
+}
+
+async function renderHome(op = null, args = {}) {
+  const box = $("#homeBox");
+  if (!box) return;
+  let st;
+  try { st = await ctx.link.request(op || "home.state", args, 20000); }
+  catch (e) { if (!op) { box.innerHTML = `<span class="faint">${esc(e.message)}</span>`; return; } ctx.toast(e.message, "err"); return; }
+  if (!box.isConnected) return;
+  if (st.configured) {
+    box.innerHTML = `${st.error ? `<div class="cerr" style="margin-bottom:6px">${esc(st.error)}</div>` : ""}
+      <div class="field" style="margin-top:0">${st.error ? `<span class="cpill">не на связи</span>` : `<span class="cpill ok">подключён</span>`}
+        <span class="faint">${esc(st.url)}${st.devices != null ? ` · устройств: ${st.devices}` : ""}</span>
+        <button class="btn ghost" id="haForget">Отключить</button></div>`;
+    $("#haForget", box).onclick = () => renderHome("home.forget");
+    return;
+  }
+  box.innerHTML = `<div class="field" style="margin-top:0"><input id="haUrl" value="${esc(st.url || "")}" placeholder="http://homeassistant.local:8123" style="flex:1;min-width:220px"></div>
+    <div class="field"><input id="haToken" type="password" autocomplete="off" placeholder="Долгосрочный токен (профиль → Безопасность)" style="flex:1;min-width:220px">
+      <button class="btn primary" id="haSave">Подключить</button></div>`;
+  $("#haSave", box).onclick = () => renderHome("home.connect", { url: $("#haUrl", box).value, token: $("#haToken", box).value });
 }
 
 async function renderProactive(args = null) {

@@ -125,6 +125,10 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)
     from .phone import Phone
     phone = Phone(director, db, bus, audit, comms.store)     # JARVIS from the phone (a private Telegram bot)
+    from .tools.home import HomeAssistant, HomeControl, HomeSecure, HomeStatus     # the smart home
+    director.home = HomeAssistant(db, comms.store)
+    for t in (HomeStatus(director.home), HomeControl(director.home), HomeSecure(director.home)):
+        registry.tools[t.spec.id] = t
     from .proactive import Proactive, Watch
     proactive = Proactive(db, bus, audit, director)          # battery, disk, memory, services, internet, watches
     registry.tools["watch"] = Watch(db)

@@ -27,7 +27,9 @@ _NO_W = (r"нет|не надо|не отправляй|не нужно|не д�
          r"отклони|отказ|отказываюсь|отбой|нельзя|отмена|отмени|отменить|стой|no")
 YES = rf"((да|ну|так)[, ]+)?({_YES_W})([, ]+({_YES_W}))?"
 NO = rf"((нет|ну)[, ]+)?({_NO_W})([, ]+({_NO_W}))?"
-CLICK_ONLY = {"trust_rule_add"}      # durable permission changes are confirmed by a click only, never by voice
+# Confirmed by a click only, never by voice: durable permission changes, and locks / gates / alarms (anyone at the door
+# could say «да»).
+CLICK_ONLY = {"trust_rule_add", "home_secure"}
 
 SCHEMA = {
     "type": "object",

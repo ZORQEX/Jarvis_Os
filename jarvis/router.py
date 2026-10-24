@@ -444,6 +444,11 @@ def _route(text: str, ctx: dict | None = None) -> Route | None:
     r = _caps_route(t, raw)
     if r:
         return r
+    if ctx.get("home"):          # Home Assistant connected: «включи свет на кухне» without the AI (tools/home.py)
+        from .tools.home import parse_home
+        h = parse_home(t)
+        if h:
+            return Route("tool", h["tool"], h["args"], why="Умный дом (Home Assistant)")
 
     # --- system ----------------------------------------------------------------
     if re.search(r"(состояние|статус|как (там )?(дела у )?) ?(системы|компьютера|ноутбука)|"

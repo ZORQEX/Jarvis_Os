@@ -867,6 +867,16 @@ class Server:
                     res = ph.state()
                 else:
                     raise ValueError(f"Неизвестный запрос: {typ}")
+            elif typ in ("home.state", "home.connect", "home.forget") and d.home:   # Settings → «Умный дом»
+                if typ == "home.connect":
+                    res = await d.home.connect(str(data.get("url") or ""), str(data.get("token") or ""))
+                    self.core.audit.write("home.connected", devices=res["devices"])
+                elif typ == "home.forget":
+                    d.home.forget()
+                    self.core.audit.write("home.disconnected")
+                    res = {"configured": False, "url": ""}
+                else:
+                    res = await d.home.state()
             elif typ in ("proactive.state", "proactive.settings") and self.core.proactive:   # Settings → Предупреждения
                 pa = self.core.proactive
                 if typ == "proactive.settings":

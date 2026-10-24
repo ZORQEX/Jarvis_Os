@@ -84,6 +84,7 @@ class Director:
         self.providers, self.agency = providers, agency
         self.speech = None           # SpeechManager, set by the composition root
         self.stt = None              # LocalSTT (speech recognition on this computer)
+        self.home = None             # HomeAssistant (tools/home.py), when the person connected it
         self.comms = None            # CommsAgent
         self.history = None          # ActionHistory (lasting actions only), set by the composition root
         self.github = None           # GitHub account for site publishing (publish.GitHub)
@@ -212,6 +213,8 @@ class Director:
     def _route_for(self, text: str, cid: str) -> tuple[rt.Route | None, bool]:
         """The route for a request, and whether it answers a question JARVIS asked («Кому отправить?»)."""
         ctx = self.ctx(cid)
+        if self.home is not None and self.home.configured():
+            ctx = {**ctx, "home": True}
         route = rt.route(text, ctx)
         if route is None:
             route = self._skill_route(text)
