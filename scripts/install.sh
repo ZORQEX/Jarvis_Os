@@ -73,6 +73,13 @@ for f in kokoro-v1.0.int8.onnx voices-v1.0.bin; do
   [[ -s "$KOKORO/models/$f" ]] || curl -fsSL -o "$KOKORO/models/$f" "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/$f"
 done
 
+# End of a phrase by the voice: Smart Turn v3.2 (Pipecat / Daily, BSD-2-Clause), int8 ONNX, ~8 MB, run by the speech
+# worker (jarvis/voice/turn.py).
+TURN_DIR="$HOME/.local/share/jarvis/stt/turn"
+mkdir -p "$TURN_DIR"
+[[ -s "$TURN_DIR/smart-turn-v3.2-cpu.onnx" ]] || curl -fsSL -o "$TURN_DIR/smart-turn-v3.2-cpu.onnx" \
+  "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/smart-turn-v3.2-cpu.onnx"
+
 # Speech recognition on this computer: GigaAM v3 (Sber, MIT), int8 build (~230 MB, ~520 MB RAM), own virtualenv.
 STT="$HOME/.local/share/jarvis/stt"
 if [[ ! -x "$STT/.venv/bin/python" ]]; then

@@ -30,7 +30,9 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   waiting for «Джарвис» only if a wake-like word was heard). TTS = Supertonic 3 (`supertonic_worker.py`, one voice for
   every language, default M4); Silero (ru/de/uk) + Kokoro (en/es/fr/it/pt) are the fallback and start only when used.
   Numbers/symbols → words: `voice/textnorm.py` (loaded by path in the workers). Each runs in its own venv under
-  `~/.local/share/jarvis/` (install.sh). ONNX sessions: few threads, no spinning (4–6× less CPU on this laptop). Browser VAD is `web/js/core/vad.js` (unit-tested; clicks ≠ voice);
+  `~/.local/share/jarvis/` (install.sh). ONNX sessions: few threads, no spinning (4–6× less CPU on this laptop).
+  End of a phrase: Smart Turn v3.2 (`voice/turn.py`, numpy features = Whisper's, trailing silence trimmed to 0.2 s);
+  p < 0.30 → no early answer, p < 0.15 → held like a cut-off phrase (`server.unfinished`). Browser VAD is `web/js/core/vad.js` (unit-tested; clicks ≠ voice);
   barge-in = `voice.barge` (stops speech only, never the work). `tests/ui/voice-mic.mjs` feeds a WAV as the mic.
 - Self-improvement (`jarvis/improve.py`): `collect_issues` ranks problems from JARVIS's own records (repeats, failures,
   slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,

@@ -40,6 +40,15 @@ def _load_lexicon_module():
     return mod
 
 
+def _load_turn_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("jarvis_turn", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                             "turn.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 _lex = _load_lexicon_module()
 Lexicon, prefer_second, wake_like = _lex.Lexicon, _lex.prefer_second, _lex.wake_like
 
@@ -47,6 +56,7 @@ MODEL = os.environ.get("JARVIS_STT_MODEL", "gigaam-v3-e2e-rnnt")
 MULTI = os.environ.get("JARVIS_STT_MULTI", "nemo-parakeet-tdt-0.6b-v3")
 LEXICON = os.environ.get("JARVIS_STT_LEXICON", "")
 THREADS = int(os.environ.get("JARVIS_STT_THREADS", "4"))
+TURN = os.environ.get("JARVIS_TURN_MODEL", "")     # Smart Turn v3.2: has the person finished? (turn.py)
 
 
 
@@ -118,6 +128,12 @@ def main() -> None:
     warm(model)
     lex = Lexicon(LEXICON)
     multi = Multi(MULTI) if MULTI and MULTI != "none" else None
+    turn = None
+    if TURN and os.path.exists(TURN):
+        try:
+            turn = _load_turn_module().TurnModel(TURN, threads=2)
+        except Exception:   # noqa: BLE001 — without it, the end of a phrase is decided by the pause alone
+            turn = None
     print(json.dumps({"ready": True, "model": MODEL, "multi": bool(multi), "lexicon": len(lex.words)}), flush=True)
     for line in sys.stdin:
         try:
@@ -143,8 +159,11 @@ def main() -> None:
                 other = (multi.recognize(audio) or "").strip()
                 if prefer_second(other) or (other and not text.strip()):
                     text, used = other, "parakeet"
-            print(json.dumps({"id": rid, "text": text.strip(), "model": used,
-                              "ms": round((time.perf_counter() - t0) * 1000)}, ensure_ascii=False), flush=True)
+            out = {"id": rid, "text": text.strip(), "model": used}
+            if turn is not None and req.get("turn") and text.strip():
+                out["turn"] = round(turn.complete(audio), 3)
+            out["ms"] = round((time.perf_counter() - t0) * 1000)
+            print(json.dumps(out, ensure_ascii=False), flush=True)
         except Exception as e:   # noqa: BLE001
             print(json.dumps({"id": rid, "error": f"{e.__class__.__name__}: {str(e)[:200]}"}), flush=True)
 

@@ -270,20 +270,22 @@ class Server:
         computer and dropped at once: no turn, no transcript stored, nothing sent anywhere."""
         audio = self._voice_audio(data)
         t0 = time.time()
-        text = await self._transcribe(audio, data)
+        text = await self._transcribe(audio, data, turn=True)
         return await self._wake_turn(text, data, len(audio), t0, time.time())
 
-    async def _transcribe(self, audio: bytes, data: dict) -> str:
+    async def _transcribe(self, audio: bytes, data: dict, turn: bool = False) -> str:
         """Waiting for «Джарвис» (not a follow-up, not cutting in): the second recogniser runs only for a phrase that
-        has something like the name in it."""
+        has something like the name in it. `turn`: also hear whether the person sounds finished (data["_turn"])."""
         stt = self.core.director.stt
-        if data.get("wake") and not data.get("barge") and time.time() >= self._wake_until \
-                and not getattr(self, "_fragment", None):
-            try:
-                return await stt.transcribe(audio, wake=True)
-            except TypeError:                     # a recogniser without the option
-                pass
-        return await stt.transcribe(audio)
+        wake = bool(data.get("wake") and not data.get("barge") and time.time() >= self._wake_until
+                    and not getattr(self, "_fragment", None))
+        kw = {**({"wake": True} if wake else {}), **({"turn": True} if turn else {})}
+        try:
+            text = await stt.transcribe(audio, **kw) if kw else await stt.transcribe(audio)
+        except TypeError:                         # a recogniser without these options
+            text = await stt.transcribe(audio)
+        data["_turn"] = getattr(stt, "last_turn", None) if turn else None
+        return text
 
     async def _wake_turn(self, text: str, data: dict, nbytes: int, stt_start: float, stt_end: float) -> dict:
         text = self._wake_text(text, data)
@@ -311,7 +313,7 @@ class Server:
         if sp:
             sp.mark(turn, "stt_start")
         try:
-            text = await local.transcribe(audio)          # on this computer: no internet, no quota
+            text = await self._transcribe(audio, data, turn=True)     # on this computer: no internet, no quota
         except Exception as e:   # noqa: BLE001
             if sp:
                 sp.annotate(turn, error=str(e)[:200])
@@ -326,14 +328,16 @@ class Server:
         commits it at once (saves the rest of the 1.3 s wait); a cut-off phrase («Отправь маме в…») keeps waiting."""
         audio = self._voice_audio(data)
         t0 = time.time()
-        text = await self._transcribe(audio, data)
+        text = await self._transcribe(audio, data, turn=True)
         frag = getattr(self, "_fragment", None)
         joined = (frag[0] + " " + text) if frag and time.time() - frag[1] < FRAGMENT_TTL_S else text
         pid = pysecrets.token_hex(8)
         now_ = time.time()
         self._probes = {k: v for k, v in getattr(self, "_probes", {}).items() if now_ - v["at"] < 30}
-        self._probes[pid] = {"text": text, "stt_start": t0, "stt_end": now_, "at": now_, "bytes": len(audio)}
-        complete = phrase_complete(joined)
+        p = data.get("_turn")
+        self._probes[pid] = {"text": text, "stt_start": t0, "stt_end": now_, "at": now_, "bytes": len(audio), "turn": p}
+        # The words look finished, and the voice does not clearly say «I'm not done» (Smart Turn).
+        complete = phrase_complete(joined) and (p is None or p >= TURN_VETO)
         if data.get("wake"):          # wake listening: only a phrase for JARVIS is answered early
             complete = complete and self._wake_text(text, data) is not None
         return {"probe_id": pid, "complete": complete, "chars": len(text)}
@@ -344,6 +348,7 @@ class Server:
         if not pr:
             raise ValueError("probe expired")
         self._voice_active(False, data)
+        data["_turn"] = pr.get("turn")
         if data.get("wake"):
             return await self._wake_turn(pr["text"], data, pr["bytes"], pr["stt_start"], pr["stt_end"])
         sp = self.core.director.speech
@@ -375,7 +380,7 @@ class Server:
         if frag and time.time() - frag[1] < FRAGMENT_TTL_S:
             text = frag[0] + " " + text
         self._fragment = None
-        if data.get("submit", True) and is_fragment(text):
+        if data.get("submit", True) and (is_fragment(text) or unfinished(text, data.get("_turn"))):
             self._hold_fragment(text, turn, data)
             if sp:
                 sp.annotate(turn, route="fragment")
@@ -850,7 +855,9 @@ class Server:
                 pass
 
 
-QUIET_UI = {"voice.active"}  # sent at every sound the always-on companion takes for speech: not worth an audit line
+QUIET_UI = {"voice.active"}
+TURN_HOLD = 0.15     # Smart Turn this sure the person is not done: wait for the rest (the int8 model is jumpy near 0.5)
+TURN_VETO = 0.30     # …and below this no early answer after a short pause  # sent at every sound the always-on companion takes for speech: not worth an audit line
 FRAGMENT_TTL_S = 15.0
 FRAGMENT_WAIT_S = 4.0       # a cut-off phrase with no continuation after this much quiet is done as it is
 _DANGLING = {"в", "во", "на", "и", "а", "но", "или", "что", "чтобы", "для", "к", "ко", "по", "с", "со", "у", "о", "об",
@@ -888,6 +895,13 @@ def is_fragment(text: str) -> bool:
     if "-" in words[-1]:
         return bool(_DANGLING_HYPHEN.fullmatch(words[-1]))
     return words[-1] in _DANGLING
+
+
+def unfinished(text: str, p: float | None) -> bool:
+    """The voice clearly trails off mid-thought (Smart Turn), though the words do not show it: «Первое, найди папку
+    колледж. [pause] Далее…». A question is never held."""
+    t = (text or "").strip()
+    return p is not None and p < TURN_HOLD and len(t.split()) >= 2 and not t.endswith("?")
 
 
 _SEND_VERB = re.compile(r"^(джарвис[\s,]*)?(отправь|напиши|пошли|скажи|сообщи|передай|черкни|ответь)\b", re.I)

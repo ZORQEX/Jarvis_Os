@@ -17,6 +17,7 @@ MODEL = "gigaam-v3-e2e-rnnt"
 MULTI = "nemo-parakeet-tdt-0.6b-v3"
 MULTI_DIR = "models--istupakov--parakeet-tdt-0.6b-v3-onnx"
 LEXICON = "ru_50k.txt"          # Russian word frequencies (hermitdave/FrequencyWords, CC-BY-SA-4.0)
+TURN_MODEL = "turn/smart-turn-v3.2-cpu.onnx"      # Smart Turn v3.2 (Pipecat, BSD-2-Clause), ~8 MB
 # Words of Russian commands that the frequency list lacks (apps, services, JARVIS itself, frequent verbs): a phrase
 # made of them is Russian and is not re-heard by the second model.
 VOCAB = """джарвис джарвиса джарвису джарвисом телеграм телеграме телеграму телеграмм телеграмме телеграма ватсап
@@ -39,6 +40,7 @@ class LocalSTT:
         self.mode = "auto"              # "auto": Russian + other languages; "ru": Russian only (less memory)
         self.vocab: list[str] = []      # names and brands JARVIS knows: Russian phrases with them are not re-heard
         self.last_model = "gigaam"
+        self.last_turn: float | None = None
 
     @property
     def python(self) -> Path:
@@ -56,7 +58,7 @@ class LocalSTT:
         env = {**{k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ("KEY", "TOKEN", "SECRET"))},
                "HF_HOME": str(self.home / "hf"), "HF_HUB_OFFLINE": "1", "JARVIS_STT_MODEL": MODEL,
                "JARVIS_STT_MULTI": MULTI if self.mode != "ru" and self.multilingual() else "none",
-               "JARVIS_STT_LEXICON": str(self.home / LEXICON)}
+               "JARVIS_STT_LEXICON": str(self.home / LEXICON), "JARVIS_TURN_MODEL": str(self.home / TURN_MODEL)}
         self.proc = await asyncio.create_subprocess_exec(
             str(self.python), "-I", str(self.worker), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True, limit=1 << 20)
@@ -83,8 +85,10 @@ class LocalSTT:
             async with self.lock:
                 await self._send({"vocab": new})
 
-    async def transcribe(self, wav: bytes, wake: bool = False) -> str:
-        """`wake`: heard while waiting for «Джарвис» — the second model runs only for a phrase with the name."""
+    async def transcribe(self, wav: bytes, wake: bool = False, turn: bool = False) -> str:
+        """`wake`: heard while waiting for «Джарвис» — the second model runs only for a phrase with the name.
+        `turn`: also tell whether the person sounds finished (`last_turn`, 0…1; None without the model)."""
+        self.last_turn = None
         if wav[:4] != b"RIFF":
             raise ValueError("локальное распознавание принимает только WAV")
         async with self.lock:
@@ -93,20 +97,22 @@ class LocalSTT:
                 with os.fdopen(fd, "wb") as f:
                     f.write(wav)
                 try:
-                    return await self._ask(path, wake)
+                    return await self._ask(path, wake, turn)
                 except WorkerDied:
                     await self.stop()             # crashed or killed while idle: one fresh start, same recording
-                    return await self._ask(path, wake)
+                    return await self._ask(path, wake, turn)
             finally:
                 try:
                     os.unlink(path)
                 except OSError:
                     pass
 
-    async def _ask(self, path: str, wake: bool = False) -> str:
+    async def _ask(self, path: str, wake: bool = False, turn: bool = False) -> str:
         await self.start()
-        r = await self._send({"path": path, "mode": "wake" if wake and self.mode != "ru" else self.mode})
+        r = await self._send({"path": path, "mode": "wake" if wake and self.mode != "ru" else self.mode,
+                              **({"turn": True} if turn else {})})
         self.last_model = r.get("model") or "gigaam"
+        self.last_turn = r.get("turn")
         return r.get("text") or ""
 
     async def _send(self, req: dict) -> dict:

@@ -219,3 +219,33 @@ async def test_every_task_of_a_series_is_spoken_by_the_window_that_heard_it(core
     await wait_for(lambda: len([t for t in core.tasks.recent(10) if t["state"] == "completed"]) >= 2)
     ids = [t["id"] for t in core.tasks.recent(10)][:2]
     assert first in ids and all(d.speech_owner.get(t) == "overlay" for t in ids)
+
+
+class TurnSTT(FakeSTT):
+    """A recogniser that also says how finished the voice sounds (Smart Turn)."""
+
+    def __init__(self, items):
+        self.items = list(items)
+        self.last_turn = None
+
+    async def transcribe(self, audio, wake=False, turn=False):
+        text, p = self.items.pop(0)
+        self.last_turn = p if turn else None
+        return text
+
+
+async def test_a_voice_that_trails_off_waits_for_the_rest(ws_client, core, monkeypatch):
+    monkeypatch.setattr(server_mod, "FRAGMENT_WAIT_S", 5)
+    tc = ws_client
+    core.director.stt = TurnSTT([("Первое, найди папку колледж.", 0.04), ("Далее открой браузер.", 0.97)])
+    m = await request(tc, "voice.transcribe", 1, audio_b64=WAV, mime="audio/wav")
+    assert m["data"].get("pending")                         # the words look finished, the voice does not
+    m = await request(tc, "voice.transcribe", 2, audio_b64=WAV, mime="audio/wav")
+    assert m["data"]["text"] == "Первое, найди папку колледж Далее открой браузер." and m["data"]["task_id"]
+
+
+async def test_no_early_answer_when_the_voice_is_not_done(ws_client, core):
+    tc = ws_client
+    core.director.stt = TurnSTT([("Найди папку колледж.", 0.1), ("Найди папку колледж.", 0.9)])
+    assert (await request(tc, "voice.probe", 1, audio_b64=WAV, mime="audio/wav"))["data"]["complete"] is False
+    assert (await request(tc, "voice.probe", 2, audio_b64=WAV, mime="audio/wav"))["data"]["complete"] is True
