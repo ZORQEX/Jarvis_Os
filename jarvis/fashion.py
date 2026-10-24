@@ -31,6 +31,14 @@ RUNTIME = Path.home() / ".local/share/jarvis/fashion/.venv/bin/python"
 FILE_TYPES = {".xlsx", ".xlsm", ".xls", ".pdf"}
 
 
+def _alive(pid: int) -> bool:
+    """Running, not a zombie waiting for its (still stopping) parent to reap it."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return False
+
+
 class FashionService:
     """The app's process (start, health, restart after a crash, stop) and its HTTP API, for the director."""
 
@@ -74,22 +82,36 @@ class FashionService:
     def pidfile(self) -> Path:
         return self.paths.state / "fashion.pid"
 
+    def _stale(self) -> list[int]:
+        """Copies of the app on our port — found by their command line, not only the pidfile: during a restart the
+        old core may still be stopping and the pidfile may name a copy that already exited (seen 2026-10-25)."""
+        out = []
+        for d in Path("/proc").iterdir():
+            if not d.name.isdigit():
+                continue
+            try:
+                cmd = (d / "cmdline").read_bytes().decode("utf-8", "replace")
+            except OSError:
+                continue
+            if "app.main:app" in cmd and f"--port\0{self.port}\0" in cmd + "\0":
+                out.append(int(d.name))
+        return out
+
     def _kill_stale(self) -> None:
-        """A copy left running by a JARVIS that crashed would hold the port and serve old code."""
-        try:
-            pid = int(self.pidfile.read_text().strip())
-            cmd = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
-        except (OSError, ValueError):
-            return
-        if "app.main:app" in cmd and f"--port\0{self.port}" in cmd:
+        """A copy left running by a JARVIS that crashed (or is still stopping) would hold the port and serve old code."""
+        pids = self._stale()
+        for pid in pids:
             try:
                 os.killpg(pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
-                pass
-            for _ in range(30):
-                if not Path(f"/proc/{pid}").exists():
-                    break
-                time.sleep(0.1)
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        for _ in range(50):
+            if not any(_alive(pid) for pid in pids):
+                break
+            time.sleep(0.1)
 
     async def start(self) -> bool:
         async with self._lock:

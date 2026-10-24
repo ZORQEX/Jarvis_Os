@@ -204,3 +204,27 @@ async def test_the_real_app_starts_claims_answers_and_stops(core, tmp_path):
     with pytest.raises(OSError):
         open(f"/proc/{pid}/status").read()
     assert json.loads(json.dumps(st))                                       # state is plain JSON for the window
+
+
+def test_a_copy_left_by_a_stopping_core_is_found_without_the_pidfile(tmp_path):
+    """Restart race (2026-10-25): the pidfile named a copy that had exited while another still held the port."""
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    from jarvis.fashion import FashionService, _alive
+    svc = FashionService.__new__(FashionService)
+    svc.port, svc.paths = 48123, SimpleNamespace(state=tmp_path)
+    (tmp_path / "fashion.pid").write_text("999999")
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "app.main:app", "--port", "48124"])
+    copy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "app.main:app", "--port", "48123"],
+                            start_new_session=True)
+    try:
+        assert svc._stale() == [copy.pid]
+        svc._kill_stale()
+        copy.wait(5)
+        assert not _alive(copy.pid) and other.poll() is None      # another port's app is left alone
+    finally:
+        for p in (copy, other):
+            p.kill()
+            p.wait()
