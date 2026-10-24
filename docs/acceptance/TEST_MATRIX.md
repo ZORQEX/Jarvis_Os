@@ -383,3 +383,30 @@ its own tour and AI settings, a light theme. After: one assistant (JARVIS), one 
 | «Заказы» pages are part of JARVIS: JARVIS's colours, no second app chrome (top bar, «Fashion AI», tour, tab bar, footer hidden only inside JARVIS's frame), sections are tabs in JARVIS's header, the assistant page leads back to the orders | VERIFIED LIVE (dev core, synthetic data) + LOCAL | tests/ui/orders-look.mjs: 5 tabs, embedded on each, no chrome visible; fashion tests test_a_page_in_jarvis_frame_is_part_of_jarvis |
 | One assistant for orders: the module's rules answer at once; what they cannot answer is handed back and answered by JARVIS's own conversation with the module's typed tools (`orders`, through the Gateway; changes only as proposals) — the module never starts its own Claude inside JARVIS | VERIFIED MOCK (both sides) | test_no_rule_answer_means_jarvis_own_conversation_answers_with_the_module_tools; fashion test_no_rule_answer_is_handed_to_jarvis_and_its_tools_make_a_proposal (its own Claude Code turn would fail the test) |
 | «Подтвердить» on the card in JARVIS's chat (was: in the module's dock) | VERIFIED LIVE (dev core) | tests/ui/orders-card.mjs: «Поставь BL 40 процентов» → rule answer 0.29 s, card with before/after → click → «Сохранено в заказах», card closed |
+
+Live with the real Claude (dev cores, 2026-10-25 04:05–04:20, after the account's limit reset):
+
+| Scenario (the owner's directive) | Status | Evidence |
+|---|---|---|
+| 1. «Найди актуальную информацию о Bitcoin» | VERIFIED LIVE | web_search 1.4 s → Claude answer; total 4.6 s, first words 2.3 s; CoinGecko price as source [0] |
+| 2. «Найди поставщиков картонных коробок в Алматы» | VERIFIED LIVE | 9.4 s (search 4.0 s with 3 pages read); 9 suppliers with [n] sources; «цен и телефонов в результатах нет» said, nothing invented |
+| 3. Search + development: «Найди документацию Open-Meteo API и подключи его к моему приложению …» | VERIFIED LIVE | web_search 2.3 s → approval → Claude Code 55 s (app.py, tests/test_app.py) → JARVIS re-ran the tests: 6 passed, step verified |
+| 4. «Создай небольшое приложение для управления заказами» | VERIFIED LIVE | the conversation → computer_task (Claude Code, approved) 106 s → orders-app (HTML/CSS/JS, statuses, totals) opened; no second JARVIS; a weak «заказ» word no longer sends it to the orders module |
+| 5. Search, then «Теперь используй найденную информацию в моём проекте …» | VERIFIED LIVE | no second search; Claude Code got the search as context (ctx research_for = that task); air_quality() added, 17 tests passed |
+| 6. A long search while the person keeps working | VERIFIED LIVE | during a 2.2 s search «который час» and «курс евро к тенге» answered in 0.11 s each |
+| 7. Search module down (searxng_url → a dead port) | VERIFIED LIVE | web_search failed «SearXNG … не отвечает» → Claude WebSearch (decision says so, the answer says «Быстрый поиск сейчас недоступен…»); 34.6 s |
+| 8. Window: workspaces, companion, chat, palette, files, approvals | VERIFIED LIVE | tests/ui/workos.mjs on a clean fixture home: 21/21 checks, 0 console errors |
+| «Заказы» question the module's rules cannot answer → JARVIS's own conversation with the module's tools | VERIFIED LIVE | «Почему у клиента BL такая сумма… предложи 25 %»: 4 orders tool calls through the Gateway, exact figures, card «Подтвердить»; 7.4 s. First run found a real bug: «markup_percent: 25» was taken as 0 % — now refused by the module with the right names, and the turn carries the tools' exact parameters |
+| Claude unavailable (session limit) | VERIFIED LIVE | search: the found pages with links in 1.9 s + an honest «⚠ Шаг «ответ» не выполнен»; orders: the module's full rules answered in 0.7 s («⚠ ИИ сейчас недоступен… Ответил по правилам модуля»), files as buttons |
+
+Speed, the same three questions on the same machine, same Claude account, warm conversation (before = the previous path,
+Claude's WebSearch; after = JARVIS's fast search + one Claude answer):
+
+| Question | Before | After |
+|---|---|---|
+| «Найди актуальную информацию о Bitcoin» | 15.3 s | 4.6 s (first words 2.3 s) |
+| «Найди поставщиков картонных коробок в Алматы» | 23.5 s (first words 22.8 s) | 9.4 s (first words 5.1 s) |
+| «Что нового в мире 3D-принтеров? Найди в интернете» | 13.4 s | 4.9 s (first words 2.1 s) |
+| «Какая сейчас цена Bitcoin?» | (a Claude turn) | 0.4 s, no AI |
+
+One run each (no averaging); network and Claude latency vary. SearXNG: ~170 MB RSS while JARVIS runs.
