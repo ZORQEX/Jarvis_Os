@@ -33,6 +33,14 @@ STOP = {
     "pt": set("o a os as e é de que um uma por para com não sim olá obrigado obrigada como onde abre envia mostra "
               "meu eu você".split()),
 }
+# Cyrillic text without і/ї/є/ґ («Зараз дванадцята година.»): words that are Ukrainian and not Russian decide; «так» /
+# «добре» occur in Russian too («так и есть», «ну так»), so they only back up a clear Ukrainian word.
+UK_WORDS = set("зараз година години годину годин хвилина хвилин хвилини дякую дякуємо привіт добрий доброго "
+               "дванадцята одинадцята десята дев'ята восьма сьома шоста п'ята четверта третя друга перша "
+               "що це як вже дуже щоб тепер немає зробив зробила відкрив гаразд звісно будь-ласка".split())
+UK_WEAK = {"так", "добре", "ні"}
+RU_WORDS = set("сейчас это что как уже очень чтобы теперь нет да ну час часа часов минута минут минуты спасибо "
+               "пожалуйста привет хорошо сделал сделала открыл конечно ладно и он она они".split())
 MARKS = {"de": re.compile(r"[äöüß]", re.I), "es": re.compile(r"[ñ¿¡]", re.I), "fr": re.compile(r"[çœêèàùâîôû]", re.I),
          "pt": re.compile(r"[ãõ]", re.I)}
 
@@ -60,6 +68,13 @@ def detect(text: str, default: str = "ru") -> str:
         if UK_ONLY.search(t):
             return "uk"
         if RU_ONLY.search(t):
+            return "ru"
+        words = [w.casefold().replace("’", "'") for w in WORD.findall(t)]
+        uk = sum(1 for w in words if w in UK_WORDS) + (1 if "будь ласка" in " ".join(words) else 0)
+        ru = sum(1 for w in words if w in RU_WORDS)
+        if uk and uk + 0.5 * sum(1 for w in words if w in UK_WEAK) > ru:
+            return "uk"
+        if ru > uk:
             return "ru"
         return default if default in ("ru", "uk") else "ru"
     words = [w.casefold() for w in WORD.findall(t) if LAT.search(w)]

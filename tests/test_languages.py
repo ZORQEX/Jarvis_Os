@@ -18,6 +18,17 @@ def test_detect_language_of_a_sentence():
     assert detect("Зараз дванадцята година", "uk") == "uk"     # no Ukrainian-only letter: the conversation decides
 
 
+def test_ukrainian_without_ukrainian_letters_is_told_by_its_words():
+    assert detect("Зараз дванадцята година.") == "uk"
+    assert detect("Дякую, добре.") == "uk"
+    assert detect("Будь ласка.") == "uk"
+    assert runs("Зараз дванадцята година.") == [("uk", "Зараз дванадцята година.")]
+    for ru in ("Сейчас 16:08", "Сейчас 16:08.", "Так, готово.", "Ну да, так и есть.", "Добре, открыл папку.",
+               "Да", "Готово.", "Так сейчас двенадцать часов."):
+        assert detect(ru) == "ru", ru
+    assert runs("Открыл YouTube. Так, готово.") == [("ru", "Открыл YouTube. Так, готово.")]
+
+
 def test_each_sentence_gets_the_voice_of_its_language():
     assert runs("Готово. Открыл YouTube Music.", "ru") == [("ru", "Готово. Открыл YouTube Music.")]
     assert runs("The capital of France is Paris. Столица Франции — Париж.", "en") == \
