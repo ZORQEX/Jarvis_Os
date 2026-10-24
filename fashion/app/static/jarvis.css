@@ -94,3 +94,6 @@ body.in-jarvis .notice.warn, body.in-jarvis .question, body.in-jarvis .check-til
 body.in-jarvis .notice.error, body.in-jarvis .notice.danger, body.in-jarvis .exchange-error, body.in-jarvis .danger-zone,
 body.in-jarvis .check-tile.tone-danger, body.in-jarvis .btn.danger, body.in-jarvis .button.danger { border-color: rgba(255, 138, 128, .35); }
 body.in-jarvis .setting-link:hover, body.in-jarvis .fx-mic:hover { background: var(--surface-2); }
+
+/* The module's own AI and voice settings: inside JARVIS the AI and the voice are JARVIS's. */
+body.in-jarvis a.setting-link[href="/settings/ai"], body.in-jarvis a.setting-link[href="/settings/voice"] { display: none !important; }
