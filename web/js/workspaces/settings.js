@@ -79,6 +79,13 @@ function renderSettings() {
       <div id="publishBox" style="margin-top:10px"><span class="faint">Проверяю…</span></div>
     </div>
     <div class="panel">
+      <h2>Предупреждения</h2>
+      <div class="muted" style="font-size:13.5px">JARVIS сам скажет, если садится батарея, кончается место на диске или память, упала служба,
+        пропал интернет — редко и по делу (не больше 4 раз в час; вслух — только срочное). И то, о чём вы попросили:
+        «Скажи, когда батарея будет ниже 30», «…когда сайт example.com упадёт», «…когда биткоин будет выше 100000».</div>
+      <div id="proactiveBox" style="margin-top:10px"><span class="faint">Загружаю…</span></div>
+    </div>
+    <div class="panel">
       <h2>Телефон</h2>
       <div class="muted" style="font-size:13.5px">Свой бот Telegram: пишите или присылайте голосовые JARVIS с телефона — ответ придёт туда же.
         Файлы фабрик из чата попадают в «Заказы», остальные — в ~/Downloads/JARVIS. Отвечает только вашему телефону;
@@ -131,6 +138,7 @@ function renderSettings() {
   wireAgency(el, { link: ctx.link, S: ctx.S, toast: ctx.toast, rerender: () => { renderSettings(); ctx.onChange(); } });
   renderPublish();
   renderPhone();
+  renderProactive();
   renderImprove();
   renderMemory();
   $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {
@@ -203,6 +211,27 @@ async function renderPublish(poll = 0) {
     try { await ctx.link.request("publish.github.begin", {}, 30000); } catch (er) { ctx.toast(er.message, "err"); }
     renderPublish();
   };
+}
+
+async function renderProactive(args = null) {
+  const box = $("#proactiveBox");
+  if (!box) return;
+  let st;
+  try { st = await ctx.link.request(args ? "proactive.settings" : "proactive.state", args || {}); }
+  catch (e) { if (args) ctx.toast(e.message, "err"); else box.innerHTML = `<span class="faint">${esc(e.message)}</span>`; return; }
+  if (!box.isConnected) return;
+  const active = st.watches.filter((w) => w.active);
+  box.innerHTML = `<label class="toggle"><input type="checkbox" id="paOn" ${st.enabled ? "checked" : ""}> Предупреждать самому</label>
+    <div class="field"><span style="font-size:13.5px">Тихие часы (только срочное и без голоса):</span>
+      <input id="paQuiet" value="${esc(st.quiet)}" placeholder="23:00-08:00" style="width:130px">
+      <button class="btn ghost" id="paQuietSave">Сохранить</button></div>
+    <div style="margin-top:8px;font-size:13.5px">${active.length ? "Наблюдаю:" : '<span class="faint">Наблюдений нет.</span>'}</div>
+    ${active.map((w) => `<div class="field" style="margin-top:4px"><span>${esc(w.label)}</span>
+      ${w.last_value != null ? `<span class="faint">сейчас ${esc(w.last_value)}</span>` : ""}
+      <button class="btn ghost" data-unwatch="${esc(w.id)}" style="height:24px;font-size:12px">снять</button></div>`).join("")}`;
+  $("#paOn", box).onchange = (e) => renderProactive({ enabled: e.target.checked });
+  $("#paQuietSave", box).onclick = () => renderProactive({ quiet: $("#paQuiet", box).value });
+  $$("[data-unwatch]", box).forEach((b) => (b.onclick = () => renderProactive({ remove: b.dataset.unwatch })));
 }
 
 async function renderPhone(op = null, args = {}) {

@@ -202,6 +202,14 @@ def _caps_route(t: str, raw: str = "") -> Route | None:
     def tool(tid, args, why):
         return Route("tool", tid, args, why=why)
 
+    # watches: «скажи, когда батарея будет ниже 30»
+    from .proactive import parse_watch
+    w = parse_watch(t, raw)
+    if w:
+        return tool("watch", w, "Наблюдение: скажу один раз, когда случится")
+    if re.fullmatch(r"(?:что|за чем) ты (?:сейчас )?(?:наблюдаешь|следишь)|(?:мои|покажи|какие) наблюдения", t):
+        return tool("watch", {"action": "list"}, "Наблюдения")
+
     # weather and the day
     m = re.search(r"\bпогод\w*(?: (?:сейчас|сегодня|завтра|на улице|на неделю))*(?: (?:в|во) (?P<city>[\w -]+?))?"
                   r"(?: (?:сейчас|сегодня|завтра|на неделю))?$", t)

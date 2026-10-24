@@ -35,6 +35,7 @@ class Core:
     recovered: list[str]
     comms: object = None          # CommsHub
     phone: object = None          # Phone: the owner's private Telegram bot
+    proactive: object = None      # Proactive: notices JARVIS gives by itself (battery, disk, watches)
 
 
 def build(paths: Paths | None = None, config: Config | None = None, extra_tools: list | None = None) -> Core:
@@ -124,6 +125,9 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)
     from .phone import Phone
     phone = Phone(director, db, bus, audit, comms.store)     # JARVIS from the phone (a private Telegram bot)
+    from .proactive import Proactive, Watch
+    proactive = Proactive(db, bus, audit, director)          # battery, disk, memory, services, internet, watches
+    registry.tools["watch"] = Watch(db)
     from .history import ActionHistory
     director.history = ActionHistory(db, bus)       # lasting actions only (sites, code, files, programs, notes)
     director.github = github
@@ -132,7 +136,7 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     approvals.expire_old()
     audit.write("core.start", recovered_tasks=len(recovered))
     return Core(paths, config, db, bus, audit, tasks, policy, approvals, registry, gateway, claude, scheduler,
-                director, recovered, comms, phone)
+                director, recovered, comms, phone, proactive)
 
 
 def build_comms(paths, config, db, bus, audit, registry, policy, ai, director):

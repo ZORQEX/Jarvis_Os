@@ -119,6 +119,13 @@ MIGRATIONS: list[str] = [
         state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','cancelled')), created_at REAL NOT NULL);
     CREATE INDEX calendar_time ON calendar_events(state, start_at);
     """,
+    # 11 — watches: «скажи, когда батарея будет ниже 30 %» (jarvis/proactive.py), each fires once
+    """
+    CREATE TABLE watches(
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', threshold REAL,
+        condition TEXT NOT NULL, label TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL,
+        fired_at REAL, last_value TEXT);
+    """,
 ]
 
 

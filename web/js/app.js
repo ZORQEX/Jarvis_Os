@@ -181,6 +181,7 @@ function onEvent(ev) {
       bus.emit("reminders");
       break;
     }
+    case "notice": toast(`🔔 ${ev.title}${ev.body ? ". " + ev.body : ""}`, ev.urgent ? "warn" : "", { ttl: ev.urgent ? 20000 : 10000 }); break;
     case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : "ok"); break;
     case "speech.stop": voice.stopSpeaking(); break;
     case "speech.synth": if (!voice.audio && !["recording", "transcribing"].includes(S.voice)) voice.set("synthesizing"); break;

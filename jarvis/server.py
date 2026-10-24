@@ -151,6 +151,8 @@ class Server:
             spawn(self.core.director.fashion.start(), "fashion-start")
         if self.core.phone:
             await self.core.phone.start()        # only when a bot token is stored
+        if self.core.proactive:
+            self.core.proactive.start()
 
     async def _prewarm_speech(self):
         try:
@@ -192,6 +194,8 @@ class Server:
             await self.core.director.fashion.stop()
         if self.core.phone:
             await self.core.phone.stop()
+        if self.core.proactive:
+            await self.core.proactive.stop()
         for ws in list(self.sockets):
             await ws.close()
         self.core.audit.write("core.stop")
@@ -863,6 +867,15 @@ class Server:
                     res = ph.state()
                 else:
                     raise ValueError(f"Неизвестный запрос: {typ}")
+            elif typ in ("proactive.state", "proactive.settings") and self.core.proactive:   # Settings → Предупреждения
+                pa = self.core.proactive
+                if typ == "proactive.settings":
+                    if data.get("remove"):
+                        self.core.db.execute("UPDATE watches SET active=0 WHERE id=?", (str(data["remove"]),))
+                    res = pa.settings(data.get("enabled") if "enabled" in data else None, data.get("quiet"))
+                    self.core.audit.write("proactive.settings", enabled=res["enabled"], quiet=res["quiet"])
+                else:
+                    res = pa.settings()
             elif typ == "publish.state":          # GitHub for site publishing (window only, user-driven)
                 res = await d.github.state()
             elif typ == "publish.github.begin":
