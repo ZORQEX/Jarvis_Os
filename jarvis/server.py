@@ -226,7 +226,8 @@ class Server:
         t = self._strip_echo(t, data)
         if not t:
             return None
-        if data.get("barge") or self._addressed(t):
+        dic = getattr(self.core.director, "dictation", None)
+        if data.get("barge") or self._addressed(t) or (dic and dic.on):     # dictation: every phrase is for JARVIS
             return t
         pos = find_wake(t)
         return t[pos:] if pos >= 0 else None
@@ -377,6 +378,27 @@ class Server:
                 from .voice.tts import NOT_HEARD_BY_LANG, phrase
                 sp.say("notice-" + (turn or "x"), phrase(NOT_HEARD_BY_LANG, sp.lang), turn)
             return {"text": "", "turn": turn}
+        dic = getattr(d, "dictation", None)
+        if dic and dic.on and data.get("submit", True):
+            from .router import find_wake, strip_wake
+            if dic.is_stop(text):
+                msg = await dic.stop()
+                if sp:
+                    sp.annotate(turn, route="control:dictation_off")
+                    sp.say("notice-" + (turn or "x"), msg, turn)
+                return {"text": text, "dictation": "stopped", "turn": turn}
+            if not (find_wake(text) == 0 and strip_wake(text).strip()):     # «Джарвис, …» stays a command
+                try:
+                    typed = await dic.type(text)
+                except (RuntimeError, OSError) as e:
+                    await dic.stop()
+                    if sp:
+                        sp.say("notice-" + (turn or "x"), "Не получилось напечатать — диктовка выключена.", turn)
+                    self.core.audit.write("dictation.failed", error=str(e)[:200])
+                    return {"text": text, "dictation": "failed", "turn": turn}
+                if sp:
+                    sp.annotate(turn, route="dictation")
+                return {"text": text, "dictation": True, "typed": typed, "turn": turn}
         # A phrase cut off mid-command («Отправь…», «…в», «…моей») is kept and joined with the next one, instead of
         # being answered on its own (measured: «Отправь» / «в Телеграме» / «любимые с сердечком» became 3 requests).
         frag = getattr(self, "_fragment", None)
@@ -554,7 +576,8 @@ class Server:
     async def api_control(self, req):
         body = await req.json()
         op = body.get("op")
-        if op not in ("estop", "estop_clear", "pause_all", "resume_all", "stop_speech"):
+        if op not in ("estop", "estop_clear", "pause_all", "resume_all", "stop_speech", "dictation_on", "dictation_off",
+                      "dictation_toggle"):
             return web.json_response({"error": "unknown op"}, status=400)
         msg = await self.core.director.control(op)
         return web.json_response({"ok": True, "message": msg})

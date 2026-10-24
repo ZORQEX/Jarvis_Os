@@ -88,6 +88,7 @@ class Director:
         self.history = None          # ActionHistory (lasting actions only), set by the composition root
         self.github = None           # GitHub account for site publishing (publish.GitHub)
         self.fashion = None          # «Заказы»: the fashion-orders app (fashion.FashionService)
+        self.dictation = None        # dictation.Dictation: speech typed into the person's window
         self.view = ""               # the workspace the JARVIS window shows (reported by the window)
         self.hub = None              # CommsHub
         self.rt: dict[str, Runtime] = {}
@@ -635,6 +636,11 @@ class Director:
             if stopped:
                 return "Остановил: " + "; ".join(r[:80] for r in stopped) + "."
             return ""
+        if op in ("dictation_on", "dictation_off", "dictation_toggle"):
+            if self.dictation is None:
+                return "Диктовка недоступна в этой сборке."
+            return await {"dictation_on": self.dictation.start, "dictation_off": self.dictation.stop,
+                          "dictation_toggle": self.dictation.toggle}[op]()
         if op == "new_conversation":
             self.new_conversation()
             return "Начинаем новый разговор."

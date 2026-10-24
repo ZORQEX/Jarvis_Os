@@ -368,6 +368,11 @@ def _route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("control", args={"op": "pause_all"}, why="Пауза")
     if re.fullmatch(r"(продолжи|продолжай|возобнови|resume|continue|сними блокировку|можно продолжать)", t):
         return Route("control", args={"op": "resume_all"}, why="Продолжить")
+    if re.fullmatch(r"(?:стоп|хватит|закончи\w*|заверши\w*|конец|выключи|останови) (?:диктовк\w*|диктовать)|конец диктовки", t):
+        return Route("control", args={"op": "dictation_off"}, why="Закончить диктовку")
+    if re.fullmatch(r"(?:начни |включи |режим |давай )?диктовк\w*|диктуй|(?:я )?(?:буду|хочу) (?:диктовать|надиктовать)(?: текст)?|"
+                    r"(?:начни|включи) (?:режим )?диктовк\w*|напечатай (?:то|что) я (?:скажу|говорю)|dictation", t):
+        return Route("control", args={"op": "dictation_on"}, why="Диктовка")
     if re.fullmatch(r"(новый разговор|начни заново|новая беседа|new chat|new conversation)", t):
         return Route("control", args={"op": "new_conversation"}, why="Новый разговор")
 

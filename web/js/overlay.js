@@ -107,6 +107,11 @@ function onEvent(ev) {
       }
       break;
     case "overlay.settings": applySettings(ev); break;
+    case "dictation":                          // speech is typed into the person's window: the mic listens meanwhile
+      S.dictation = ev.on ? ev : null;
+      if (ev.on && !voice.conversation && !S.yielded) { S.dictationMic = true; voice.toggleConversation(); }
+      if (!ev.on && S.dictationMic) { S.dictationMic = false; if (!S.wake && voice.conversation) voice.toggleConversation(); }
+      break;
     case "conversation.new": link.request("snapshot").then((d) => link.onSnapshot(d)).catch(() => {}); return;
     default: return;
   }
@@ -286,7 +291,8 @@ function render() {
   if (sig === lastSig) return;
   lastSig = sig;
   $("#ovLabel").textContent = a.label + (a.count > 1 ? ` (${a.count})` : "");
-  $("#ovSub").textContent = S.wake ? "микрофон: жду «Джарвис»" : S.connected ? "JARVIS" : "нет связи с ядром";
+  $("#ovSub").textContent = S.dictation ? `диктовка${S.dictation.title ? " → " + S.dictation.title : ""}: «стоп диктовка»`
+    : S.wake ? "микрофон: жду «Джарвис»" : S.connected ? "JARVIS" : "нет связи с ядром";
   $("#ovDetail").textContent = S.error || a.detail || "";
   S.error = "";
   const ph = $("#ovPhases"), idx = PHASES.findIndex(([k]) => k === a.phase);

@@ -113,6 +113,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
                          kokoro=KokoroTTS(), en_voice_id=db.get_kv("tts_voice_en"), supertonic=supertonic)
     director.speech = SpeechManager(db, bus, engine)
     director.fashion = fashion if fashion.enabled() else None
+    from .dictation import Dictation
+    director.dictation = Dictation(bus, audit)       # speech typed into the person's window (wtype)
     from .voice.stt import LocalSTT
     director.stt = LocalSTT()           # speech recognition on this computer (GigaAM + Parakeet) — the only one
     comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)

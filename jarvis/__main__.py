@@ -7,6 +7,7 @@
   jarvis stop         emergency stop (cancel work, block consequential actions)
   jarvis resume       clear emergency stop
   jarvis say TEXT     send a command as if typed
+  jarvis dictate      dictation into the window in focus, on / off (Super+Alt+D)
   jarvis waybar       stream state for a Waybar custom module
 """
 from __future__ import annotations
@@ -284,6 +285,14 @@ def main(argv: list[str] | None = None) -> None:
     elif cmd in ("stop", "estop"):
         st, body = _req(cfg, paths, "POST", "/api/control", {"op": "estop"})
         print(json.loads(body).get("message", body))
+    elif cmd == "dictate":                     # Super+Alt+D: dictation into the window in focus, on / off
+        ensure_core(cfg, paths)
+        open_overlay(cfg, paths)               # the companion's microphone does the listening
+        st, body = _req(cfg, paths, "POST", "/api/control", {"op": "dictation_toggle"})
+        msg = json.loads(body).get("message", "")
+        subprocess.Popen(["notify-send", "-u", "low", "-a", "JARVIS", "JARVIS: диктовка", msg],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(msg)
     elif cmd == "resume":
         st, body = _req(cfg, paths, "POST", "/api/control", {"op": "estop_clear"})
         print(json.loads(body).get("message", body))
