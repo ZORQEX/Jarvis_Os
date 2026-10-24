@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .tools.desktop import APP_ALIASES
@@ -194,7 +195,7 @@ CLOSE_APPS = {"телеграм": "telegram", "telegram": "telegram", "брау�
 _ON, _OFF = r"\b(?:включи|зажги|вруби)\b", r"\b(?:выключи|отключи|погаси|убери|выруби)\b"
 
 
-def _caps_route(t: str) -> Route | None:
+def _caps_route(t: str, raw: str = "") -> Route | None:
     """Everyday computer commands without the AI: weather, briefing, what slows the computer, disk space and
     cleanup, health check, brightness and the keyboard backlight, theme / wallpaper / do-not-disturb / night light,
     sound devices, internet, power, music, the clipboard, text on the screen."""
@@ -214,6 +215,30 @@ def _caps_route(t: str) -> Route | None:
                     r"(?: на сегодня| дня| на день)?|что (?:у меня )?(?:сегодня|на сегодня)(?: интересного| важного| по плану)?|"
                     r"какие (?:у меня )?планы на сегодня|(?:daily )?briefing", t):
         return tool("daily_briefing", {}, "Погода, напоминания, очередь сообщений, решения")
+
+    # the calendar
+    if re.search(r"^(?:а |ну |скажи |подскажи )?(?:что|какие)(?: у меня| мне)?(?: есть)? (?:в календаре|встреч\w*|дела|планы|"
+                 r"событи\w*|запланировано|в планах)|^(?:мой|покажи|открой) календар\w*", t):
+        when = "tomorrow" if "послезавтра" not in t and "завтра" in t else "next_week" if "следующ" in t and "недел" in t \
+            else "week" if "недел" in t else "today"
+        if "послезавтра" in t:
+            when = (datetime.now() + timedelta(days=2)).date().isoformat()
+        return tool("calendar_show", {"when": when}, "Календарь JARVIS и подписки")
+    m = re.match(r"(?:добавь|запиши|поставь|запланируй|создай)(?: мне)?(?: в календарь)?\s+(.+)$", t)
+    if m and (re.search(r"в календар|встреч\w*|созвон\w*|звонок|событи\w*|совещани\w*|приём|прием|визит", t)):
+        from .agenda import parse_when
+        w = parse_when(raw or m.group(1))
+        title = re.sub(r"^\s*(?:добавь|запиши|поставь|запланируй|создай)(?:\s+мне)?(?:\s+в календарь)?\s+", "", w["rest"],
+                       flags=re.I)
+        title = re.sub(r"(?i)\bв календарь\b", "", title)
+        title = re.sub(r"(?i)^(встречу|событие)\b", lambda x: "Встреча" if x.group(1).lower().startswith("встреч") else "",
+                       title.strip()).strip(" ,.!?") or "Встреча"
+        if w["start"] is not None and title:
+            args = {"title": title[0].upper() + title[1:],
+                    "start": w["start"].date().isoformat() if w["all_day"] else w["start"].isoformat(timespec="minutes")}
+            if w["minutes"] != 60 and not w["all_day"]:
+                args["minutes"] = w["minutes"]
+            return tool("calendar_add", args, "Календарь JARVIS")
 
     # what slows the computer, programs
     if re.search(r"(?:что|кто|какая программа|какие программы|какой процесс|какие процессы)(?: сейчас)? (?:тормоз\w+|груз\w+|"
@@ -408,7 +433,7 @@ def _route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("reply", reply="tasks", why="Статус задач")
 
     # --- the computer and the desk (tools/machine.py, desk.py, daily.py — ported from jarvis-os) ---------------
-    r = _caps_route(t)
+    r = _caps_route(t, raw)
     if r:
         return r
 

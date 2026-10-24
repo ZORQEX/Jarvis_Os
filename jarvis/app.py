@@ -85,8 +85,11 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     if fashion.enabled():
         for t in (FashionAsk(fashion), FashionAttach(fashion, config)):
             registry.tools[t.spec.id] = t
+    from .agenda import Agenda, CalendarAdd, CalendarCancel, CalendarShow, CalendarSubscribe   # the calendar
+    agenda = Agenda(db, scheduler)
     from .tools.daily import DailyBriefing, Weather
-    for t in (Weather(db), DailyBriefing(db, fashion if fashion.enabled() else None)):
+    for t in (Weather(db), DailyBriefing(db, fashion if fashion.enabled() else None, agenda), CalendarShow(agenda),
+              CalendarAdd(agenda), CalendarCancel(agenda), CalendarSubscribe(agenda)):
         registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
     director = Director(db=db, bus=bus, audit=audit, tasks=tasks, policy=policy, approvals=approvals,

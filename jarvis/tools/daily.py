@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import aiohttp
 
@@ -145,8 +145,8 @@ def _date_ru(now: datetime) -> str:
 
 
 class DailyBriefing(Tool):
-    def __init__(self, db=None, fashion=None):
-        self.db, self.fashion = db, fashion
+    def __init__(self, db=None, fashion=None, agenda=None):
+        self.db, self.fashion, self.agenda = db, fashion, agenda
         self.spec = ToolSpec(
             id="daily_briefing", title="Сводка на сегодня",
             description="A short briefing for today: date, weather, today's reminders and scheduled messages, what "
@@ -165,9 +165,12 @@ class DailyBriefing(Tool):
         city = home_city(self.db)
         start = datetime(now.year, now.month, now.day).timestamp()
         end = start + 86400
-        weather, orders = await asyncio.gather(
+        day_start = datetime(now.year, now.month, now.day)
+        weather, orders, events = await asyncio.gather(
             self._deadline(weather_report(city, 1), 8) if city else asyncio.sleep(0, None),
-            self._deadline(self.fashion.state(), 4) if self.fashion and self.fashion.running() else asyncio.sleep(0, None))
+            self._deadline(self.fashion.state(), 4) if self.fashion and self.fashion.running() else asyncio.sleep(0, None),
+            self._deadline(self.agenda.events(day_start, day_start + timedelta(days=1)), 8, []) if self.agenda
+            else asyncio.sleep(0, []))
         parts = [_date_ru(now) + "."]
         data: dict = {"date": now.isoformat(timespec="minutes")}
         if weather:
@@ -175,6 +178,11 @@ class DailyBriefing(Tool):
             data["weather"] = weather
         elif not city:
             parts.append("Погоду скажу, когда узнаю ваш город: «запомни, что я живу в …».")
+        events = [e for e in (events or []) if e["all_day"] or e["end"] > now]
+        if events:
+            parts.append("В календаре: " + "; ".join(("весь день" if e["all_day"] else f"в {e['start']:%H:%M}") + f" — {e['title']}"
+                                                     for e in events[:6]) + ".")
+            data["events"] = len(events)
         if self.db is not None:
             rem = [dict(r) for r in self.db.all("SELECT text, due_at FROM reminders WHERE status='scheduled' AND "
                                                 "due_at BETWEEN ? AND ? ORDER BY due_at", (time.time(), end))]

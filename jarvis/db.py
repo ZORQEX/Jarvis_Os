@@ -111,6 +111,14 @@ MIGRATIONS: list[str] = [
         id TEXT PRIMARY KEY, text TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'user', created_at REAL NOT NULL);
     CREATE INDEX memory_time ON memory(created_at DESC);
     """,
+    # 10 — the calendar: JARVIS's own events (subscribed iCal feeds are read on demand, not stored)
+    """
+    CREATE TABLE calendar_events(
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, start_at REAL NOT NULL, end_at REAL NOT NULL,
+        all_day INTEGER NOT NULL DEFAULT 0, location TEXT, notes TEXT, remind_min INTEGER, reminder_id TEXT,
+        state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','cancelled')), created_at REAL NOT NULL);
+    CREATE INDEX calendar_time ON calendar_events(state, start_at);
+    """,
 ]
 
 
