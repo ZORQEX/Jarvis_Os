@@ -363,3 +363,17 @@ async def test_a_card_for_a_replaced_proposal_changes_nothing(core, orders, fake
     fake_app["status"] = {"c" * 24: "cancelled"}
     out = await core.director.decide_order("c" * 24, True)
     assert out == {**out, "status": "cancelled", "acted": False} and not fake_app.get("decided")
+
+
+
+async def test_making_an_orders_app_is_not_a_ledger_question(core, orders, fake_app):
+    """«Создай приложение для управления заказами» is work for Claude Code; «заказами» alone (a weak claim) must not
+    send it to the module."""
+    tid = await core.director.submit("Создай небольшое приложение для управления заказами", source="text")
+    t = await wait_done(core, tid)
+    assert t["route"] != "fashion" and not fake_app["messages"]
+    tid = await core.director.submit("покажи все заказы", source="text")       # in the orders view a weak claim still goes
+    core.director.view = "orders"
+    tid = await core.director.submit("покажи все заказы", source="text")
+    t = await wait_done(core, tid)
+    assert t["route"] == "fashion"

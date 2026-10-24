@@ -63,6 +63,14 @@ class Runtime:
     batch: dict | None = None    # one of several tasks said in one request (they run one after another)
 
 
+def _builds_or_searches(text: str) -> bool:
+    """A request to make something (Claude Code) or to look something up on the web — a word like «заказ» in it
+    does not make it a question about the orders ledger."""
+    from .agency.planner import R
+    t = text.casefold().replace("ё", "е")
+    return bool(R["build"].search(t) or (R["research"].search(t) and not R["personal"].search(t)))
+
+
 def _tasks_ru(n: int) -> str:
     word = {2: "Две", 3: "Три", 4: "Четыре"}.get(n)
     return f"{word} задачи" if word else f"{n} задач"
@@ -202,6 +210,8 @@ class Director:
         if not answer and self.fashion and source in ("voice", "text", "phone"):
             claim = await self.fashion.claims(rt.strip_wake(text) or text)      # «Джарвис, да» → «да»
             kind = (claim or {}).get("claim")
+            if kind == "weak" and _builds_or_searches(text):
+                kind = None       # «создай приложение для управления заказами», «найди поставщиков для заказов»: not the ledger
             if kind == "strong" or (kind == "weak" and (route is None or self.view == "orders")):
                 route = rt.Route("fashion", args={"why": claim.get("why", "")}, why=f"Заказы: {claim.get('why', '')}",
                                  level=1)
