@@ -341,11 +341,21 @@ class SelfImproveApply(Tool):
         tests = await run_suite(wd) if wd.is_dir() else {}
         if wd.is_dir() and not _tests_ok(tests):
             raise RuntimeError("Тесты ветки не прошли — не применяю: " + _tests_line(tests))
-        code, out = await _git("merge", "--no-ff", "--no-edit", "-m", f"Merge self-improvement {branch}", branch,
-                               timeout=120)
+        code, out = await _git("merge", "--no-ff", "--no-commit", branch, timeout=120)
         if code != 0:
             await _git("merge", "--abort")
             raise RuntimeError("Слияние не удалось (конфликт): " + out[-300:])
+        # The main branch may have moved on since the branch was made: test the merged code before keeping it.
+        ctx.progress("JARVIS проверяет тесты после слияния", None)
+        merged = await run_suite(REPO)
+        if not _tests_ok(merged):
+            await _git("merge", "--abort")
+            raise RuntimeError("После слияния тесты не прошли — ничего не применено: " + _tests_line(merged))
+        code, out = await _git("commit", "--no-edit", "-m", f"Merge self-improvement {branch}")
+        if code != 0:
+            await _git("merge", "--abort")
+            raise RuntimeError("Не удалось сохранить слияние: " + out[-300:])
+        tests = merged
         _, head = await _git("rev-parse", "--short", "HEAD")
         if wd.is_dir():
             await _git("worktree", "remove", "--force", str(wd))

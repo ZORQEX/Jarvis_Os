@@ -93,6 +93,9 @@ async def test_change_happens_on_a_separate_tested_branch_and_applies_only_on_re
     assert cc.workdirs[0] == d["worktree"] and Path(d["worktree"]).is_relative_to(imp.WORK)
     assert (repo / "app.py").read_text() == "SPEED = 1\n"           # the running copy is untouched
     assert (await tool.verify({}, res, ctx())).status == "verified"
+    (repo / "other.py").write_text("x = 1\n")              # main moved on meanwhile: the merge is tested again
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "other")
     restarted = []
     apply = imp.SelfImproveApply(SimpleNamespace(), restart=lambda: restarted.append(1))
     args = apply.validate({"branch": d["branch"]}, ctx())
@@ -125,3 +128,21 @@ async def test_tools_need_the_persons_confirmation(core):
     t = await wait_done(core, tid)
     assert t["state"] == "completed"
     await asyncio.sleep(0)
+
+
+async def test_a_merge_that_breaks_the_tests_is_undone(repo, monkeypatch):
+    calls = []
+
+    async def suite(wd, timeout=900):
+        calls.append(Path(wd))
+        ok = Path(wd) != repo                       # the branch alone passes, the merged main does not
+        return {"pytest": {"code": 0 if ok else 1, "tail": "ok" if ok else "1 failed"}}
+    monkeypatch.setattr(imp, "run_suite", suite)
+    res = await imp.SelfImprove(FakeManager(FakeClaudeCode()), SimpleNamespace(claude_timeout_s=0)).run(
+        {"goal": "Быстрее"}, ctx())
+    apply = imp.SelfImproveApply(SimpleNamespace(), restart=lambda: None)
+    head = git(repo, "rev-parse", "HEAD")
+    with pytest.raises(RuntimeError, match="После слияния"):
+        await apply.run(apply.validate({"branch": res.data["branch"]}, ctx()), ctx())
+    assert git(repo, "rev-parse", "HEAD") == head and (repo / "app.py").read_text() == "SPEED = 1\n"
+    assert not git(repo, "status", "--porcelain", "--untracked-files=no").strip()
