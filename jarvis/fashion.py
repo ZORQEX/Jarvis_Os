@@ -350,7 +350,9 @@ class Orders(Tool):
         return f"Заказы: {args['action']}"
 
     async def run(self, args, ctx):
-        out = await self.service.tool(ctx.task_id, args["action"], args.get("params") or {})
+        row = self.service.db.one("SELECT request FROM tasks WHERE id=?", (ctx.task_id,)) if self.service.db else None
+        out = await self.service.tool(ctx.task_id, args["action"], args.get("params") or {},
+                                      request=str(row["request"])[:4000] if row else "")   # the proposal's «request»
         if out.get("error") and len(out) == 1:
             raise ToolInputError(str(out["error"])[:300])
         summary = "Подготовлено предложение — ждёт «Подтвердить»" if out.get("pending_approval") else \
