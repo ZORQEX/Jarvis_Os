@@ -222,6 +222,8 @@ async def test_search_down_falls_back_to_claude_web_search_honestly(core, searx,
     assert [s["tool_id"] for s in t["steps"]][:2] == ["web_search", "agent_generate"]
     assert t["steps"][0]["state"] == "failed"
     assert web_ai.requests and web_ai.requests[0].capability == Cap.WEB_RESEARCH
+    msg = core.director.messages(core.director.conversation_id())[-1]["text"]
+    assert "Быстрый поиск сейчас недоступен" in msg
 
 
 async def test_follow_up_uses_what_was_found_without_repeating(core, searx, claude):

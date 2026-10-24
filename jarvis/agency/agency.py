@@ -650,6 +650,8 @@ class Agency:
             o = outs.get(s.id)
             parts.append(f"⚠ Шаг «{ACTION_RU.get(s.action, s.action)}» не выполнен: "
                          f"{(o.error if o and o.error else s.reason)}")
+        if any(s.status == "done" and "быстрый поиск не удался" in s.reason for s in d.steps):
+            parts.append("_Быстрый поиск сейчас недоступен — искал Claude (WebSearch), поэтому дольше._")
         sends = [s for s in d.steps if s.action == "send_message"]
         if sends and any(s.status != "done" for s in sends):
             parts.append("Ничего не отправлено: отправка возможна только после вашего явного подтверждения.")
