@@ -136,6 +136,15 @@ def install_jarvis(app, get_db):
             out["speech"] = to_speech(out.get("speech") or out["reply"], [c.code for c in db.scalars(select(Customer))])
         return JSONResponse(json.loads(json.dumps(out, ensure_ascii=False, default=str)), headers={"Cache-Control": "no-store"})
 
+    @app.get("/api/jarvis/proposal/{public_id}")
+    def jarvis_proposal(public_id: str, db: Session = Depends(get_db)):
+        """The proposal's real state before JARVIS acts on a card click (a newer one may have replaced it)."""
+        from app.models import AgentProposal
+        row = db.scalar(select(AgentProposal).where(AgentProposal.public_id == public_id))
+        if row is None:
+            return JSONResponse({"status": "missing"}, status_code=404)
+        return JSONResponse({"status": row.status}, headers={"Cache-Control": "no-store"})
+
     @app.get("/api/jarvis/state")
     def jarvis_state(db: Session = Depends(get_db)):
         from app.models import AgentProposal, Customer, OrderItem, Season

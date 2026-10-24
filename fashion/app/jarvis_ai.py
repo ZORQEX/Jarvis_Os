@@ -35,6 +35,8 @@ class Turn:
     calls: list = field(default_factory=list)
     question: dict | None = None
     at: float = field(default_factory=time.time)
+    lock: threading.Lock = field(default_factory=threading.Lock)     # a tool call and the turn's end never overlap
+    closed: bool = False
 
 
 TURNS: dict[str, Turn] = {}
@@ -56,6 +58,16 @@ def open_turn(turn: str, conversation: str, text: str, screen: dict | None = Non
         return t
 
 
+def _close(turn: str) -> Turn | None:
+    """The turn leaves the table and waits for a tool call still running in it, so its change is not lost."""
+    with _LOCK:
+        t = TURNS.pop(turn, None)
+    if t is not None:
+        with t.lock:
+            t.closed = True
+    return t
+
+
 def spec() -> dict:
     """What JARVIS's Claude needs: the business rules and the typed tools (the same ones the app's own turn had)."""
     return {"system": agent.SYSTEM, "tools": [t for t in agent.TOOLS if t["name"] not in SKIP]}
@@ -67,8 +79,11 @@ def call(db: Session, turn: str, conversation: str, name: str, params: dict, req
     if name in SKIP or name not in {t["name"] for t in agent.TOOLS}:
         return {"error": f"Неизвестный инструмент {name}"}
     t = open_turn(turn, conversation, request)
-    output = agent.run_tool(db, name, params or {}, t.pending, t.screen)
-    t.calls.append({"name": name, "input": params, "output": output})
+    with t.lock:
+        if t.closed:
+            return {"error": "Этот ход уже завершён — ничего не подготовлено"}
+        output = agent.run_tool(db, name, params or {}, t.pending, t.screen)
+        t.calls.append({"name": name, "input": params, "output": output})
     if name == "ask_user" and "error" not in output:
         t.question = {"question": (params or {}).get("question"), "options": (params or {}).get("options") or []}
         output = output | {"note": "Вопрос показан владелице с вариантами. Закончи ответ этим вопросом, больше ничего не делай."}
@@ -80,8 +95,7 @@ def call(db: Session, turn: str, conversation: str, name: str, params: dict, req
 
 def finish(db: Session, turn: str, reply: str) -> dict:
     """The end of JARVIS's turn: the proposal (if any) is stored, the reply joins the app's dialog history."""
-    with _LOCK:
-        t = TURNS.pop(turn, None)
+    t = _close(turn)
     if t is None:
         return {"reply": reply, "proposal": None, "question": None, "client": None}
     result = agent._finish_turn(db, t.conversation, t.text, t.screen, t.pending, t.calls, t.question, reply)
@@ -99,8 +113,7 @@ def finish(db: Session, turn: str, reply: str) -> dict:
 def rules(db: Session, turn: str) -> dict:
     """JARVIS's AI is unavailable (a limit, offline): the turn ends with this app's full rules — what the app did when
     its own AI failed («Ответила без ИИ»). Nothing pending from the model is kept."""
-    with _LOCK:
-        t = TURNS.pop(turn, None)
+    t = _close(turn)
     if t is None:
         return {"reply": "", "proposal": None, "question": None, "client": None}
     result = agent.RuleInterpreter(db, t.conversation, t.screen).run(t.text)

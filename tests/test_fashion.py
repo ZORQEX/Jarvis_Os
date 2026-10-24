@@ -83,6 +83,10 @@ async def fake_app():
     app.router.add_post("/api/jarvis/ai/finish", ai_finish)
     app.router.add_post("/api/jarvis/ai/rules", ai_rules)
     app.router.add_post("/api/agent/proposals/{pid}/{what}", commit)
+
+    async def proposal(req):
+        return web.json_response({"status": seen.get("status", {}).get(req.match_info["pid"], "pending")})
+    app.router.add_get("/api/jarvis/proposal/{pid}", proposal)
     runner = web.AppRunner(app)
     await runner.setup()
     with socket.socket() as s:
@@ -351,3 +355,11 @@ async def test_the_rest_of_the_request_goes_on_after_the_click(core, orders, fak
     await core.director.decide_order("b" * 24, True)
     from conftest import wait_for
     await wait_for(lambda: any(m["text"] == "Сделай Excel и PDF для IDS" for m in fake_app["messages"]))
+
+
+
+async def test_a_card_for_a_replaced_proposal_changes_nothing(core, orders, fake_app):
+    """Card A, then a newer request replaced it (the module cancelled A): «Подтвердить» on A must not report «saved»."""
+    fake_app["status"] = {"c" * 24: "cancelled"}
+    out = await core.director.decide_order("c" * 24, True)
+    assert out == {**out, "status": "cancelled", "acted": False} and not fake_app.get("decided")

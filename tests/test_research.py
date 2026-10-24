@@ -234,9 +234,12 @@ async def test_follow_up_uses_what_was_found_without_repeating(core, searx, clau
     assert "Найдено ранее в этом разговоре" in second and "/page/1" in second
     from jarvis.agency.tools import research_context
     conv = core.director.ctx(core.director.conversation_id())
-    found = research_context(conv, "other-task", "Сделай в проекте страницу поставщиков картонных коробок")
-    assert found and "/page/1" in found["text"]                           # Claude Code gets it as context
-    assert research_context(conv, "other-task", "Почини тесты в проекте") is None   # unrelated job: nothing attached
+    assert conv["research_for"] == t2                                     # this task pointed at the search
+    found = research_context(conv, t2, "Сделай в проекте страницу поставщиков картонных коробок")
+    assert found and "/page/1" in found["text"]                           # its Claude Code job gets it as context
+    # another job that merely shares words with the search gets no web text (Claude Code can write files and run bash)
+    assert research_context(conv, "other-task", "Сделай страницу поставщиков картонных коробок") is None
+    assert research_context(conv, "other-task", "используй найденное в этом проекте")       # unless pointed at
 
 
 async def test_search_then_code_gives_claude_code_the_results(core, searx, home):
@@ -265,8 +268,11 @@ def test_prices_route_to_the_quote_tool():
     assert route("Какая сейчас цена Bitcoin?").tool == "market_quote"
     assert route("курс доллара к тенге").args == {"asset": "USD", "kind": "fiat", "to": "KZT"}
     assert route("сколько стоит эфир в рублях").args == {"asset": "ethereum", "kind": "crypto", "to": "RUB"}
+    assert route("биткоин сколько стоит").args == {"asset": "bitcoin", "kind": "crypto"}
     for phrase in ("цена на нефть", "сколько стоит iphone", "курсовая работа по экономике",
-                   "Найди актуальную информацию о Bitcoin"):
+                   "Найди актуальную информацию о Bitcoin", "Сколько стоит iPhone 17 в долларах?",
+                   "сколько стоит подписка Claude в долларах", "почём килограмм яблок в тенге",
+                   "Напиши курсовую про евро", "курс лекций по франкфуртской школе", "цена на тон краски"):
         r = route(phrase)
         assert r is None or r.tool != "market_quote"
 
@@ -303,3 +309,53 @@ def test_source_numbers_and_links_are_not_spoken():
     from jarvis.voice.tts import clean_for_speech
     out = clean_for_speech("Bitcoin стоит около 80 000 долларов [0][1], см. [CoinGecko](https://www.coingecko.com/x).")
     assert "[" not in out and "coingecko.com" not in out and "CoinGecko" in out and "80 000" in out
+
+
+
+def test_personal_requests_are_not_sent_to_the_web():
+    from jarvis.agency.planner import heuristic_plan
+    for q in ("найди анализы крови в папке документы", "посмотри расписание на завтра в моём календаре",
+              "найди в моих заметках информацию о встрече", "посмотри мою статистику использования диска"):
+        assert all(s.action != "research" for s in heuristic_plan("t", q)[0].steps), q
+    assert heuristic_plan("t", "найди в интернете информацию о моём районе")[0].steps[0].action == "research"
+
+
+async def test_no_web_search_in_strict_offline_nor_for_confidential_queries(core, searx):
+    core.db.set_kv("privacy_profile", "STRICT_OFFLINE")
+    tid = await core.director.submit("Найди актуальную информацию о Bitcoin")
+    t = await wait_done(core, tid)
+    assert "web_search" not in [s["tool_id"] for s in t["steps"]] and not searx.calls
+    core.db.set_kv("privacy_profile", "AUTHORIZED_CLOUD")
+    tid = await core.director.submit("Найди в интернете, как сменить пароль от банка")
+    t = await wait_done(core, tid)
+    assert "web_search" not in [s["tool_id"] for s in t["steps"]] and not searx.calls
+
+
+async def test_private_mode_asks_before_the_query_leaves_the_computer(core, searx, claude):
+    from conftest import wait_for
+    core.db.set_kv("privacy_profile", "PRIVATE_LOCAL")
+    claude([["Ответ [1]."]])
+    tid = await core.director.submit("Найди поставщиков картонных коробок в Алматы")
+    await wait_for(lambda: core.approvals.pending())
+    a = core.approvals.pending()[0]
+    assert a["tool_id"] == "cloud_send" and "поиск в интернете" in a["args"]["provider"] and not searx.calls
+    core.director.decide(a["id"], False)
+    await wait_done(core, tid)
+    assert not searx.calls
+
+
+async def test_compare_what_was_found_gets_the_search_as_data(core, searx, claude):
+    """«Сравни найденных поставщиков» (an analysis step, no new search): the conversation's last search is its input."""
+    from conftest import FakeProvider
+    from jarvis.providers.base import Cap
+    g = claude([["Нашёл [1][2]."]])
+    t1 = await core.director.submit("Найди поставщиков картонных коробок в Алматы")
+    await wait_done(core, t1)
+    web_ai = FakeProvider("claude", [Cap.DOC_ANALYSIS, Cap.GENERAL], replies=["Поставщик 1 дешевле."])
+    g.generate = web_ai.generate
+    t2 = await core.director.submit("Сравни найденных поставщиков по цене и выбери лучшего")
+    await wait_done(core, t2)
+    req = web_ai.requests[0]
+    assert any("Найдено ранее" in c["label"] and "/page/1" in c["text"] for c in req.context)
+    assert core.director.ctx(core.director.conversation_id())["research_for"] == t2
+    assert len([c for c in searx.calls if c[0] == "duckduckgo"]) == 1          # no second search

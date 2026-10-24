@@ -344,7 +344,8 @@ class Director:
         if not self.fashion:
             raise ValueError("Модуль заказов выключен")
         out = await self.fashion.decide(proposal, approve)
-        status = "committed" if approve else "cancelled"
+        status = out.get("already") or ("committed" if approve else "cancelled")    # the real state, not the button
+        acted = not out.get("already")
         if message_id:
             row = self.db.one("SELECT meta FROM messages WHERE id=?", (message_id,))
             if row:
@@ -360,14 +361,14 @@ class Director:
                     meta["fashion"] = f
                     self.db.execute("UPDATE messages SET meta=? WHERE id=?", (dumps(meta), message_id))
                     self.bus.publish("message.updated", {"message_id": message_id, "meta": meta})
-        if approve and out.get("follow_up"):
+        if acted and approve and out.get("follow_up"):
             # The rest of the owner's own request waited for this change («…и потом сделай PDF»): it goes on now.
             spawn(self.submit(str(out["follow_up"])[:2000], source="text"), "orders-follow-up")
-        self.audit.write("fashion.decided", proposal=proposal, approve=approve)
+        self.audit.write("fashion.decided", proposal=proposal, approve=approve, status=status, acted=acted)
         self.bus.publish("fashion.turn", {"conversation": self.fashion.conversation(), "navigate": out.get("navigate"),
-                                          "committed": approve, "show": False})
-        return {"status": status, "messages": out.get("messages") or [], "documents": out.get("documents") or [],
-                "navigate": out.get("navigate")}
+                                          "committed": acted and approve, "show": False})
+        return {"status": status, "acted": acted, "messages": out.get("messages") or [],
+                "documents": out.get("documents") or [], "navigate": out.get("navigate")}
 
     async def run_ui_tool(self, tool: str, args: dict) -> str:
         """A button in the UI asked for a tool directly (no text command)."""

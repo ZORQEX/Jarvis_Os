@@ -349,7 +349,8 @@ export function orderCard(f, messageId) {
   const parts = [];
   if (p && p.id) {
     const st = p.status || "pending";
-    const head = { pending: "Изменение в заказах — ждёт вашего решения", committed: "Сохранено в заказах", cancelled: "Отменено" }[st]
+    const head = { pending: "Изменение в заказах — ждёт вашего решения", committed: "Сохранено в заказах",
+      cancelled: "Отменено или заменено новым предложением", missing: "Предложение не найдено" }[st]
       || esc(st);
     const diff = (p.diff || []).length ? `<table class="ord-diff"><thead><tr><th></th><th>Было</th><th>Станет</th><th>Разница</th></tr></thead><tbody>${
       p.diff.map((r) => { const d = Number(r.after) - Number(r.before);

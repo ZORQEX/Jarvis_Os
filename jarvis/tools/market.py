@@ -18,21 +18,22 @@ from .base import Risk, Tool, ToolError, ToolInputError, ToolResult, ToolSpec, V
 
 UA = "JARVIS-WorkOS/1 (personal desktop assistant)"
 COINS = {  # spoken / written name → (CoinGecko id, name)
-    r"биткоин\w*|биткойн\w*|bitcoin|btc|битк\w*": ("bitcoin", "Bitcoin"),
+    r"биткоин\w*|биткойн\w*|bitcoin|btc": ("bitcoin", "Bitcoin"),
     r"эфир(?:иум\w*|а|у|ом)?|ethereum|ether|eth": ("ethereum", "Ethereum"),
-    r"солан\w*|solana|sol": ("solana", "Solana"),
-    r"тонкоин\w*|toncoin|\bton\b|\bтон\b": ("the-open-network", "Toncoin"),
+    r"солан\w*|solana": ("solana", "Solana"),
+    r"тонкоин\w*|toncoin": ("the-open-network", "Toncoin"),
     r"usdt|тезер\w*|tether": ("tether", "Tether"),
-    r"доги\w*|dogecoin|doge": ("dogecoin", "Dogecoin"),
+    r"догикоин\w*|dogecoin|doge": ("dogecoin", "Dogecoin"),
     r"рипл\w*|ripple|xrp": ("ripple", "XRP"),
-    r"\bbnb\b|бинанс ?коин\w*": ("binancecoin", "BNB"),
+    r"bnb|бинанс ?коин\w*": ("binancecoin", "BNB"),
     r"лайткоин\w*|litecoin|ltc": ("litecoin", "Litecoin"),
 }
-FIAT = {  # spoken name → ISO code
+FIAT = {  # spoken name → ISO code; ambiguous words («франк», «лира», «вона», «сом») only with the country
     r"доллар\w*|usd|бакс\w*|\$": "USD", r"евро|eur|€": "EUR", r"рубл\w*|rub|₽": "RUB", r"тенге|теңге|kzt|₸": "KZT",
-    r"юан\w*|cny": "CNY", r"фунт\w*|gbp|£": "GBP", r"лир\w*|try": "TRY", r"дирхам\w*|aed": "AED",
-    r"сом\b|сома|kgs": "KGS", r"сум\b|сума|uzs": "UZS", r"иен\w*|йен\w*|jpy": "JPY", r"вон\w*|krw": "KRW",
-    r"франк\w*|chf": "CHF", r"гривн\w*|uah": "UAH",
+    r"юан\w*|cny": "CNY", r"фунт\w* стерлинг\w*|gbp|£": "GBP", r"турецк\w* лир\w*|try": "TRY",
+    r"дирхам\w*|aed": "AED", r"кыргызск\w* сом\w*|kgs": "KGS", r"узбекск\w* сум\w*|uzs": "UZS",
+    r"иен\w*|йен\w*|jpy": "JPY", r"корейск\w* вон\w*|krw": "KRW", r"швейцарск\w* франк\w*|chf": "CHF",
+    r"гривн\w*|uah": "UAH",
 }
 SIGN = {"USD": "$", "EUR": "€", "RUB": "₽", "KZT": "₸", "CNY": "¥", "GBP": "£", "JPY": "¥", "TRY": "₺", "UAH": "₴"}
 NAME_RU = {"USD": "доллар", "EUR": "евро", "RUB": "рубль", "KZT": "тенге", "CNY": "юань", "GBP": "фунт", "TRY": "лира",
@@ -62,26 +63,47 @@ def _find(table: dict, text: str):
     return (best[0], best[2]) if best else (None, -1)
 
 
+def _fiat_at_start(text: str) -> tuple[str | None, int]:
+    """A currency named first in the text (after «1» / «один»), and where its name ends."""
+    lead = re.match(r"\s*(?:(?:1|один|одна|одного)\s+)?", text).end()
+    m = re.match("|".join(f"(?:{p})(?!\\w)" for p in FIAT), text[lead:])
+    if not m:
+        return None, -1
+    return next(v for p, v in FIAT.items() if re.fullmatch(p, m.group(0))), lead + m.end()
+
+
+_TO = re.compile(r"\s*(?:в|к|на)\s+(\S.*)$")
+
+
 def parse_quote(t: str) -> dict | None:
-    """«цена биткоина», «сколько стоит эфир в тенге», «курс доллара», «курс евро к рублю», «почём доллар» → args."""
-    asks = re.search(r"\b(?:курс\w*|цен[аеуы]|стоимост\w*|почем|почём|сколько (?:сейчас )?стоит|котировк\w*|price|rate)\b", t)
-    if not asks:
-        return None
-    if re.search(r"\b(?:акци\w*|нефт\w*|золот\w*|бензин\w*|квартир\w*|доставк\w*|билет\w*|курсов\w* работ|курс лечени)",
-                 t):
-        return None
-    coin, _ = _find(COINS, t)
-    if coin:
-        to, _ = _find(FIAT, t[asks.end():]) if re.search(r"\b(?:в|к|за)\s", t[asks.end():]) else (None, -1)
-        return {"asset": coin[0], "kind": "crypto", **({"to": to} if to else {})}
-    m = re.search(r"\bкурс\w*\s+(.+)$", t) or re.search(r"\b(?:почем|почём|сколько (?:сейчас )?стоит)\s+(.+)$", t)
+    """«цена биткоина», «сколько стоит эфир в тенге», «курс доллара», «курс евро к рублю», «почём доллар» → args.
+    The coin or currency must be what is asked about (the first word after «курс / цена / сколько стоит»): «сколько
+    стоит iPhone в долларах», «курсовая про евро», «курс лекций» are not quotes."""
+    inv = re.fullmatch(r"(\S+)\s+(?:сейчас\s+)?(?:сколько (?:сейчас )?стоит|почем|почём|сколько)", t)
+    if inv:                                            # «биткоин сколько стоит»
+        coin = next((v for pat, v in COINS.items() if re.fullmatch(pat, inv.group(1))), None)
+        if coin:
+            return {"asset": coin[0], "kind": "crypto"}
+    m = re.search(r"(?<!\w)(?:курс(?:а|ы|ом|у|е)?|цен[аеуы]|стоимост[ьи]|почем|почём|сколько (?:сейчас )?стоит|"
+                  r"котировк[аиу]|price|rate)(?:\s+(?:сейчас|сегодня|на|у|за))*\s+(.+)$", t)
     if not m:
         return None
-    rest = m.group(1)
-    base, end = _find(FIAT, rest)
+    rest = m.group(1).strip()
+    if re.match(r"(?:валют|обмен)", rest):            # «курс валют» → the dollar to the home currency
+        return {"asset": "USD", "kind": "fiat"}
+    first = re.match(r"\S+", rest).group(0)
+    coin = next((v for pat, v in COINS.items() if re.fullmatch(pat, first)), None)
+    if coin:
+        tail = _TO.match(rest[len(first):])
+        to = _fiat_at_start(tail.group(1))[0] if tail else None
+        return {"asset": coin[0], "kind": "crypto", **({"to": to} if to else {})}
+    base, end = _fiat_at_start(rest)
     if not base:
         return None
-    to, _ = _find(FIAT, rest[end:]) if re.search(r"\b(?:к|в|на)\s", rest[end:]) else (None, -1)
+    tail = _TO.match(rest[end:])
+    to = _fiat_at_start(tail.group(1))[0] if tail else None
+    if rest[end:].strip() and not tail:
+        return None                                    # «курс доллара упал, что делать» — not a plain quote
     return {"asset": base, "kind": "fiat", **({"to": to} if to and to != base else {})}
 
 

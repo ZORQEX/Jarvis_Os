@@ -284,8 +284,12 @@ class FashionService:
         """«Подтвердить» / «Отменить» on a proposal card in JARVIS's chat (the owner's click — never the model)."""
         if not re.fullmatch(r"[a-f0-9]{24}", proposal or ""):
             raise ValueError("Неверное предложение")
-        path = f"/api/agent/proposals/{proposal}/{'commit' if approve else 'cancel'}"
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as s:
+            async with s.get(f"{self.url}/api/jarvis/proposal/{proposal}") as r:
+                now = (await r.json(content_type=None)).get("status")
+            if now != "pending":                  # replaced by a newer one, said «да» to, or cancelled: nothing to do
+                return {"ok": True, "already": now or "missing"}
+            path = f"/api/agent/proposals/{proposal}/{'commit' if approve else 'cancel'}"
             async with s.post(self.url + path) as r:
                 out = await r.json(content_type=None)
         if not out.get("ok"):

@@ -803,7 +803,10 @@ document.addEventListener("click", async (e) => {
     const approve = t.dataset.orderDecide === "commit";
     t.closest(".actions")?.querySelectorAll("button").forEach((b) => { b.disabled = true; });
     return link.request("fashion.decide", { id: t.dataset.proposal, approve, message_id: t.dataset.mid || null })
-      .then((r) => toast(approve ? "Сохранено в заказах" + (r.messages?.length ? ": " + r.messages.slice(0, 2).join("; ") : "") : "Изменение отменено", "ok"))
+      .then((r) => toast(!r.acted ? ({ committed: "Это изменение уже сохранено", cancelled: "Это предложение уже отменено или заменено новым",
+          missing: "Предложение не найдено" }[r.status] || "Решение уже принято") + " — ничего не менял"
+        : approve ? "Сохранено в заказах" + (r.messages?.length ? ": " + r.messages.slice(0, 2).join("; ") : "") : "Изменение отменено",
+        r.acted ? "ok" : "warn"))
       .catch((er) => { toast(er.message, "err"); t.closest(".actions")?.querySelectorAll("button").forEach((b) => { b.disabled = false; }); });
   }
   if (t.dataset.act === "estop_clear") return agent.control("estop_clear").then((r) => toast(r.message, "ok"));

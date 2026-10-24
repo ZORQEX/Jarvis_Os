@@ -27,6 +27,7 @@ import subprocess
 import time
 import unicodedata
 from collections import OrderedDict
+from html.parser import HTMLParser
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
@@ -300,34 +301,88 @@ def published(html: str) -> str | None:
     return None
 
 
-def html_to_text(html: str) -> str:
-    s = re.sub(r"<!--[\s\S]*?-->", " ", html)
-    for tag in ("script", "style", "noscript", "svg", "template", "iframe", "canvas", "select", "button"):
-        s = re.sub(rf"<{tag}\b[\s\S]*?</{tag}>", " ", s, flags=re.I)
-    for _ in range(3):
-        for tag in ("nav", "header", "footer", "aside", "form", "menu", "dialog"):
-            s = re.sub(rf"<{tag}\b[^>]*>(?:(?!<{tag}\b)[\s\S])*?</{tag}>", " ", s, flags=re.I)
-    s = re.sub(r"<(div|section|ul|p)\b[^>]*(?:class|id)\s*=\s*[\"'][^\"']*(cookie|consent|banner|newsletter|subscribe|"
-               r"share|social|related|comments?|advert|promo|breadcrumb|sidebar|popup|modal)[^\"']*[\"'][^>]*>[\s\S]*?</\1>",
-               " ", s, flags=re.I)
-    region = None
-    for tag in ("article", "main"):
-        parts = re.findall(rf"<{tag}\b[^>]*>([\s\S]*?)</{tag}>", s, flags=re.I)
-        best = max(parts, key=len) if parts else ""
-        if len(re.sub(r"<[^>]+>", "", best).strip()) > 400:
-            region = best
-            break
-    if region is None:
-        m = re.search(r"<body\b[^>]*>([\s\S]*)</body>", s, re.I)
-        region = m.group(1) if m else s
-    region = re.sub(r"<(br|hr)\s*/?>", "\n", region, flags=re.I)
-    region = re.sub(r"</(p|div|section|li|tr|h[1-6]|blockquote|pre|table|dd|dt)>", "\n", region, flags=re.I)
-    region = re.sub(r"<(td|th)\b[^>]*>", " | ", region, flags=re.I)
-    region = re.sub(r"<li\b[^>]*>", "\n- ", region, flags=re.I)
-    text = decode_entities(re.sub(r"<[^>]+>", " ", region))
-    text = re.sub(r"[ \t\f\v ]+", " ", text)
+_SKIP = {"script", "style", "noscript", "svg", "template", "iframe", "canvas", "select", "button", "nav", "header",
+         "footer", "aside", "form", "menu", "dialog", "head", "object"}
+_BLOCK = {"p", "div", "section", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "table", "dd", "dt",
+          "br", "hr", "article", "main", "ul", "ol", "figcaption"}
+_VOID = {"br", "hr", "img", "input", "meta", "link", "source", "wbr", "area", "base", "col", "embed", "param", "track"}
+_BOILER = re.compile(r"cookie|consent|banner|newsletter|subscribe|share|social|related|comments?|advert|promo|breadcrumb|"
+                     r"sidebar|popup|modal", re.I)
+
+
+class _Text(HTMLParser):
+    """One pass over the page (linear in its size, whatever the markup): text outside scripts, navigation, headers,
+    footers, forms and cookie / share / sidebar blocks; the text inside <article>/<main> is kept apart."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.main = [], []
+        self.stack: list[tuple[str, bool]] = []          # (tag, starts a skipped block)
+        self.skip = 0
+        self.in_main = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _VOID:
+            if tag in ("br", "hr") and not self.skip:
+                self._put("\n")
+            return
+        if tag in _BLOCK and self.stack and self.stack[-1][0] == "p":
+            self.handle_endtag("p")                       # HTML closes an open <p> at the next block (often unwritten)
+        cls = " ".join(v or "" for k, v in attrs if k in ("class", "id"))
+        skipped = tag in _SKIP or (tag in ("div", "section", "ul") and bool(_BOILER.search(cls)))
+        self.stack.append((tag, skipped))
+        if len(self.stack) > 400:                         # absurd nesting: forget the oldest levels
+            t, sk = self.stack.pop(0)
+            self.skip -= sk
+            self.in_main -= t in ("article", "main")
+        self.skip += skipped
+        self.in_main += tag in ("article", "main")
+        if not self.skip:
+            if tag == "li":
+                self._put("\n- ")
+            elif tag in ("td", "th"):
+                self._put(" | ")
+            elif tag in _BLOCK:
+                self._put("\n")
+
+    def handle_endtag(self, tag):
+        if tag in _VOID or not any(t == tag for t, _ in self.stack):
+            return                                        # a stray end tag closes nothing
+        while self.stack:
+            t, sk = self.stack.pop()
+            self.skip -= sk
+            self.in_main -= t in ("article", "main")
+            if t == tag:
+                break
+        if not self.skip and tag in _BLOCK:
+            self._put("\n")
+
+    def handle_data(self, data):
+        if not self.skip and data:
+            self._put(data)
+
+    def _put(self, text):
+        self.out.append(text)
+        if self.in_main:
+            self.main.append(text)
+
+
+def _tidy(text: str) -> str:
+    text = re.sub(r"[ \t\f\v\u00a0]+", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def html_to_text(html: str) -> str:
+    """The readable text of a page: the <article>/<main> part when it has real text, else the whole body."""
+    p = _Text()
+    try:
+        p.feed(html[:800_000])
+        p.close()
+    except Exception:   # noqa: BLE001 — a broken page gives what was read so far
+        pass
+    main = _tidy("".join(p.main))
+    return main if len(main) > 400 else _tidy("".join(p.out))
 
 
 def passages(text: str, query: str, budget: int = 2400) -> str:
@@ -552,6 +607,14 @@ def _decode(raw: bytes, charset: str | None) -> str:
     if text.count("�") > len(text) / 100:
         text = raw.decode("cp1251", "replace")
     return text
+
+
+def _extract(html: str, url: str, query: str, chars: int) -> dict:
+    head = html[:200_000]                                  # title, date and meta are at the top
+    text = html_to_text(html) if "<" in html[:2000] else html[:200_000]
+    clean, flagged = sanitize(passages(text[:60000], query, chars))
+    return {"url": url, "title": page_title(head) or host_of(url), "date": published(head), "text": clean,
+            "flagged": flagged, "chars": len(text)}
 
 
 # ---------------------------------------------------------------- the service
@@ -874,10 +937,7 @@ class Research:
                     break
             else:
                 raise ToolError("слишком много перенаправлений")
-        text = html_to_text(html) if "<" in html[:2000] else html
-        clean, flagged = sanitize(passages(text[:60000], query, chars))
-        page = {"url": current, "title": page_title(html) or host_of(current), "date": published(html),
-                "text": clean, "flagged": flagged, "chars": len(text)}
+        page = await asyncio.to_thread(_extract, html, current, query, chars)   # CPU work: never on the event loop
         self.pages[key] = (time.time() + 3600, page)
         while len(self.pages) > 200:
             self.pages.popitem(last=False)
@@ -971,9 +1031,12 @@ class Research:
             say(f"Читаю страницы: {min(m['read'], len(results))}…")
             todo = results[:m["read"] + 2]               # two spares: some sites refuse or time out
             jobs = {asyncio.create_task(self.read_page(r["url"], original, m["chars"], m["budget"])): r for r in todo}
-            done, late = await asyncio.wait(jobs, timeout=m["budget"] + 0.5)
-            for t in late:
-                t.cancel()
+            try:
+                done, _ = await asyncio.wait(jobs, timeout=m["budget"] + 0.5)
+            finally:                                   # late, or the search itself was stopped: no reads keep going
+                for t in jobs:
+                    if not t.done():
+                        t.cancel()
             for t in done:
                 if t.exception() is None and len(pages) < m["read"] and t.result().get("text"):
                     p = t.result()

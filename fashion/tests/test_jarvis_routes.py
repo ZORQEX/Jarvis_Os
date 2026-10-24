@@ -149,3 +149,24 @@ def test_without_jarvis_ai_the_handed_back_turn_ends_with_the_full_rules(client,
     assert r["reply"] and r["speech"]
     assert agent.history(db, conv)[-1].role == "assistant"
     assert client.post("/api/jarvis/ai/rules", json={"turn": "t_rules"}).json()["reply"] == ""     # the turn is over
+
+
+def test_proposal_state_and_a_late_call_after_the_turn_ended(client, db, tmp_path, monkeypatch):  # noqa: F811
+    imported(db, tmp_path)
+    monkeypatch.setattr(settings, "ai_provider", "claude-code")
+    conv = "a" * 16
+    client.post("/api/agent/message", json={"conversation": conv, "text": "Почему у IDS такая сумма и что с ней делать?",
+                                            "jarvis": True, "turn": "t_late"})
+    client.post("/api/jarvis/ai/tool", json={"turn": "t_late", "conversation": conv, "name": "propose_changes",
+                                             "params": {"summary": "IDS 35 %", "actions": [{"action": "set_customer_markup",
+                                                        "params": {"customer": "IDS", "markup": "35"}}]}})
+    fin = client.post("/api/jarvis/ai/finish", json={"turn": "t_late", "reply": "Предлагаю."}).json()
+    pid = fin["proposal"]["id"]
+    assert client.get(f"/api/jarvis/proposal/{pid}").json()["status"] == "pending"
+    agent.commit_proposal(db, pid)
+    assert client.get(f"/api/jarvis/proposal/{pid}").json()["status"] == "committed"
+    assert client.get("/api/jarvis/proposal/nope").status_code == 404
+    from app import jarvis_ai
+    t = jarvis_ai.open_turn("t_late2", conv, "x")
+    jarvis_ai._close("t_late2")
+    assert t.closed
