@@ -58,7 +58,8 @@ def audio_events(core):
     ("корень из 144", "12."), ("20 процентов от 500", "100."),
 ])
 def test_calculations_are_local(q, start):
-    assert answer(q).startswith(start)
+    a = answer(q)
+    assert a.split(" — ")[-1].replace("это ", "").startswith(start.rstrip(".")) and a.count(start.rstrip(".")) == 1
 
 
 @pytest.mark.parametrize("q", ["Что такое API?", "Сколько ему лет?", "Сколько стоит доставка?", "Кто такой Илон Маск?"])
@@ -73,9 +74,9 @@ async def test_fast_path_answers_without_any_model_call(core, speech):
     tid = await core.director.submit("Джарвис, сколько будет 25% от 800?", "voice")
     await wait_done(core, tid)
     assert (time.perf_counter() - t0) < 0.5 and not g.calls
-    assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("200.")
+    assert core.director.messages(core.director.conversation_id())[-1]["text"] == "25 процентов от 800 — это 200."
     await wait_for(lambda: speech.engine.calls)
-    assert speech.engine.calls[0].startswith("200.")
+    assert speech.engine.calls[0] == "25 процентов от 800 — это 200."
 
 
 def test_system_status_no_longer_catches_every_skolko():
@@ -357,7 +358,7 @@ async def test_voice_uses_local_recognition_even_fully_offline(core, monkeypatch
     r = await srv._voice_turn({"audio_b64": b64.b64encode(b"RIFF" + b"\0" * 4000).decode(), "mime": "audio/wav"})
     assert r["text"] == "Сколько будет 2 плюс 2?" and r["task_id"]
     await wait_done(core, r["task_id"])
-    assert core.director.messages(core.director.conversation_id())[-1]["text"].startswith("4")
+    assert core.director.messages(core.director.conversation_id())[-1]["text"].endswith("4.")
 
 
 async def test_slow_answer_gets_a_spoken_hold_phrase(core, speech):

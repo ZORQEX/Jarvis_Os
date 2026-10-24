@@ -105,18 +105,18 @@ def answer(text: str) -> str | None:
     if m:
         p, base = _num(m.group(1)), _num(m.group(2))
         v = p * base / 100
-        return f"{fmt(v)}. {fmt(p)} процентов от {fmt(base)} — это {fmt(v)}."
+        return f"{fmt(p)} процентов от {fmt(base)} — это {fmt(v)}."
     m = re.search(rf"сколько\s+(?:будет\s+)?(\w+(?:\s\w+)?)\s+в\s+(?:{NUM}\s+|одн\w+\s+)?(\w+(?:\s\w+)?)", t)
     if m:
         ua, ub = _unit(m.group(1)), _unit(m.group(3))
         n = _num(m.group(2)) if m.group(2) else 1
         if ua and ub and ua[0] == ub[0]:
             v = n * ub[1] / ua[1]
-            return f"{fmt(v)}. В {fmt(n) + ' ' if n != 1 else 'одном '}{m.group(3)} — {fmt(v)} {m.group(1)}."
+            return f"В {fmt(n) + ' ' if n != 1 else 'одном '}{m.group(3)} — {fmt(v)} {m.group(1)}."
     m = re.search(rf"корень\s+(?:квадратный\s+)?из\s+{NUM}", t)
     if m and not re.search(r"[+\-*/]|плюс|минус|умнож|раздел", t):
         n = _num(m.group(1))
-        return f"{fmt(math.sqrt(n))}. Квадратный корень из {fmt(n)} — {fmt(math.sqrt(n))}."
+        return f"Квадратный корень из {fmt(n)} — {fmt(math.sqrt(n))}."
     m = re.search(r"(?:сколько\s+будет|посчитай|вычисли|calculate|сколько\s+это)\s+(.+?)\??$", t) or \
         re.fullmatch(r"\s*([\d\s.,+\-*/x×÷^()]+(?:в квадрате|в кубе)?)\s*(?:=|равно)?\s*\??\s*", t)
     if m:
@@ -135,7 +135,8 @@ def answer(text: str) -> str | None:
             v = _eval(ast.parse(expr, mode="eval"))
         except (ValueError, SyntaxError, ZeroDivisionError, OverflowError, TypeError):
             return None
-        return f"{fmt(v)}. {spoken(expr)} — {fmt(v)}."
+        # The result once, at the end: «200. 25 процентов от 800 — это 200» said it twice (say less, measured live).
+        return f"{spoken(expr)} — {fmt(v)}."
     return None
 
 
