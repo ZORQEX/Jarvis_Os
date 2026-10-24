@@ -25,7 +25,14 @@ SR = 24000
 
 def main() -> None:
     home = sys.argv[1]
-    model = Kokoro(os.path.join(home, "models", "kokoro-v1.0.int8.onnx"), os.path.join(home, "models", "voices-v1.0.bin"))
+    import onnxruntime as ort
+    so = ort.SessionOptions()                 # threads that sleep when idle (spinning ones cost 4× the CPU here)
+    so.intra_op_num_threads = int(os.environ.get("JARVIS_TTS_THREADS", "4"))
+    so.inter_op_num_threads = 1
+    so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    sess = ort.InferenceSession(os.path.join(home, "models", "kokoro-v1.0.int8.onnx"), sess_options=so,
+                                providers=["CPUExecutionProvider"])
+    model = Kokoro.from_session(sess, os.path.join(home, "models", "voices-v1.0.bin"))
     model.create("Ready.", voice="bm_george", lang="en-gb")            # warm-up: the first phrase is not slower
     print(json.dumps({"ready": True, "voices": len(model.get_voices())}), flush=True)
     for line in sys.stdin:

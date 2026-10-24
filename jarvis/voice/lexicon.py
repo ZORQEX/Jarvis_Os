@@ -44,6 +44,26 @@ class Lexicon:
         return known / (len(ws) + sum(1 for w in latin if w.islower())) >= 0.5
 
 
+def _lev(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def wake_like(text: str) -> bool:
+    """Is there a word that could be «Джарвис» / «Jarvis»? Wake listening re-hears a phrase with the multilingual
+    model only then: a TV or a talk in the room is not run through both models (measured 2026-10-24: ~140 phrases in
+    half an hour while nobody spoke to JARVIS)."""
+    for w in re.findall(r"[^\W\d_]+", (text or "").casefold().replace("ё", "е")):
+        if 4 <= len(w) <= 9 and (_lev(w, "джарвис") <= 2 or _lev(w, "jarvis") <= 2):
+            return True
+    return False
+
+
 def prefer_second(other: str) -> bool:
     """Parakeet wrote Latin (or Ukrainian): another language — use it. Parakeet wrote Russian: the phrase was Russian
     after all, keep GigaAM's text (it is better at Russian)."""

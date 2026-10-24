@@ -78,14 +78,24 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
                         gateway=gateway, ai=claude, scheduler=scheduler, config=config,
                         providers=manager, agency=agency)
     from .voice.speech import SpeechManager
-    from .voice.tts import DEFAULT_VOICE, KokoroTTS, PiperTTS, SileroTTS, VoiceEngine
-    # Local voices only: Silero for Russian (Piper «Денис» as emergency fallback), Kokoro for English and other
-    # languages. The user's choices from Settings → Голос.
+    from .voice.tts import DEFAULT_VOICE, VOICES, KokoroTTS, PiperTTS, SileroTTS, SupertonicTTS, VoiceEngine
+    # Local voices only: Supertonic (one voice, every language), Silero / Kokoro / Piper as fallback and as choices.
+    # The user's choice from Settings → Голос.
+    supertonic = SupertonicTTS()
     chosen = db.get_kv("tts_voice") or DEFAULT_VOICE
-    if not str(chosen).startswith("silero:"):
-        chosen = DEFAULT_VOICE                      # older choices (cloud / Piper voices) no longer exist
+    if not supertonic.available() and str(chosen).startswith("supertonic:"):
+        chosen = "silero:aidar" if chosen[-2] == "M" else "silero:xenia"      # not installed: the Russian voice
+    elif supertonic.available() and not db.get_kv("voice_supertonic_switched"):
+        # The person asked for one natural voice for every language (2026-10-24): switch once to the measured best
+        # (male, like before: M4; female: F1); a later choice in Settings stays.
+        g = next((v["gender"] for v in VOICES if v["id"] == chosen), "м")
+        chosen = "supertonic:M4" if g == "м" else "supertonic:F1"
+        db.set_kv("tts_voice", chosen)
+        db.set_kv("voice_supertonic_switched", True)
+    if not any(v["id"] == chosen for v in VOICES):
+        chosen = DEFAULT_VOICE if supertonic.available() else "silero:aidar"   # older (cloud / Piper) choices
     engine = VoiceEngine(SileroTTS(), PiperTTS(config.piper_voice), chosen, float(db.get_kv("tts_rate") or 1.0),
-                         kokoro=KokoroTTS(), en_voice_id=db.get_kv("tts_voice_en"))
+                         kokoro=KokoroTTS(), en_voice_id=db.get_kv("tts_voice_en"), supertonic=supertonic)
     director.speech = SpeechManager(db, bus, engine)
     from .voice.stt import LocalSTT
     director.stt = LocalSTT()           # speech recognition on this computer (GigaAM + Parakeet) — the only one

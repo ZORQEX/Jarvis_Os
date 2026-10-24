@@ -260,10 +260,10 @@ async def test_silero_failure_falls_back_to_piper_and_is_reported():
     assert eng.silero.speaker == "eugene" and eng.silero.rate == 1.2
 
 
-def test_old_cloud_or_piper_choice_becomes_a_silero_voice(core):
+def test_old_cloud_or_piper_choice_becomes_a_local_voice(core):
     from jarvis.voice.tts import VOICES
-    assert all(v["id"].startswith("silero:") for v in VOICES)
-    assert core.director.speech.engine.voice_id.startswith("silero:")
+    assert all(v["id"].split(":")[0] in ("supertonic", "silero") for v in VOICES)
+    assert core.director.speech.engine.voice_id.startswith("silero:")       # Supertonic is not installed in tests
 
 
 async def test_streamed_voice_chunks_are_played_in_order(core):

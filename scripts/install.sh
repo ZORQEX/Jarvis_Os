@@ -50,6 +50,18 @@ fi
 [[ -s "$SILERO/models/v3_de.pt" ]] || curl -fsSL -o "$SILERO/models/v3_de.pt" "https://models.silero.ai/models/tts/de/v3_de.pt"
 [[ -s "$SILERO/models/v4_ua.pt" ]] || curl -fsSL -o "$SILERO/models/v4_ua.pt" "https://models.silero.ai/models/tts/ua/v4_ua.pt"
 
+# The main voice: Supertonic 3 (Supertone; model OpenRAIL-M, code MIT) — one voice for every language JARVIS speaks,
+# ~99M parameters, ONNX on the CPU, own virtualenv, separate process (jarvis/voice/supertonic_worker.py). ~390 MB.
+SUPERTONIC="$HOME/.local/share/jarvis/supertonic"
+if [[ ! -x "$SUPERTONIC/.venv/bin/python" ]]; then
+  mkdir -p "$SUPERTONIC" && (cd "$SUPERTONIC" && uv venv -q --python 3.12 .venv \
+    && uv pip install -q --python .venv/bin/python "supertonic==1.3.1" "num2words==0.5.14")
+fi
+if [[ ! -s "$SUPERTONIC/models/onnx/vector_estimator.onnx" ]]; then
+  SUPERTONIC_CACHE_DIR="$SUPERTONIC/models" "$SUPERTONIC/.venv/bin/python" -c \
+    "from supertonic import TTS; TTS(model='supertonic-3', auto_download=True)"
+fi
+
 # English (British/American), Spanish, French, Italian, Portuguese voices: Kokoro-82M (Apache-2.0), int8 ONNX, own
 # virtualenv, separate process (jarvis/voice/kokoro_worker.py). ~120 MB of models.
 KOKORO="$HOME/.local/share/jarvis/kokoro"

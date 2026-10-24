@@ -200,7 +200,10 @@ class SpeechStream:
                 except Exception as e:   # noqa: BLE001 — speech failure must never hide the text answer
                     self.mgr.bus.publish("speech.error", {"error": str(e)[:200]}, self.task_id)
                     continue
-                if getattr(eng, "silero", None) and getattr(eng, "last_engine", "") == "piper" and not self.fallback_told:
+                fell = getattr(eng, "fell_back", None)
+                if fell is None:
+                    fell = bool(getattr(eng, "silero", None)) and getattr(eng, "last_engine", "") == "piper"
+                if fell and not self.fallback_told:
                     self.fallback_told = True      # the chosen voice did not speak: say so, never hide it
                     self.mgr.bus.publish("speech.fallback", {"voice": getattr(eng, "voice_id", ""),
                                                              "reason": getattr(eng, "last_fallback", "") or ""},

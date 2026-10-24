@@ -271,8 +271,20 @@ class Server:
         d = self.core.director
         audio = self._voice_audio(data)
         t0 = time.time()
-        text = await d.stt.transcribe(audio)
+        text = await self._transcribe(audio, data)
         return await self._wake_turn(text, data, len(audio), t0, time.time())
+
+    async def _transcribe(self, audio: bytes, data: dict) -> str:
+        """Waiting for «Джарвис» (not a follow-up, not cutting in): the second recogniser runs only for a phrase that
+        has something like the name in it."""
+        stt = self.core.director.stt
+        if data.get("wake") and not data.get("barge") and time.time() >= self._wake_until \
+                and not getattr(self, "_fragment", None):
+            try:
+                return await stt.transcribe(audio, wake=True)
+            except TypeError:                     # a recogniser without the option
+                pass
+        return await stt.transcribe(audio)
 
     async def _wake_turn(self, text: str, data: dict, nbytes: int, stt_start: float, stt_end: float) -> dict:
         text = self._wake_text(text, data)
@@ -315,7 +327,7 @@ class Server:
         commits it at once (saves the rest of the 1.3 s wait); a cut-off phrase («Отправь маме в…») keeps waiting."""
         audio = self._voice_audio(data)
         t0 = time.time()
-        text = await self.core.director.stt.transcribe(audio)
+        text = await self._transcribe(audio, data)
         frag = getattr(self, "_fragment", None)
         joined = (frag[0] + " " + text) if frag and time.time() - frag[1] < FRAGMENT_TTL_S else text
         pid = pysecrets.token_hex(8)
@@ -571,10 +583,13 @@ class Server:
         from .voice.tts import EN_VOICES, VOICES
         eng = self.core.director.speech.engine if self.core.director.speech else None
         ok = bool(getattr(eng, "silero", None) and eng.silero.available())
+        st_ok = bool(getattr(eng, "supertonic", None) and eng.supertonic.available())
         en_ok = bool(getattr(eng, "kokoro", None) and eng.kokoro.available())
         stt = getattr(self.core.director, "stt", None)
         langs = eng.languages() if hasattr(eng, "languages") else ["ru"]
-        return {"voices": [{**v, "available": ok} for v in VOICES], "current": getattr(eng, "voice_id", None),
+        return {"voices": [{**v, "available": st_ok if v.get("engine") == "supertonic" else ok} for v in VOICES],
+                "current": getattr(eng, "voice_id", None), "supertonic_installed": st_ok,
+                "all_languages": bool(st_ok and str(getattr(eng, "voice_id", "")).startswith("supertonic:")),
                 "en_voices": [{**v, "available": en_ok} for v in EN_VOICES],
                 "en_current": (getattr(eng, "en", None) or {}).get("id"), "en_installed": en_ok,
                 "languages": [{"id": x, "name": NAMES.get(x, x)} for x in langs],
@@ -675,14 +690,18 @@ class Server:
             elif typ == "voice.set":
                 from .voice.tts import voice_info
                 eng = d.speech.engine if d.speech else None
-                if not (hasattr(eng, "set_voice") and eng.silero.available()):
-                    raise ValueError("Голос Silero не установлен — запустите scripts/install.sh")
                 v = voice_info(str(data.get("voice")))
+                st = getattr(eng, "supertonic", None)
+                installed = (st and st.available()) if v.get("engine") == "supertonic" else \
+                    (hasattr(eng, "silero") and eng.silero.available())
+                if not (hasattr(eng, "set_voice") and installed):
+                    raise ValueError("Этот голос не установлен — запустите scripts/install.sh")
                 rate = min(1.4, max(0.7, float(data.get("rate", self.core.db.get_kv("tts_rate") or 1.0))))
                 await eng.set_voice(v["id"], rate)
                 self.core.db.set_kv("tts_voice", v["id"])
                 self.core.db.set_kv("tts_rate", rate)
                 self.core.audit.write("voice.selected", voice=v["id"], rate=rate)
+                spawn(eng.prewarm(), "voice-prewarm")         # the next answer does not wait for the voice to load
                 res = self._voices()
             elif typ == "voice.preview":
                 tid = "preview_" + pysecrets.token_hex(4)

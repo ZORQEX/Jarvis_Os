@@ -12,7 +12,7 @@ words — done, no extra cost. English speech gives Latin text («The Wather in 
 tomorrow»). If Parakeet also writes Cyrillic, the phrase was Russian after all and GigaAM's text is kept.
 
 Protocol (one JSON object per line):
-  stdin  {"id": "...", "path": "/tmp/x.wav", "mode": "auto"|"ru"}   16 kHz mono 16-bit WAV, deleted by JARVIS afterwards
+  stdin  {"id": "...", "path": "/tmp/x.wav", "mode": "auto"|"ru"|"wake"}   16 kHz mono 16-bit WAV, deleted afterwards
          {"id": "...", "vocab": ["телеграм", "тимур", ...]}       extra known Russian words (names, brands)
   stdout {"id": "...", "text": "...", "model": "gigaam"|"parakeet", "ms": 123}   or {"id": "...", "error": "..."}
 """
@@ -41,11 +41,12 @@ def _load_lexicon_module():
 
 
 _lex = _load_lexicon_module()
-Lexicon, prefer_second = _lex.Lexicon, _lex.prefer_second
+Lexicon, prefer_second, wake_like = _lex.Lexicon, _lex.prefer_second, _lex.wake_like
 
 MODEL = os.environ.get("JARVIS_STT_MODEL", "gigaam-v3-e2e-rnnt")
 MULTI = os.environ.get("JARVIS_STT_MULTI", "nemo-parakeet-tdt-0.6b-v3")
 LEXICON = os.environ.get("JARVIS_STT_LEXICON", "")
+THREADS = int(os.environ.get("JARVIS_STT_THREADS", "4"))
 
 
 
@@ -61,12 +62,24 @@ def load_wav(path: str) -> np.ndarray:
     return a
 
 
+def session_options():
+    """4 threads that sleep when idle. ONNX Runtime's default (a thread per core, spinning while waiting) was 2.4× slower
+    on this laptop's mixed P/E cores and burnt 4× the CPU: GigaAM 709 → 293 ms and 7.9 → 1.9 CPU-seconds per phrase,
+    Parakeet 975 → 511 ms (measured 2026-10-24, i5-1235U)."""
+    import onnxruntime as ort
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = THREADS
+    so.inter_op_num_threads = 1
+    so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    return so
+
+
 def load(name: str):
     # int8: same transcripts as the full model on our test set, a third of the memory, slightly faster (measured).
     try:
-        return onnx_asr.load_model(name, quantization="int8")
+        return onnx_asr.load_model(name, quantization="int8", sess_options=session_options())
     except Exception:   # noqa: BLE001
-        return onnx_asr.load_model(name)
+        return onnx_asr.load_model(name, sess_options=session_options())
 
 
 def warm(model) -> None:
@@ -121,9 +134,14 @@ def main() -> None:
             audio = load_wav(req["path"])
             text = (model.recognize(audio) if len(audio) > 1600 else "") or ""
             used = "gigaam"
-            if multi and req.get("mode", "auto") != "ru" and text.strip() and not lex.russian(text):
+            mode = req.get("mode", "auto")
+            # Re-hear with the multilingual model when GigaAM's text is not Russian — or when GigaAM heard nothing in
+            # a real stretch of speech (French and German came back empty: «не расслышал»). Waiting for «Джарвис»,
+            # only a phrase with something like the name is worth the second model.
+            unclear = (not text.strip() and len(audio) > 12800) or (text.strip() and not lex.russian(text))
+            if multi and mode != "ru" and unclear and (mode != "wake" or wake_like(text)):
                 other = (multi.recognize(audio) or "").strip()
-                if prefer_second(other):
+                if prefer_second(other) or (other and not text.strip()):
                     text, used = other, "parakeet"
             print(json.dumps({"id": rid, "text": text.strip(), "model": used,
                               "ms": round((time.perf_counter() - t0) * 1000)}, ensure_ascii=False), flush=True)

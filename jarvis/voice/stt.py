@@ -83,7 +83,8 @@ class LocalSTT:
             async with self.lock:
                 await self._send({"vocab": new})
 
-    async def transcribe(self, wav: bytes) -> str:
+    async def transcribe(self, wav: bytes, wake: bool = False) -> str:
+        """`wake`: heard while waiting for «Джарвис» — the second model runs only for a phrase with the name."""
         if wav[:4] != b"RIFF":
             raise ValueError("локальное распознавание принимает только WAV")
         async with self.lock:
@@ -92,19 +93,19 @@ class LocalSTT:
                 with os.fdopen(fd, "wb") as f:
                     f.write(wav)
                 try:
-                    return await self._ask(path)
+                    return await self._ask(path, wake)
                 except WorkerDied:
                     await self.stop()             # crashed or killed while idle: one fresh start, same recording
-                    return await self._ask(path)
+                    return await self._ask(path, wake)
             finally:
                 try:
                     os.unlink(path)
                 except OSError:
                     pass
 
-    async def _ask(self, path: str) -> str:
+    async def _ask(self, path: str, wake: bool = False) -> str:
         await self.start()
-        r = await self._send({"path": path, "mode": self.mode})
+        r = await self._send({"path": path, "mode": "wake" if wake and self.mode != "ru" else self.mode})
         self.last_model = r.get("model") or "gigaam"
         return r.get("text") or ""
 

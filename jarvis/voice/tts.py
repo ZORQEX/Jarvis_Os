@@ -1,6 +1,10 @@
 """Text-to-speech: local only — nothing about speech leaves the computer and there is no quota.
 
-SileroTTS (main voice): Silero v5.2 Russian model, ~0.25 s per sentence on this laptop's CPU (measured), much more
+SupertonicTTS (main voice since 2026-10-24): Supertonic 3, one voice for every language JARVIS speaks (ru, en, uk, de,
+es, fr, it, pt …), measured more natural than the voices below (UTMOS 3.95 vs 2.98) at ~0.35 s of compute per second
+of speech; runs from ~/.local/share/jarvis/supertonic (jarvis/voice/supertonic_worker.py). The voices below are the
+fallback when it is not installed or fails, and remain selectable in Settings.
+SileroTTS (Russian voices): Silero v5.2 Russian model, ~0.25 s per sentence on this laptop's CPU (measured), much more
 natural than Piper. Runs as a separate process from its own virtualenv (~/.local/share/jarvis/silero) via
 jarvis/voice/silero_worker.py. Silero models: non-commercial licence (snakers4/silero-models).
 PiperTTS (emergency fallback only, voice «Денис»): used if the Silero process cannot start or fails.
@@ -25,6 +29,8 @@ from pathlib import Path
 PIPER_HOME = Path(os.path.expanduser("~/.local/share/jarvis/piper"))
 SILERO_HOME = Path(os.path.expanduser("~/.local/share/jarvis/silero"))
 KOKORO_HOME = Path(os.path.expanduser("~/.local/share/jarvis/kokoro"))
+SUPERTONIC_HOME = Path(os.path.expanduser("~/.local/share/jarvis/supertonic"))
+SUPERTONIC_LANGS = ["ru", "en", "uk", "de", "es", "fr", "it", "pt"]      # the ones jarvis/voice/lang.py tells apart
 SILERO_MODEL = "v5_2_ru.pt"
 SILERO_LANGS = {"ru": "v5_2_ru.pt", "de": "v3_de.pt", "uk": "v4_ua.pt"}
 # JARVIS's own short phrases, in the language the person spoke. Short on purpose: say less, do more.
@@ -46,15 +52,30 @@ def phrase(table: dict, lang: str) -> str:
     v = table.get(lang) or table["ru"]
     return random.choice(v) if isinstance(v, list) else v
 
-# The voices offered in Settings → Голос: the five speakers of the Silero Russian model.
+# The voices offered in Settings → Голос. Supertonic: the ten voices of the model, each speaking every language; the
+# score is the measured naturalness (UTMOS, 1–5, mean of 8 phrases in 6 languages, 2026-10-24). Silero: the five
+# speakers of its Russian model (other languages then go to Kokoro / Silero's German and Ukrainian voices).
+_ST_SCORE = {"M4": 3.95, "M5": 3.74, "M2": 3.73, "M1": 3.71, "M3": 3.57,
+             "F1": 3.99, "F5": 3.94, "F3": 3.76, "F2": 3.71, "F4": 3.66}
 VOICES: list[dict] = [
-    {"id": "silero:aidar", "speaker": "aidar", "name": "Айдар", "gender": "м", "desc": "Спокойный, уверенный"},
-    {"id": "silero:eugene", "speaker": "eugene", "name": "Евгений", "gender": "м", "desc": "Мягкий, разговорный"},
-    {"id": "silero:xenia", "speaker": "xenia", "name": "Ксения", "gender": "ж", "desc": "Чистый, дружелюбный"},
-    {"id": "silero:kseniya", "speaker": "kseniya", "name": "Ксения (вторая)", "gender": "ж", "desc": "Ниже и строже"},
-    {"id": "silero:baya", "speaker": "baya", "name": "Бая", "gender": "ж", "desc": "Звонкий, живой"},
+    {"id": f"supertonic:{k}", "engine": "supertonic", "speaker": k, "gender": "м" if k[0] == "M" else "ж",
+     "name": ("Мужской " if k[0] == "M" else "Женский ") + k[1], "score": s,
+     "desc": "Все языки · естественность " + f"{s:.2f}".replace(".", ",")}
+    for k, s in _ST_SCORE.items()
+] + [
+    {"id": "silero:aidar", "engine": "silero", "speaker": "aidar", "name": "Айдар", "gender": "м",
+     "desc": "Только русский · спокойный, уверенный"},
+    {"id": "silero:eugene", "engine": "silero", "speaker": "eugene", "name": "Евгений", "gender": "м",
+     "desc": "Только русский · мягкий, разговорный"},
+    {"id": "silero:xenia", "engine": "silero", "speaker": "xenia", "name": "Ксения", "gender": "ж",
+     "desc": "Только русский · чистый, дружелюбный"},
+    {"id": "silero:kseniya", "engine": "silero", "speaker": "kseniya", "name": "Ксения (вторая)", "gender": "ж",
+     "desc": "Только русский · ниже и строже"},
+    {"id": "silero:baya", "engine": "silero", "speaker": "baya", "name": "Бая", "gender": "ж",
+     "desc": "Только русский · звонкий, живой"},
 ]
-DEFAULT_VOICE = "silero:aidar"
+DEFAULT_VOICE = "supertonic:M4"
+SILERO_DEFAULT = {"м": "aidar", "ж": "xenia"}       # the Russian fallback voice for a Supertonic voice
 PREVIEW = "Привет! Я Джарвис. Так я буду звучать, когда отвечаю. Что сделать?"
 PREVIEW_EN = "Hello, I'm Jarvis. This is how I sound in English. What shall I do?"
 
@@ -218,12 +239,14 @@ class SileroTTS:
         self.speaker, self.rate = speaker, rate      # per request: no restart needed
 
 
-class KokoroTTS:
-    """English (and es / fr / it / pt) voice: a Kokoro process from its own virtualenv, one phrase at a time."""
-    name = "kokoro"
-    worker = Path(__file__).with_name("kokoro_worker.py")
+class WorkerTTS:
+    """A voice in its own process and virtualenv, one phrase at a time over JSON lines, short phrases cached."""
+    name = "worker"
+    title = "Голос"
+    worker: Path
+    start_timeout = 90
 
-    def __init__(self, home: Path = KOKORO_HOME):
+    def __init__(self, home: Path):
         self.home = home
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
@@ -234,56 +257,54 @@ class KokoroTTS:
     def python(self) -> Path:
         return self.home / ".venv" / "bin" / "python"
 
-    def available(self) -> bool:
-        return self.python.exists() and (self.home / "models" / "kokoro-v1.0.int8.onnx").exists() \
-            and (self.home / "models" / "voices-v1.0.bin").exists()
+    def args(self) -> list[str]:
+        return [str(self.home)]
 
     async def start(self) -> None:
         if self.proc and self.proc.returncode is None:
             return
         env = {k: v for k, v in os.environ.items() if not any(x in k.upper() for x in ("KEY", "TOKEN", "SECRET"))}
         self.proc = await asyncio.create_subprocess_exec(
-            str(self.python), "-I", str(self.worker), str(self.home), stdin=asyncio.subprocess.PIPE,
+            str(self.python), "-I", str(self.worker), *self.args(), stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True,
             limit=64 << 20)
-        line = await asyncio.wait_for(self.proc.stdout.readline(), 90)
+        line = await asyncio.wait_for(self.proc.stdout.readline(), self.start_timeout)
         if not line or not json.loads(line).get("ready"):
             self.proc = None
-            raise RuntimeError("Kokoro не запустился")
+            raise RuntimeError(f"{self.title} не запустился")
 
-    async def synth(self, text: str, voice: str = "bm_george", lang: str = "en-gb", rate: float = 1.0) -> bytes:
-        text = clean_for_speech(text, lang[:2]).replace("\n", " ")
+    async def _synth(self, text: str, lang: str, req: dict) -> bytes:
+        text = clean_for_speech(text, lang).replace("\n", " ")
         if not text:
             return b""
-        key = (text, voice, lang, round(rate, 2))
+        key = (text, json.dumps(req, sort_keys=True))
         if key in self.cache:
             return self.cache[key]
         async with self.lock:
             try:
-                data = await self._ask(key)
+                data = await self._ask({**req, "text": text})
             except WorkerDied:
                 await self.stop()
-                data = await self._ask(key)
+                data = await self._ask({**req, "text": text})
             if len(text) < 80:
                 if len(self.cache) >= CACHE_MAX:
                     self.cache.pop(next(iter(self.cache)))
                 self.cache[key] = data
             return data
 
-    async def _ask(self, key: tuple) -> bytes:
+    async def _ask(self, req: dict) -> bytes:
         await self.start()
         self._n += 1
-        rid = f"k{self._n}"
-        req = {"id": rid, "text": key[0], "voice": key[1], "lang": key[2], "rate": key[3]}
+        rid = f"w{self._n}"
         try:
-            self.proc.stdin.write((json.dumps(req, ensure_ascii=False) + "\n").encode())
+            self.proc.stdin.write((json.dumps({**req, "id": rid}, ensure_ascii=False) + "\n").encode())
             await self.proc.stdin.drain()
         except (BrokenPipeError, ConnectionResetError) as e:
-            raise WorkerDied("Kokoro остановился") from e
+            raise WorkerDied(f"{self.title} остановился") from e
         while True:
             line = await asyncio.wait_for(self.proc.stdout.readline(), 60)
             if not line:
-                raise WorkerDied("Kokoro остановился")
+                raise WorkerDied(f"{self.title} остановился")
             try:
                 r = json.loads(line)
             except ValueError:
@@ -291,12 +312,52 @@ class KokoroTTS:
             if r.get("id") != rid:
                 continue
             if r.get("error"):
-                raise RuntimeError("Kokoro: " + r["error"])
+                raise RuntimeError(f"{self.title}: " + r["error"])
             return base64.b64decode(r["wav_b64"])
 
     async def stop(self) -> None:
         await _kill(self.proc)
         self.proc = None
+
+
+class KokoroTTS(WorkerTTS):
+    """English (and es / fr / it / pt) fallback voice: Kokoro-82M."""
+    name, title = "kokoro", "Kokoro"
+    worker = Path(__file__).with_name("kokoro_worker.py")
+
+    def __init__(self, home: Path = KOKORO_HOME):
+        super().__init__(home)
+
+    def available(self) -> bool:
+        return self.python.exists() and (self.home / "models" / "kokoro-v1.0.int8.onnx").exists() \
+            and (self.home / "models" / "voices-v1.0.bin").exists()
+
+    async def synth(self, text: str, voice: str = "bm_george", lang: str = "en-gb", rate: float = 1.0) -> bytes:
+        return await self._synth(text, lang[:2], {"voice": voice, "lang": lang, "rate": round(rate, 2)})
+
+
+class SupertonicTTS(WorkerTTS):
+    """The main voice: Supertonic 3, the same voice in every language."""
+    name, title = "supertonic", "Supertonic"
+    worker = Path(__file__).with_name("supertonic_worker.py")
+    start_timeout = 120
+
+    def __init__(self, home: Path = SUPERTONIC_HOME):
+        super().__init__(home)
+
+    @property
+    def models(self) -> Path:
+        return self.home / "models"
+
+    def args(self) -> list[str]:
+        return [str(self.models)]
+
+    def available(self) -> bool:
+        return self.python.exists() and (self.models / "onnx" / "vector_estimator.onnx").exists() \
+            and (self.models / "voice_styles" / "M4.json").exists()
+
+    async def synth(self, text: str, voice: str = "M4", lang: str = "ru", rate: float = 1.0) -> bytes:
+        return await self._synth(text, lang, {"voice": voice, "lang": lang, "rate": round(rate, 2)})
 
 
 class PiperTTS:
@@ -380,21 +441,25 @@ class PiperTTS:
 
 
 class VoiceEngine:
-    """What SpeechManager talks to. Russian: the chosen Silero voice (Piper «Денис» only if Silero fails, reported).
-    Each sentence in another language goes to that language's voice: English / es / fr / it / pt — Kokoro,
-    German / Ukrainian — Silero. A language with no voice installed is read by the Russian voice (as before)."""
+    """What SpeechManager talks to. A Supertonic voice speaks every language itself. With a Silero voice (or when
+    Supertonic is not installed or fails — reported, never hidden) each sentence goes to its language's voice: Russian
+    — Silero (Piper «Денис» if Silero fails), English / es / fr / it / pt — Kokoro, German / Ukrainian — Silero."""
     multilingual = True
 
     def __init__(self, silero: SileroTTS, piper: PiperTTS | None = None, voice_id: str = DEFAULT_VOICE,
-                 rate: float = 1.0, kokoro: KokoroTTS | None = None, en_voice_id: str | None = None):
-        self.silero, self.piper, self.kokoro = silero, piper, kokoro
-        v = voice_info(voice_id)
-        self.voice_id, self.rate = v["id"], rate
-        self.en = en_voice(en_voice_id, v["gender"])
-        silero.speaker, silero.rate = v["speaker"], rate
-        self.last_engine = "silero"
+                 rate: float = 1.0, kokoro: KokoroTTS | None = None, en_voice_id: str | None = None,
+                 supertonic: SupertonicTTS | None = None):
+        self.silero, self.piper, self.kokoro, self.supertonic = silero, piper, kokoro, supertonic
+        self.voice, self.rate = voice_info(voice_id), rate
+        self.en = en_voice(en_voice_id, self.voice["gender"])
+        silero.speaker, silero.rate = self._silero_speaker(), rate
+        self.last_engine = "supertonic" if self._st_on() else "silero"
         self.last_fallback: str | None = None
         self.cache = silero.cache
+
+    @property
+    def voice_id(self) -> str:
+        return self.voice["id"]
 
     @property
     def name(self) -> str:
@@ -402,10 +467,23 @@ class VoiceEngine:
 
     @property
     def gender(self) -> str:
-        return voice_info(self.voice_id)["gender"]
+        return self.voice["gender"]
+
+    @property
+    def fell_back(self) -> bool:
+        """The chosen voice did not speak the last phrase (another one did): the window says so."""
+        return self.last_fallback is not None
+
+    def _st_on(self) -> bool:
+        return self.voice.get("engine") == "supertonic" and bool(self.supertonic and self.supertonic.available())
+
+    def _silero_speaker(self) -> str:
+        return self.voice["speaker"] if self.voice.get("engine") == "silero" else SILERO_DEFAULT[self.voice["gender"]]
 
     def languages(self) -> list[str]:
         """Languages this computer can speak right now."""
+        if self._st_on():
+            return list(SUPERTONIC_LANGS)
         out = ["ru"]
         if self.kokoro and self.kokoro.available():
             out += ["en", "es", "fr", "it", "pt"]
@@ -413,10 +491,9 @@ class VoiceEngine:
         return out
 
     async def set_voice(self, voice_id: str, rate: float = 1.0) -> dict:
-        v = voice_info(voice_id)
-        self.voice_id, self.rate = v["id"], rate
-        await self.silero.configure(v["speaker"], rate)
-        return v
+        self.voice, self.rate = voice_info(voice_id), rate
+        await self.silero.configure(self._silero_speaker(), rate)
+        return self.voice
 
     def set_en_voice(self, vid: str) -> dict:
         self.en = en_voice(vid, self.gender)
@@ -426,20 +503,31 @@ class VoiceEngine:
         if self.silero.available():
             try:
                 out = await self.silero.synth(text)
-                self.last_engine, self.last_fallback = "silero", None
+                self.last_engine = "silero"
                 return out
             except Exception as e:   # noqa: BLE001
                 self.last_fallback = str(e)[:200]
                 if not (self.piper and self.piper.available()):
                     raise
         elif not (self.piper and self.piper.available()):
-            raise RuntimeError("Голос Silero не установлен (scripts/install.sh)")
+            raise RuntimeError("Голос не установлен (scripts/install.sh)")
         else:
-            self.last_fallback = "Silero не установлен"
+            self.last_fallback = self.last_fallback or "Silero не установлен"
         self.last_engine = "piper"
         return await self.piper.synth(text)
 
     async def _one(self, lang: str, text: str) -> bytes:
+        self.last_fallback = None
+        if self.voice.get("engine") == "supertonic":
+            if self._st_on():
+                try:
+                    out = await self.supertonic.synth(text, self.voice["speaker"], lang, self.rate)
+                    self.last_engine = "supertonic"
+                    return out
+                except Exception as e:   # noqa: BLE001 — speak with the other voices, and say so
+                    self.last_fallback = str(e)[:200]
+            else:
+                self.last_fallback = "Supertonic не установлен"
         if lang in ("en", *KOKORO_LANGS) and self.kokoro and self.kokoro.available():
             voice, kl = (self.en["id"], self.en["lang"]) if lang == "en" else KOKORO_LANGS[lang][self.gender]
             self.last_engine = "kokoro"
@@ -463,6 +551,10 @@ class VoiceEngine:
 
     async def preview(self, voice_id: str, text: str = PREVIEW) -> bytes:
         v = voice_info(voice_id)
+        if v.get("engine") == "supertonic":
+            if not (self.supertonic and self.supertonic.available()):
+                raise RuntimeError("Голос Supertonic не установлен (scripts/install.sh)")
+            return await self.supertonic.synth(text, v["speaker"], "ru", self.rate)
         return await self.silero.synth(text, speaker=v["speaker"], rate=self.rate)
 
     async def preview_en(self, vid: str) -> bytes:
@@ -472,6 +564,14 @@ class VoiceEngine:
         return await self.kokoro.synth(PREVIEW_EN, v["id"], v["lang"], self.rate)
 
     async def prewarm(self) -> None:
+        """Only the chosen voice is started (the fallback voices start on their first phrase: ~1 GB of memory less)."""
+        if self._st_on():
+            await self.supertonic.start()
+            for a in CANNED:
+                await self.supertonic.synth(a, self.voice["speaker"], "ru", self.rate)
+            for a in CANNED_EN:
+                await self.supertonic.synth(a, self.voice["speaker"], "en", self.rate)
+            return
         if self.silero.available():
             await self.silero.prewarm()
         elif self.piper and self.piper.available():
@@ -483,10 +583,9 @@ class VoiceEngine:
 
     async def stop(self) -> None:
         await self.silero.stop()
-        if self.piper:
-            await self.piper.stop()
-        if self.kokoro:
-            await self.kokoro.stop()
+        for e in (self.piper, self.kokoro, self.supertonic):
+            if e:
+                await e.stop()
 
 
 def join_wavs(pieces: list[bytes]) -> bytes:

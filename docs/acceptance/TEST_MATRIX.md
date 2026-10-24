@@ -281,3 +281,19 @@ Found in the real JARVIS's records (voice_turns, audit.jsonl) of the same day.
 | Companion started after the main window opened its mic kept listening too | FIXED: `overlay.state.window_listening`; a closed window frees the mic | test_companion_knows_the_main_window_has_the_microphone |
 | «Флора» (synthetic demo project) | REMOVED at the user's request: package, fixtures, workspace, tools, planner step, openpyxl | full suite green |
 
+## One natural voice for every language; recognition that does not burn the CPU (2026-10-24)
+
+Measured on this laptop (i5-1235U, 23 GB, no GPU); samples and scripts in the session scratchpad.
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Candidates for one local voice in all languages incl. Russian | RESEARCHED | Supertonic 3 (99M, ONNX, 31 languages), Qwen3-TTS 0.6B (x86 CPU real-time unconfirmed), Chatterbox Multilingual (impractical on CPU), Kokoro (no Russian) |
+| Naturalness (UTMOS, 8 phrases × 6 languages) | VERIFIED LOCAL | Supertonic M4 3.95, F1 3.99 vs Silero+Kokoro 2.98 (ru 3.94 vs 2.98, uk 4.01 vs 1.82, en 4.49 vs 4.12) |
+| Intelligibility (spoken → recognised back) | VERIFIED LOCAL | M4: ru/en/de/es word for word; brand names in a Russian sentence read correctly without transliteration |
+| Speed | VERIFIED LOCAL | 0.85 s for 2.45 s of speech, 2 threads; first sound of a spoken answer 3.45 s after the phrase (AI 2.6 s + voice 0.47 s) on the dev core |
+| Supertonic is the voice; Silero/Kokoro fallback, reported; one-time switch to M4 | VERIFIED LOCAL | test_supertonic.py (7 incl. the real model); real core: `tts_voice=supertonic:M4`, voice memory 518 MB vs 1035 MB |
+| Recognition CPU (ONNX: 4 threads, no spinning) | VERIFIED LOCAL | GigaAM 709 → 293 ms and 7.9 → 1.9 CPU-s per phrase; Parakeet 975 → 511 ms, 10.3 → 2.7 CPU-s |
+| French / German speech came back empty («не расслышал») | FIXED → VERIFIED LOCAL | GigaAM empty on real speech → Parakeet: «C'est fait, j'ai ouvert le navigateur…», «Fertig. Ich habe…» |
+| Waiting for «Джарвис»: the second recogniser ran on room noise | FIXED | only for a phrase with a wake-like word (test_wake_like_words_only_run_the_second_recogniser) |
+| «Джарвис— …» (dash after the name) dropped by the companion | FIXED → VERIFIED LIVE (recorded voice) | test_name_followed_by_a_dash_is_addressed; three tasks in one phrase done in order |
+

@@ -26,9 +26,11 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   `jarvis/overlay.py` (Hyprland socket). Wake listening drops unaddressed speech before any turn or log.
 - Skills: `jarvis/skills.py`, folder `~/.local/share/jarvis-skills` (config `skills_dir`); limits are 0 = none.
   A manifest's `say` phrases run the skill straight from the director (no AI); `open_result` opens the output file.
-- Voice: STT worker = GigaAM, then Parakeet only for phrases that are not Russian (`voice/lexicon.py`); TTS = Silero
-  (ru/de/uk) + Kokoro (en/es/fr/it/pt), one voice per sentence (`voice/lang.py`). Each runs in its own venv under
-  `~/.local/share/jarvis/` (install.sh). Browser VAD is `web/js/core/vad.js` (unit-tested; clicks ≠ voice);
+- Voice: STT worker = GigaAM, then Parakeet only for phrases that are not Russian or came back empty (`voice/lexicon.py`;
+  waiting for «Джарвис» only if a wake-like word was heard). TTS = Supertonic 3 (`supertonic_worker.py`, one voice for
+  every language, default M4); Silero (ru/de/uk) + Kokoro (en/es/fr/it/pt) are the fallback and start only when used.
+  Numbers/symbols → words: `voice/textnorm.py` (loaded by path in the workers). Each runs in its own venv under
+  `~/.local/share/jarvis/` (install.sh). ONNX sessions: few threads, no spinning (4–6× less CPU on this laptop). Browser VAD is `web/js/core/vad.js` (unit-tested; clicks ≠ voice);
   barge-in = `voice.barge` (stops speech only, never the work). `tests/ui/voice-mic.mjs` feeds a WAV as the mic.
 - Several tasks in one request: `router.split_tasks` (sequence words only: «первое / далее / потом / во-вторых», «1) 2)»;
   never inside quotes or a message body) → `Director._submit_batch` runs them one after another. «Стоп» / Esc / barge-in

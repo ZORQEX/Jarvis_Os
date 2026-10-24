@@ -189,14 +189,22 @@ async function renderVoicePicker() {
   if (!box) return;
   let d;
   try { d = await ctx.link.request("voice.voices"); } catch (e) { box.innerHTML = `<div class="faint">${esc(e.message)}</div>`; return; }
+  const best = new Set(["supertonic:M4", "supertonic:F1"]);      // the highest measured naturalness of each gender
   const card = (v) => `<div class="vcard ${v.id === d.current ? "on" : ""} ${v.available ? "" : "off"}">
-      <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"}</span></div>
+      <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"}</span>${best.has(v.id) ? `<span class="cpill ok">лучший</span>` : ""}</div>
       <div class="faint vd">${esc(v.desc)}</div>
       <div class="va"><button class="btn ghost" data-vprev="${esc(v.id)}" ${v.available ? "" : "disabled"}>▶ Послушать</button>
         ${v.id === d.current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`;
-  box.innerHTML = `${d.installed ? "" : `<div class="cerr" style="margin:6px 0">Голос Silero не установлен — запустите scripts/install.sh. Пока звучит запасной голос.</div>`}
-    <div class="vgrid" style="margin-top:8px">${d.voices.map(card).join("")}</div>
-    ${d.last_fallback ? `<div class="cerr" style="margin-top:6px">Последний ответ прозвучал запасным голосом: Silero не сработал (${esc(d.last_fallback)})</div>` : ""}
+  const st = d.voices.filter((v) => v.engine === "supertonic"), ru = d.voices.filter((v) => v.engine !== "supertonic");
+  box.innerHTML = `<h2 style="font-size:13.5px;margin:4px 0 0">Один голос для всех языков</h2>
+    <div class="faint" style="font-size:12.5px">Supertonic 3, на этом компьютере. Один и тот же голос говорит по-русски, по-английски,
+      по-украински, по-немецки и на других языках. Оценка — измеренная естественность звучания (из 5).</div>
+    ${d.supertonic_installed ? "" : `<div class="cerr" style="margin:6px 0">Supertonic не установлен — запустите scripts/install.sh.</div>`}
+    <div class="vgrid" style="margin-top:8px">${st.map(card).join("")}</div>
+    <h2 style="font-size:13.5px;margin:16px 0 0">Только русский</h2>
+    ${d.installed ? "" : `<div class="cerr" style="margin:6px 0">Голос Silero не установлен — запустите scripts/install.sh.</div>`}
+    <div class="vgrid" style="margin-top:8px">${ru.map(card).join("")}</div>
+    ${d.last_fallback ? `<div class="cerr" style="margin-top:6px">Последний ответ прозвучал запасным голосом: выбранный не сработал (${esc(d.last_fallback)})</div>` : ""}
     <h2 style="font-size:13.5px;margin:16px 0 0">Кто отвечает голосом</h2>
     <div class="choices" role="radiogroup" aria-label="Модель для ответов голосом">
       <button class="choice" role="radio" aria-checked="${d.ai_model !== "quality"}" data-vai="fast"><b>Быстро</b>
@@ -206,21 +214,21 @@ async function renderVoicePicker() {
     </div>
     <div class="faint" style="font-size:12px;margin-top:4px">Написанные текстом запросы всегда обрабатывает ${esc(d.ai_models?.quality || "основная модель")}. Беседа общая — контекст не теряется.</div>
     <h2 style="font-size:13.5px;margin:16px 0 0">Языки</h2>
-    <div class="faint" style="font-size:12.5px">Говорите на любом из них — JARVIS ответит на том же языке и прочитает каждое предложение голосом
-      своего языка. Сейчас говорит: ${d.languages.map((x) => esc(x.name)).join(", ")}.</div>
+    <div class="faint" style="font-size:12.5px">Говорите на любом из них — JARVIS ответит на том же языке${d.all_languages ? " тем же голосом" : " и прочитает каждое предложение голосом своего языка"}.
+      Сейчас говорит: ${d.languages.map((x) => esc(x.name)).join(", ")}.</div>
     <div class="choices" role="radiogroup" aria-label="Распознавание речи">
       <button class="choice" role="radio" aria-checked="${d.stt_mode !== "ru"}" data-stt="auto" ${d.stt_multi ? "" : "disabled"}><b>Русский и другие языки</b>
         <span>${d.stt_multi ? "Русскую речь слышит GigaAM (~0,4 с); английскую и ещё 24 европейских языка — Parakeet (+~0,9 с). ~1,9 ГБ памяти." : "Модель Parakeet не скачана — scripts/install.sh"}</span></button>
       <button class="choice" role="radio" aria-checked="${d.stt_mode === "ru"}" data-stt="ru"><b>Только русский</b>
         <span>Только GigaAM: меньше памяти (~0,5 ГБ), фразы на других языках не распознаются.</span></button>
     </div>
-    <h2 style="font-size:13.5px;margin:14px 0 2px">Английский голос</h2>
+    ${d.all_languages ? "" : `<h2 style="font-size:13.5px;margin:14px 0 2px">Английский голос (для голосов «Только русский»)</h2>
     ${d.en_installed ? "" : `<div class="cerr" style="margin:6px 0">Kokoro не установлен — запустите scripts/install.sh. Пока английский читает русский голос.</div>`}
     <div class="vgrid" style="margin-top:8px">${d.en_voices.map((v) => `<div class="vcard ${v.id === d.en_current ? "on" : ""} ${v.available ? "" : "off"}">
       <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"}</span></div>
       <div class="faint vd">${esc(v.desc)}</div>
       <div class="va"><button class="btn ghost" data-vprev-en="${esc(v.id)}" ${v.available ? "" : "disabled"}>▶ Послушать</button>
-        ${v.id === d.en_current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset-en="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`).join("")}</div>`;
+        ${v.id === d.en_current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset-en="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`).join("")}</div>`}`;
   $$("[data-stt]", box).forEach((b) => b.addEventListener("click", async () => {
     try { await ctx.link.request("voice.stt_mode", { mode: b.dataset.stt }); renderVoicePicker(); } catch (er) { ctx.toast(er.message, "err"); }
   }));
