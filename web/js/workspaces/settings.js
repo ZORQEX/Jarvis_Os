@@ -41,11 +41,9 @@ function renderSettings() {
     </div>
     <div class="panel">
       <h2>Голос</h2>
-      <div class="muted" style="font-size:13.5px">Речь распознаётся и озвучивается на этом компьютере (GigaAM, Parakeet, Silero, Kokoro) — без интернета и лимитов;
+      <div class="muted" style="font-size:13.5px">Речь распознаётся и озвучивается на этом компьютере (GigaAM, Parakeet, Smart Turn, Supertonic; запасные — Silero, Kokoro) — без интернета и лимитов;
         в Claude уходит только текст вопроса, если на него нужен ответ ИИ. Микрофон слушает только когда включён (кнопка или разговор).</div>
       <h2 style="font-size:13.5px;margin:14px 0 2px">Голос JARVIS</h2>
-      <div class="faint" style="font-size:12.5px">Голоса Silero работают на этом компьютере: без интернета, без лимитов, фраза готова за ~0,25 с.
-        Модели Silero — для личного некоммерческого использования.</div>
       <div id="voicePicker" class="vpick"></div>
       <div class="field"><span style="font-size:13.5px">Скорость речи:</span>
         <input type="range" id="rateRange" min="0.8" max="1.3" step="0.05" style="flex:1;min-width:160px">
@@ -235,14 +233,15 @@ async function renderVoicePicker() {
   try { d = await ctx.link.request("voice.voices"); } catch (e) { box.innerHTML = `<div class="faint">${esc(e.message)}</div>`; return; }
   const best = new Set(["supertonic:M4", "supertonic:F1"]);      // the highest measured naturalness of each gender
   const card = (v) => `<div class="vcard ${v.id === d.current ? "on" : ""} ${v.available ? "" : "off"}">
-      <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"}</span>${best.has(v.id) ? `<span class="cpill ok">лучший</span>` : ""}</div>
-      <div class="faint vd">${esc(v.desc)}</div>
+      <div class="vh"><b>${esc(v.name)}</b><span class="faint">${v.gender === "ж" ? "женский" : "мужской"}</span></div>
+      <div class="faint vd">${esc(v.desc)}${best.has(v.id) ? ` · <b style="color:var(--ok)">лучший</b>` : ""}</div>
       <div class="va"><button class="btn ghost" data-vprev="${esc(v.id)}" ${v.available ? "" : "disabled"}>▶ Послушать</button>
         ${v.id === d.current ? `<span class="cpill ok">выбран</span>` : `<button class="btn" data-vset="${esc(v.id)}" ${v.available ? "" : "disabled"}>Выбрать</button>`}</div></div>`;
   const st = d.voices.filter((v) => v.engine === "supertonic"), ru = d.voices.filter((v) => v.engine !== "supertonic");
   box.innerHTML = `<h2 style="font-size:13.5px;margin:4px 0 0">Один голос для всех языков</h2>
     <div class="faint" style="font-size:12.5px">Supertonic 3, на этом компьютере. Один и тот же голос говорит по-русски, по-английски,
-      по-украински, по-немецки и на других языках. Оценка — измеренная естественность звучания (из 5).</div>
+      по-украински, по-немецки и на других языках. Оценка — измеренная естественность звучания (из 5). Голоса «Только русский» —
+      Silero (для личного некоммерческого использования); с ними английский читает Kokoro.</div>
     ${d.supertonic_installed ? "" : `<div class="cerr" style="margin:6px 0">Supertonic не установлен — запустите scripts/install.sh.</div>`}
     <div class="vgrid" style="margin-top:8px">${st.map(card).join("")}</div>
     <h2 style="font-size:13.5px;margin:16px 0 0">Только русский</h2>
