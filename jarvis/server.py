@@ -170,6 +170,9 @@ class Server:
 
     async def on_shutdown(self, app):
         """Close the windows' live connections first: otherwise aiohttp waits for them (measured: 15–35 s stop)."""
+        if self.core.director.fashion:
+            # A new core may already be starting (restart): this one must not bring its «Заказы» back meanwhile.
+            self.core.director.fashion.stopping = True
         for ws in list(self.sockets):
             await ws.close(code=WSCloseCode.GOING_AWAY, message=b"JARVIS restarting")
 

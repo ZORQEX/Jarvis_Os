@@ -77,3 +77,12 @@ async def test_websocket_flow(client, core):
             assert not m["ok"]
             break
     await ws.close()
+
+
+async def test_a_stopping_core_never_brings_the_orders_app_back(core):
+    """Restart: the old core takes seconds to stop while the new one starts «Заказы»; the old watchdog must stay still."""
+    class Orders:
+        stopping = False
+    core.director.fashion = Orders()
+    await Server(core).on_shutdown(None)
+    assert core.director.fashion.stopping
