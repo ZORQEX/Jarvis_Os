@@ -108,6 +108,8 @@ def voice_info(vid: str) -> dict:
 
 def clean_for_speech(text: str, lang: str = "ru") -> str:
     t = re.sub(r"```.*?```", " ", text, flags=re.S)
+    t = re.sub(r"\[([^\]\n]+)\]\(https?://[^)\s]+\)", r"\1", t)     # [текст](ссылка) → текст
+    t = re.sub(r"\s*\[\d{1,2}\]", "", t)                              # source numbers of a web answer: [1][2]
     t = re.sub(r"https?://\S+", " ", t)
     t = re.sub(r"[*_`#>|]+", "", t)
     t = re.sub(r"\[уточнить[^\]]*\]", "уточнить", t)

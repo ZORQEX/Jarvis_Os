@@ -296,3 +296,9 @@ async def test_coin_in_the_query_adds_its_live_price_as_source_0(core, searx, cl
     assert "[0] Bitcoin: 80" in g.calls[0]["user"]
     msg = core.director.messages(core.director.conversation_id())[-1]["text"]
     assert "[0] CoinGecko — https://www.coingecko.com/ru/coins/bitcoin" in msg
+
+
+def test_source_numbers_and_links_are_not_spoken():
+    from jarvis.voice.tts import clean_for_speech
+    out = clean_for_speech("Bitcoin стоит около 80 000 долларов [0][1], см. [CoinGecko](https://www.coingecko.com/x).")
+    assert "[" not in out and "coingecko.com" not in out and "CoinGecko" in out and "80 000" in out
