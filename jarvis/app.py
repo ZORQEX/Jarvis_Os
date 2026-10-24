@@ -129,6 +129,10 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     director.home = HomeAssistant(db, comms.store)
     for t in (HomeStatus(director.home), HomeControl(director.home), HomeSecure(director.home)):
         registry.tools[t.spec.id] = t
+    from .meeting import MeetingCancel, Meetings, MeetingStart, MeetingStop     # meeting notes
+    director.meetings = Meetings(config, db, bus, audit, director, manager)
+    for t in (MeetingStart(director.meetings), MeetingStop(director.meetings), MeetingCancel(director.meetings)):
+        registry.tools[t.spec.id] = t
     from .proactive import Proactive, Watch
     proactive = Proactive(db, bus, audit, director)          # battery, disk, memory, services, internet, watches
     registry.tools["watch"] = Watch(db)

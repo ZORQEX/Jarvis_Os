@@ -85,6 +85,7 @@ class Director:
         self.speech = None           # SpeechManager, set by the composition root
         self.stt = None              # LocalSTT (speech recognition on this computer)
         self.home = None             # HomeAssistant (tools/home.py), when the person connected it
+        self.meetings = None         # Meetings (meeting.py): a meeting being recorded for notes
         self.comms = None            # CommsAgent
         self.history = None          # ActionHistory (lasting actions only), set by the composition root
         self.github = None           # GitHub account for site publishing (publish.GitHub)
@@ -940,7 +941,8 @@ class Director:
             state = "IDLE"
         return {"state": state, "active_tasks": len(active), "pending_approvals": len(pending), "working": working,
                 "estop": self.policy.estop, "ai": self._ai_summary(),
-                "privacy": self.privacy_profile(), "access": "full" if self.policy.full_access else "standard"}
+                "privacy": self.privacy_profile(), "access": "full" if self.policy.full_access else "standard",
+                "meeting": self.meetings.state() if self.meetings else None}
 
     def _ai_summary(self) -> str:
         if not self.providers:

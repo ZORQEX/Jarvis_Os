@@ -202,6 +202,22 @@ def _caps_route(t: str, raw: str = "") -> Route | None:
     def tool(tid, args, why):
         return Route("tool", tid, args, why=why)
 
+    # meeting notes (meeting.py)
+    m = re.match(r"(?:запиши|записывай|начни запис\w*|включи запись|веди протокол|протоколируй)(?: мне)?(?: эту| нашу)? "
+                 r"(?:встреч\w*|совещани\w*|созвон\w*|звонок|разговор|переговоры)(?: (?:с|про|о|об|по) (.+))?$", t)
+    if m:
+        title = (raw.split(" с ", 1)[1].strip(" .!?") if m.group(1) and " с " in raw else m.group(1) or "")
+        return tool("meeting_start", {"title": ("Встреча с " + title) if title and " с " in t else title.capitalize()},
+                    "Заметки встречи")
+    if re.fullmatch(r"(?:останови|закончи|заверши|стоп|выключи|прекрати) (?:запись )?(?:встреч\w*|совещани\w*|"
+                    r"созвон\w*|протокол\w*)|(?:встреча|совещание|созвон) (?:закончил\w*|окончен\w*)|"
+                    r"(?:останови|закончи) запись(?: встречи)?", t):
+        return tool("meeting_stop", {}, "Заметки встречи")
+    if re.fullmatch(r"(?:отмени|удали|сотри) запись (?:встречи|совещания|созвона)|не записывай (?:встречу|это)", t):
+        return tool("meeting_cancel", {}, "Заметки встречи")
+    if re.fullmatch(r"(?:идет|ведется) (?:ли )?запись(?: встречи)?|ты (?:сейчас )?записываешь", t):
+        return tool("meeting_stop", {"action": "status"}, "Заметки встречи")
+
     # watches: «скажи, когда батарея будет ниже 30»
     from .proactive import parse_watch
     w = parse_watch(t, raw)

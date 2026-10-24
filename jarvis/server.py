@@ -196,6 +196,11 @@ class Server:
             await self.core.phone.stop()
         if self.core.proactive:
             await self.core.proactive.stop()
+        m = getattr(self.core.director, "meetings", None)
+        if m and m.active:                      # JARVIS stops mid-meeting: the audio stays in its folder, never lost
+            folder = m.active["folder"]
+            await m._end_recording()
+            self.core.audit.write("meeting.interrupted", folder=folder)
         for ws in list(self.sockets):
             await ws.close()
         self.core.audit.write("core.stop")

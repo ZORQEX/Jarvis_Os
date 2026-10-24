@@ -59,6 +59,12 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   only from the window). Only tasks it started answer back; high risk and CLICK_ONLY approvals stay on the computer.
   Tests use a fake Bot API (`tests/test_phone.py`) — never a real bot token.
 - Calendar (`jarvis/agenda.py`, `ics.py`): own events with reminders, read-only iCal subscriptions, in the briefing.
+- Proactive (`jarvis/proactive.py`): notices once a minute (battery, disk, memory, failed units, internet) + watches
+  (table watches, tool `watch`); readings are attributes so tests replace them — never wait for the real loop.
+- Smart home (`tools/home.py`): Home Assistant REST; home_status/home_control LOW, home_secure HIGH and CLICK_ONLY.
+  Router phrases only when connected (`ctx["home"]`). Tests use a fake HA (`tests/test_home.py`).
+- Meetings (`jarvis/meeting.py`): pw-record mic + sink monitor → GigaAM chunks cut at pauses → Claude summary only in
+  AUTHORIZED_CLOUD; no numpy in the core venv (pure-Python mix). Tests use a fake recorder script.
 - Memory (`jarvis/memory.py`, table `memory`): «запомни, что …» / «что ты обо мне помнишь» / «забудь, что …»;
   `memory_line` goes into the state line of every AI request; the AI may save lasting facts itself (memory_save).
 - Living speech: `router.simplify` strips fillers / «можешь» / infinitives so «Мне нужно открыть папку с колледжем»

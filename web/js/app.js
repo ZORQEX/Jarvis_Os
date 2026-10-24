@@ -181,6 +181,11 @@ function onEvent(ev) {
       bus.emit("reminders");
       break;
     }
+    case "meeting.state":
+      S.core.meeting = ev.meeting;
+      toast(ev.meeting ? `🔴 Записываю встречу «${ev.meeting.title}»` : "Запись встречи остановлена", ev.meeting ? "warn" : "", { ttl: 6000 });
+      renderPrivacy();
+      break;
     case "notice": toast(`🔔 ${ev.title}${ev.body ? ". " + ev.body : ""}`, ev.urgent ? "warn" : "", { ttl: ev.urgent ? 20000 : 10000 }); break;
     case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : "ok"); break;
     case "speech.stop": voice.stopSpeaking(); break;
@@ -612,7 +617,8 @@ function taskCard(t) {
 }
 
 function renderPrivacy() {
-  const mic = voice.listening ? `<b class="on">${voice.conversation ? "включён (разговор)" : "включён"}</b>` : voice.muted ? "<b>выключен</b>" : `<b>не используется</b>`;
+  const meet = S.core.meeting;
+  const mic = meet ? `<b class="on">запись встречи · ${meet.minutes} мин</b>` : voice.listening ? `<b class="on">${voice.conversation ? "включён (разговор)" : "включён"}</b>` : voice.muted ? "<b>выключен</b>" : `<b>не используется</b>`;
   const cloud = { AUTHORIZED_CLOUD: "по запросу", PRIVATE_LOCAL: "только с согласия", STRICT_OFFLINE: "выключено" }[S.core.privacy] || "—";
   $("#privacy").innerHTML = `
     <div class="line">${voice.muted ? ICON.micOff : ICON.mic} Микрофон ${mic}</div>
