@@ -45,7 +45,7 @@ await shot("01-home");
 
 await check("sidebar: every workspace opens", async () => {
   const ids = await J(() => [...document.querySelectorAll("#nav [data-nav]")].map((b) => b.dataset.nav));
-  assert(ids.length === 8, "expected 8 workspaces, got " + ids.length);
+  assert(ids.length === 9, "expected 9 workspaces, got " + ids.length);
   for (const id of ids) {
     await page.click(`#nav [data-nav="${id}"]`);
     await waitView(id);

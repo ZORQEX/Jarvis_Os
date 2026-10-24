@@ -26,6 +26,7 @@ def cfg(home):
     c.skills_dir = str(home / "skills")
     c.screenshot_dir = str(home / "shots")
     c.approval_ttl_s = 5
+    c.fashion_enabled = False            # the real orders app starts only in its own tests (test_fashion.py)
     with socket.socket() as sock:          # never collide with a running JARVIS
         sock.bind(("127.0.0.1", 0))
         c.port = sock.getsockname()[1]

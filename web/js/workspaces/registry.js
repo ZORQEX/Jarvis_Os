@@ -41,6 +41,13 @@ export const WORKSPACES = [
   { id: "files", title: "Файлы", icon: "folder", hotkey: "8", context: "Файлы", module: "files",
     tools: [{ id: "files.list", label: "Просмотр папок", needs: "core" }, { id: "files.search", label: "Поиск файлов", needs: "core" },
       { id: "files.open", label: "Открыть в приложении", needs: "core" }, { id: "files.ask", label: "Спросить JARVIS о файле", needs: "core" }] },
+  { id: "orders", title: "Заказы", icon: "box", hotkey: "9", context: "Заказы: фабрики, клиенты, предоплаты", module: "orders",
+    tools: [
+      { id: "orders.import", label: "Загрузить файл фабрики (Excel / PDF) — сохраняется после «Подтвердить»", needs: "core" },
+      { id: "orders.markup", label: "Наценки клиентов, предоплаты фабрике и клиентам, ваш взнос", needs: "core" },
+      { id: "orders.docs", label: "Excel и PDF для каждого клиента — только его позиции", needs: "core" },
+      { id: "orders.voice", label: "Голосом через JARVIS: «Джарвис, поставь IDS 35 процентов»", needs: "core" },
+    ] },
 ];
 
 /** Reachable from the palette and links, not shown in the sidebar list. */

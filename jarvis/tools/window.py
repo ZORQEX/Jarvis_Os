@@ -10,7 +10,7 @@ from pathlib import Path
 from .base import Risk, Tool, ToolInputError, ToolResult, ToolSpec, Verification
 
 VIEWS = {"home": "Главная", "chat": "Беседа", "tasks": "Задачи", "history": "История действий", "browser": "Браузер",
-         "telegram": "Telegram", "whatsapp": "WhatsApp", "mail": "Почта", "files": "Файлы",
+         "telegram": "Telegram", "whatsapp": "WhatsApp", "mail": "Почта", "files": "Файлы", "orders": "Заказы",
          "settings": "Настройки", "comms": "Сообщения: очередь и правила"}
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,7 +31,8 @@ class WindowShow(Tool):
             description=("Show a workspace of the JARVIS window to the user (opens the window if it is closed). Use it "
                          "instead of telling the user where to click: telegram / whatsapp / mail = connect that service "
                          "or see messages sent through JARVIS; tasks = task center; files; browser; settings; home; chat; "
-                         "history; comms = message queue, rules, address book."),
+                         "history; comms = message queue, rules, address book; orders = «Заказы» (fashion orders, factories, "
+                         "customers, documents)."),
             params={"type": "object", "required": ["view"], "properties": {
                 "view": {"type": "string", "enum": sorted(VIEWS)},
                 "connect": {"type": "boolean", "description": "telegram / whatsapp / mail: also start connecting the "

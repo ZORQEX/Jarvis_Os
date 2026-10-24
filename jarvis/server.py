@@ -147,6 +147,8 @@ class Server:
             spawn(self._prewarm_speech(), "speech-prewarm")
         self._fwd = asyncio.create_task(self._forward())
         spawn(self._check_providers(), "providers-check")
+        if self.core.director.fashion:
+            spawn(self.core.director.fashion.start(), "fashion-start")
 
     async def _prewarm_speech(self):
         try:
@@ -181,6 +183,8 @@ class Server:
         await self.core.scheduler.stop()
         if self.core.comms:
             await self.core.comms.stop()
+        if self.core.director.fashion:
+            await self.core.director.fashion.stop()
         for ws in list(self.sockets):
             await ws.close()
         self.core.audit.write("core.stop")
@@ -493,9 +497,12 @@ class Server:
                                   "pos": self.overlay.saved(), "wake": bool(self.core.db.get_kv("wake_listen", False))})
 
     async def index(self, req):
+        csp = CSP
+        if self.core.director.fashion:      # «Заказы» shows the orders app (its own loopback origin) inside the window
+            csp += f"; frame-src {self.core.director.fashion.url}"
         return web.FileResponse(WEB / "index.html", headers={
             "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": CSP})
+            "Content-Security-Policy": csp})
 
     async def static(self, req):
         p = (WEB / req.match_info["path"]).resolve()
@@ -753,6 +760,19 @@ class Server:
                 ph = data.get("phase")
                 res = await self.overlay.drag_start(data.get("ox", 32), data.get("oy", 32)) if ph == "start" \
                     else self.overlay.drag_move() if ph == "move" else await self.overlay.drag_end()
+            elif typ == "ui.view":                # the workspace the window shows («Заказы» → order phrases go there)
+                d.view = str(data.get("view") or "")[:24]
+                res = {"view": d.view}
+            elif typ in ("fashion.state", "fashion.start", "fashion.conversation"):     # «Заказы»
+                f = d.fashion
+                if f is None:
+                    res = {"installed": False, "enabled": False, "running": False}
+                else:
+                    if typ == "fashion.conversation":
+                        f.set_conversation(str(data.get("id") or ""))
+                    elif typ == "fashion.start":
+                        await f.start()
+                    res = await f.state()
             elif typ == "voice.presence":         # the window's mic is on/off: the desktop companion yields to it
                 if str(data.get("client", "window")) == "window":
                     self._mic[ws] = bool(data.get("listening"))
@@ -854,7 +874,7 @@ class Server:
                 pass
 
 
-QUIET_UI = {"voice.active"}
+QUIET_UI = {"voice.active", "ui.view", "fashion.state"}
 TURN_HOLD = 0.15     # Smart Turn this sure the person is not done: wait for the rest (the int8 model is jumpy near 0.5)
 TURN_VETO = 0.30     # …and below this no early answer after a short pause  # sent at every sound the always-on companion takes for speech: not worth an audit line
 FRAGMENT_TTL_S = 15.0

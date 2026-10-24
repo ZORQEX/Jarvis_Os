@@ -383,7 +383,7 @@ class SpeechManager:
         elif kind == "message" and ev["message"]["role"] == "assistant":
             m = ev["message"]
             self.mark(s.turn_id, "answer_done")
-            text = m["text"]
+            text = (m.get("meta") or {}).get("speech") or m["text"]       # a short spoken version, when given
             if (m.get("meta") or {}).get("error_kind") or text.startswith("⚠"):
                 text = "Не удалось получить ответ. Попробуйте ещё раз чуть позже." if not s.got_delta else None
             # Long text answers keep their formatting on screen; speech gets the start plus a hint.

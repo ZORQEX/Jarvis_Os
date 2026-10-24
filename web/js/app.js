@@ -20,6 +20,7 @@ import * as browserWs from "./workspaces/browser.js";
 import * as commWs from "./workspaces/communication.js";
 import * as filesWs from "./workspaces/files.js";
 import * as settingsWs from "./workspaces/settings.js";
+import * as ordersWs from "./workspaces/orders.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -51,7 +52,7 @@ const link = new Link({
     const was = S.connected;
     S.connected = ok;
     if (!ok && was) toast("Нет связи с ядром JARVIS — переподключаюсь…", "warn");
-    if (ok) loadComms();
+    if (ok) { loadComms(); link.request("ui.view", { view: S.view }).catch(() => {}); }
     bus.emit("link");
   },
 });
@@ -201,6 +202,10 @@ function onEvent(ev) {
     case "ui.navigate":
       nav(ev.view);
       break;
+    case "fashion.turn":                    // a request about orders, answered by the orders assistant
+      if (ev.show && S.view !== "orders") nav("orders");
+      viewFor("orders")?.turn(ev);
+      break;
     case "providers": S.providers = ev.providers; S.provider = ev.provider; bus.emit("providers");
       if (S.view === "settings" && !document.activeElement?.closest?.(".pcard")) settings.show(); break;
     case "task.decision": {
@@ -263,7 +268,7 @@ const ctx = {
 const settings = settingsWs.create({ ...ctx, onChange: () => { bus.emit("core"); bus.emit("voice"); renderPrivacy(); },
   onDevToggle: () => { turnCache.clear(); $("#thread").innerHTML = ""; } });
 views.settings = settings;
-const FACTORY = { home: homeWs.create, tasks: tasksWs.create, browser: browserWs.create, files: filesWs.create,
+const FACTORY = { home: homeWs.create, tasks: tasksWs.create, browser: browserWs.create, files: filesWs.create, orders: ordersWs.create,
   telegram: (c) => commWs.create(c, "telegram"), whatsapp: (c) => commWs.create(c, "whatsapp"), mail: (c) => commWs.create(c, "mail") };
 
 function viewFor(id) {
@@ -296,6 +301,7 @@ function nav(id, params = {}) {
   $$("[data-nav]", $("#sidebar")).forEach((b) => b.setAttribute("aria-selected", String(b.dataset.nav === id)));
   renderCrumb();
   bus.emit("workspace", id);
+  if (S.connected) link.request("ui.view", { view: id }).catch(() => {});   // «Заказы» open → order phrases go there
 }
 
 function openTask(id) { nav("tasks", { task: id }); }

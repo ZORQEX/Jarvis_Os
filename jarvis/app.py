@@ -78,6 +78,11 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     for t in (ImproveIssues(db), SelfImprove(manager, config), SelfImproveApply(config), MemorySave(db),
               MemoryList(db), MemoryForget(db)):
         registry.tools[t.spec.id] = t
+    from .fashion import FashionAsk, FashionAttach, FashionService   # «Заказы»: the fashion-orders app
+    fashion = FashionService(config, paths, db, audit)
+    if fashion.enabled():
+        for t in (FashionAsk(fashion), FashionAttach(fashion, config)):
+            registry.tools[t.spec.id] = t
     agency = Agency(manager, registry, config, db, bus, audit)
     director = Director(db=db, bus=bus, audit=audit, tasks=tasks, policy=policy, approvals=approvals,
                         gateway=gateway, ai=claude, scheduler=scheduler, config=config,
@@ -102,6 +107,7 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     engine = VoiceEngine(SileroTTS(), PiperTTS(config.piper_voice), chosen, float(db.get_kv("tts_rate") or 1.0),
                          kokoro=KokoroTTS(), en_voice_id=db.get_kv("tts_voice_en"), supertonic=supertonic)
     director.speech = SpeechManager(db, bus, engine)
+    director.fashion = fashion if fashion.enabled() else None
     from .voice.stt import LocalSTT
     director.stt = LocalSTT()           # speech recognition on this computer (GigaAM + Parakeet) — the only one
     comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)

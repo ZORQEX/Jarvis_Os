@@ -87,6 +87,8 @@ class Director:
         self.comms = None            # CommsAgent
         self.history = None          # ActionHistory (lasting actions only), set by the composition root
         self.github = None           # GitHub account for site publishing (publish.GitHub)
+        self.fashion = None          # «Заказы»: the fashion-orders app (fashion.FashionService)
+        self.view = ""               # the workspace the JARVIS window shows (reported by the window)
         self.hub = None              # CommsHub
         self.rt: dict[str, Runtime] = {}
         self.speech_owner: dict[str, str] = {}   # task id → the window that plays its speech (default: the main one)
@@ -191,6 +193,15 @@ class Director:
                 if self.speech and source == "voice" and route.args["op"] == "interrupt":
                     self.speech.say("notice-" + (turn or "x"), reply, turn)
             return ""
+        # About orders (a customer code, brand, season, factory money, or an answer to the orders assistant's pending
+        # proposal): the orders assistant handles the whole phrase, several steps included.
+        if not answer and self.fashion and source in ("voice", "text"):
+            claim = await self.fashion.claims(text)
+            kind = (claim or {}).get("claim")
+            if kind == "strong" or (kind == "weak" and (route is None or self.view == "orders")):
+                route = rt.Route("fashion", args={"why": claim.get("why", "")}, why=f"Заказы: {claim.get('why', '')}",
+                                 level=1)
+                return self._start_task(text, cid, route, source, turn, speak, client)
         # Several tasks in one request («первое… далее… потом…»): each becomes its own task, run one after another.
         parts = None if answer or source not in ("voice", "text") else rt.split_tasks(text)
         if parts:
@@ -272,6 +283,35 @@ class Director:
             if route and route.kind == "control":
                 route = None                    # a part never stops the others: it goes to the conversation
             self._start_task(part, cid, route, source, None, speak, client, batch=batch)
+
+    async def _run_fashion(self, tid: str, cid: str, text: str, route: rt.Route) -> None:
+        """A request about orders → the orders assistant (same dialog as the «Заказы» workspace); JARVIS speaks its
+        short answer and, for a spoken request, shows the workspace so the figures and the «Подтвердить» card are seen."""
+        r = self.rt.get(tid)
+        voice = bool(r and r.voice)
+        loop = asyncio.get_running_loop()
+        ack = loop.call_later(1.5, self.speech.ack, tid) if voice and self.speech else None
+        try:
+            out = await self.fashion.ask(rt.strip_wake(text) or text, "voice" if voice else "text", raw=text)
+        except Exception as e:   # noqa: BLE001 — the app is down or failed: say so, do not pretend
+            self.audit.write("fashion.failed", task_id=tid, error=repr(e)[:200])
+            return self._finish(tid, cid, f"Приложение заказов не ответило: {e}. Ничего не изменено.", failed=True,
+                                meta={"route": "fashion", "level": 1})
+        finally:
+            if ack:
+                ack.cancel()
+        reply = str(out.get("reply") or "Готово.")
+        proposal = out.get("proposal") or {}
+        client = out.get("client") or {}
+        self.bus.publish("fashion.turn", {"conversation": self.fashion.conversation(), "navigate": client.get("navigate"),
+                                          "committed": proposal.get("status") == "committed", "show": voice}, tid)
+        if voice and self.view != "orders":
+            await self.execute(tid, cid, "window_show", {"view": "orders"}, "Показать заказы")
+        self._finish(tid, cid, reply, meta={"route": "fashion", "level": 1, "why": route.why,
+                                            "speech": out.get("speech") or None,
+                                            "fashion": {"proposal": proposal.get("id"), "status": proposal.get("status"),
+                                                        "question": bool(out.get("question"))}},
+                     failed=bool(out.get("error")))
 
     async def run_ui_tool(self, tool: str, args: dict) -> str:
         """A button in the UI asked for a tool directly (no text command)."""
@@ -356,6 +396,8 @@ class Director:
                     await self.comms.handle(self, tid, cid, text)
             elif route.kind == "connect":
                 await self._run_connect(tid, cid, route)
+            elif route.kind == "fashion":
+                await self._run_fashion(tid, cid, text, route)
             elif route.kind == "ui":
                 # «Перейди в задачи»: the window switches its workspace; nothing runs on the computer.
                 self.bus.publish("ui.navigate", {"view": route.args["view"]})

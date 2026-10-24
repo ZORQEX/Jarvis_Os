@@ -105,6 +105,10 @@ class Config:
     write_dir: str = "~/Documents/Jarvis"
     skills_dir: str = "~/.local/share/jarvis-skills"   # abilities JARVIS builds for itself (jarvis/skills.py)
     screenshot_dir: str = "~/Pictures/Jarvis"
+    # «Заказы»: the fashion-orders app (fashion/, jarvis/fashion.py) — started with the core when installed.
+    fashion_enabled: bool = True
+    fashion_port: int = 8797
+    fashion_claude_model: str = "sonnet"     # its assistant's model in Claude Code (the user's subscription)
     # Spoken/typed app names -> argv. Only these can be launched.
     apps: dict[str, list[str]] = field(default_factory=dict)
 
