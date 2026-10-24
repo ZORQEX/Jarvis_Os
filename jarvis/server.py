@@ -303,7 +303,6 @@ class Server:
     async def _voice_turn(self, data: dict) -> dict:
         """One spoken request: STT → Director (same path as typed text) → streamed speech."""
         d = self.core.director
-        local = d.stt
         self._voice_active(False, data)
         if data.get("wake"):
             return await self._voice_wake(data)
