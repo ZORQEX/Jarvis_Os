@@ -65,6 +65,11 @@ async def fake_app():
                                                "diff": [{"label": "IDS", "before": "100", "after": "135"}]}
                                   if proposed else None})
 
+    async def ai_rules(req):
+        body = await req.json()
+        seen.setdefault("rules", []).append(body["turn"])
+        return web.json_response({"reply": "У IDS 4 128,50 € к оплате.", "speech": "Коротко.", "proposal": None})
+
     async def commit(req):
         seen.setdefault("decided", []).append((req.match_info["pid"], req.match_info["what"]))
         return web.json_response({"ok": True, "messages": ["IDS: 35% для SS27 — изменено позиций: 3"]})
@@ -75,6 +80,7 @@ async def fake_app():
     app.router.add_get("/api/jarvis/ai", ai_spec)
     app.router.add_post("/api/jarvis/ai/tool", ai_tool)
     app.router.add_post("/api/jarvis/ai/finish", ai_finish)
+    app.router.add_post("/api/jarvis/ai/rules", ai_rules)
     app.router.add_post("/api/agent/proposals/{pid}/{what}", commit)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -154,12 +160,13 @@ async def test_no_rule_answer_means_jarvis_own_conversation_answers_with_the_mod
     assert "message.updated" in kinds and "fashion.turn" in kinds
 
 
-async def test_handoff_without_claude_says_so_and_closes_the_turn(core, orders, fake_app):
+async def test_handoff_without_claude_ends_with_the_module_rules_and_says_why(core, orders, fake_app):
+    """As the module did when its own AI failed («Ответила без ИИ»): its full rules answer, the reason is said."""
     tid = await core.director.submit("почему у IDS такая сумма", source="text")       # Claude not configured in tests
     t = await wait_done(core, tid)
-    assert t["state"] == "failed"
+    assert t["state"] == "completed" and fake_app["rules"] == [tid]
     msg = core.director.messages(core.director.conversation_id())[-1]["text"]
-    assert "ИИ сейчас недоступен" in msg and "Ничего не изменено" in msg
+    assert msg.startswith("⚠ ИИ сейчас недоступен") and "по правилам модуля заказов" in msg and "У IDS 4 128,50" in msg
     assert tid not in orders.turns
 
 
@@ -321,3 +328,16 @@ def test_a_copy_left_by_a_stopping_core_is_found_without_the_pidfile(tmp_path):
         for p in (copy, other):
             p.kill()
             p.wait()
+
+
+async def test_files_and_figures_the_module_made_are_shown_in_jarvis_chat(core, orders):
+    """The module's dock showed its files under the answer (its rules tell the model not to write links): in JARVIS
+    they come with the answer — full links to the module, only its own paths."""
+    out = core.director.orders_panel({"documents": [{"format": "pdf", "customer": "IDS", "name": "IDS_SS27.pdf",
+                                                     "url": "/documents/7/download"},
+                                                    {"name": "evil", "url": "https://evil.example/x"}],
+                                      "figures": [{"label": "Предоплата", "value": "1518.75"}]})
+    assert out["files"] == [{"name": "IDS_SS27.pdf", "url": f"{orders.url}/documents/7/download", "format": "PDF",
+                             "customer": "IDS"}]
+    assert out["figures"] == [{"label": "Предоплата", "value": "1518.75"}]
+    assert core.director.orders_panel(None) == {}

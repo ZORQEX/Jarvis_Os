@@ -367,6 +367,13 @@ export function orderCard(f, messageId) {
         <span class="faint voice-hint">${p.button_only ? "только кнопкой" : `${ICON.mic} или скажите «да, сохрани»`}</span></div>` : ""}
     </div>`);
   }
+  if ((f?.figures || []).length) {
+    parts.push(`<dl class="ord-figures">${f.figures.map((x) => `<div><dt>${esc(x.label)}</dt><dd>${eur(x.value)}</dd></div>`).join("")}</dl>`);
+  }
+  if ((f?.files || []).length) {
+    parts.push(`<div class="ord-files">${f.files.map((x) => `<button class="btn sm" data-url="${esc(x.url)}" title="Скачать">${ICON.file || ""}
+      ${esc(x.format || "Файл")}${x.customer ? " · " + esc(x.customer) : ""} — ${esc(x.name)}</button>`).join("")}</div>`);
+  }
   if (q && (q.options || []).length) {
     parts.push(`<div class="suggestions ord-options">${q.options.slice(0, 6).map((o) =>
       `<button class="suggestion" data-suggest="${esc(o)}">${esc(o)}</button>`).join("")}</div>`);

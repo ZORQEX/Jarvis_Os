@@ -275,6 +275,11 @@ class FashionService:
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError, RuntimeError, ValueError):
             return None
 
+    async def rules(self, turn: str) -> dict:
+        """JARVIS's AI is unavailable: the module answers the handed-back turn with its full rules (no AI)."""
+        self.turns.discard(turn)
+        return await self._call("POST", "/api/jarvis/ai/rules", 60, json={"turn": turn})
+
     async def decide(self, proposal: str, approve: bool) -> dict:
         """«Подтвердить» / «Отменить» on a proposal card in JARVIS's chat (the owner's click — never the model)."""
         if not re.fullmatch(r"[a-f0-9]{24}", proposal or ""):

@@ -645,3 +645,7 @@ button.row:hover { background: var(--surface-2); }
 .ord-diff th { color: var(--text-3); font-weight: 500; }
 .ord-diff .up { color: var(--warn); } .ord-diff .down { color: var(--ok); }
 .ord-options { margin: 6px 0 2px; }
+.ord-figures { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 6px 0; }
+.ord-figures dt { color: var(--text-3); font-size: 12px; } .ord-figures dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ord-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.btn.sm { height: 28px; font-size: 12.5px; padding: 0 10px; }

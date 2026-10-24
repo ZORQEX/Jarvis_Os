@@ -94,3 +94,22 @@ def finish(db: Session, turn: str, reply: str) -> dict:
     db.commit()
     return {"reply": result.reply, "proposal": result.proposal, "question": result.question, "panel": result.panel,
             "client": result.client, "steps": agent.describe_steps(result.tool_calls)}
+
+
+def rules(db: Session, turn: str) -> dict:
+    """JARVIS's AI is unavailable (a limit, offline): the turn ends with this app's full rules — what the app did when
+    its own AI failed («Ответила без ИИ»). Nothing pending from the model is kept."""
+    with _LOCK:
+        t = TURNS.pop(turn, None)
+    if t is None:
+        return {"reply": "", "proposal": None, "question": None, "client": None}
+    result = agent.RuleInterpreter(db, t.conversation, t.screen).run(t.text)
+    db.add(agent.AgentMessage(conversation=t.conversation, role="assistant", text=result.reply[:8000],
+                              data_json=json.dumps({"proposal": result.proposal, "question": result.question,
+                                                    "tools": [c["name"] for c in result.tool_calls],
+                                                    "steps": agent.describe_steps(result.tool_calls),
+                                                    "context": result.data, "panel": result.panel, "speech": result.speech,
+                                                    "by": "rules"}, ensure_ascii=False, default=str)))
+    db.commit()
+    return {"reply": result.reply, "proposal": result.proposal, "question": result.question, "panel": result.panel,
+            "client": result.client, "speech": result.speech}

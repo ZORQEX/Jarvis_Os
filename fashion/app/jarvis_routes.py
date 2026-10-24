@@ -124,6 +124,18 @@ def install_jarvis(app, get_db):
             out["speech"] = to_speech(out["reply"], [c.code for c in db.scalars(select(Customer))])
         return JSONResponse(json.loads(json.dumps(out, ensure_ascii=False, default=str)), headers={"Cache-Control": "no-store"})
 
+    @app.post("/api/jarvis/ai/rules")
+    async def jarvis_ai_rules(request: Request, db: Session = Depends(get_db)):
+        from starlette.concurrency import run_in_threadpool
+        from app import jarvis_ai
+        body = await request.json()
+        out = await run_in_threadpool(jarvis_ai.rules, db, str(body.get("turn") or ""))
+        if out.get("reply"):
+            from app.models import Customer
+            from app.voice import to_speech
+            out["speech"] = to_speech(out.get("speech") or out["reply"], [c.code for c in db.scalars(select(Customer))])
+        return JSONResponse(json.loads(json.dumps(out, ensure_ascii=False, default=str)), headers={"Cache-Control": "no-store"})
+
     @app.get("/api/jarvis/state")
     def jarvis_state(db: Session = Depends(get_db)):
         from app.models import AgentProposal, Customer, OrderItem, Season

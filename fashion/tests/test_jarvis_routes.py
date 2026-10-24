@@ -135,3 +135,17 @@ def test_a_page_in_jarvis_frame_is_part_of_jarvis(client, db, tmp_path, monkeypa
     assert r.status_code == 303 and r.headers["location"] == "/board"              # the assistant is JARVIS
     monkeypatch.setattr(settings, "jarvis_origin", "")
     assert "data-jarvis" not in client.get("/board", headers={"Sec-Fetch-Dest": "iframe"}).text
+
+
+def test_without_jarvis_ai_the_handed_back_turn_ends_with_the_full_rules(client, db, tmp_path, monkeypatch):  # noqa: F811
+    imported(db, tmp_path)
+    monkeypatch.setattr(settings, "ai_provider", "claude-code")
+    conv = "c" * 16
+    out = client.post("/api/agent/message", json={"conversation": conv, "text": "Сделай Excel и PDF для IDS",
+                                                   "jarvis": True, "turn": "t_rules"}).json()
+    if not out.get("handoff"):
+        pytest.skip("the fast rules answered this phrase themselves")
+    r = client.post("/api/jarvis/ai/rules", json={"turn": "t_rules"}).json()
+    assert r["reply"] and r["speech"]
+    assert agent.history(db, conv)[-1].role == "assistant"
+    assert client.post("/api/jarvis/ai/rules", json={"turn": "t_rules"}).json()["reply"] == ""     # the turn is over

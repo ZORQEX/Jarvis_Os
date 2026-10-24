@@ -326,7 +326,18 @@ class Director:
         self._finish(tid, cid, reply, mid=mid, failed=failed or bool(out.get("error")),
                      meta={"route": "fashion", "level": 1, "why": why, "speech": out.get("speech") or None, **(meta or {}),
                            "fashion": {"proposal": proposal.get("id"), "status": proposal.get("status"),
-                                       "question": out.get("question") or None, "card": proposal or None}})
+                                       "question": out.get("question") or None, "card": proposal or None,
+                                       **self.orders_panel(out.get("panel"))}})
+
+    def orders_panel(self, panel: dict | None) -> dict:
+        """What the module's own dock showed under an answer — the files it made and the key figures — for JARVIS's
+        chat (the module tells the model not to write file names or links: the files are shown here)."""
+        panel = panel or {}
+        files = [{"name": str(d.get("name") or d.get("format") or "файл"), "url": self.fashion.url + d["url"],
+                  "format": str(d.get("format") or "").upper(), "customer": d.get("customer")}
+                 for d in panel.get("documents") or [] if str(d.get("url", "")).startswith("/")][:12]
+        figures = [{"label": str(f.get("label")), "value": str(f.get("value"))} for f in panel.get("figures") or []][:8]
+        return {k: v for k, v in (("files", files), ("figures", figures)) if v}
 
     async def decide_order(self, proposal: str, approve: bool, message_id: str | None = None) -> dict:
         """The owner's click on «Подтвердить» / «Отменить» in JARVIS's chat (UI only, like every approval)."""
@@ -343,6 +354,9 @@ class Director:
                     f["status"] = status
                     if f.get("card"):
                         f["card"] = {**f["card"], "status": status}
+                    made = self.orders_panel({"documents": out.get("documents") or []}).get("files")
+                    if made:                       # the documents the confirmed change prepared
+                        f["files"] = (f.get("files") or []) + made
                     meta["fashion"] = f
                     self.db.execute("UPDATE messages SET meta=? WHERE id=?", (dumps(meta), message_id))
                     self.bus.publish("message.updated", {"message_id": message_id, "meta": meta})

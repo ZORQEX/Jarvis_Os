@@ -346,9 +346,7 @@ class Agency:
         voice = bool(r and r.voice)
         pid, why, _ = choose(self.mgr, C.GENERAL, "CONFIDENTIAL", director.privacy_profile())
         if not pid:
-            await director.fashion.finish(tid, "")
-            return director._finish(tid, cid, f"Готового ответа у модуля заказов нет, а ИИ сейчас недоступен ({why}). "
-                                    "Ничего не изменено.", failed=True, meta={"route": "fashion", "level": 1})
+            return await self._orders_by_rules(director, tid, cid, route, voice, why)
         if director.privacy_profile() == "PRIVATE_LOCAL":
             out = await director.gw.execute(tid, "cloud_send", {"provider": "Claude", "preview": text[:400]},
                                             "Режим «Приватно»: нужна отправка в облако", gate=director._gate(tid))
@@ -372,10 +370,9 @@ class Agency:
                        "Экран — раздел «Заказы» JARVIS.]\n\nЗапрос владелицы о заказах: " + text)
         o = await self._chat_step(director, tid, cid, s, lambda t: self.bus.publish(
             "assistant.delta", {"message_id": mid, "text": t}, tid), instruction=instruction)
-        fin = await director.fashion.finish(tid, o.text if o.ok else "") or {}
         if not o.ok:
-            return director._finish(tid, cid, f"Не получилось ответить по заказам: {o.error}. Ничего не изменено.",
-                                    mid=mid, failed=True, meta={"route": "fashion", "level": 1})
+            return await self._orders_by_rules(director, tid, cid, route, voice, o.error or "ошибка", mid)
+        fin = await director.fashion.finish(tid, o.text) or {}
         await director.present_orders(tid, cid, fin, route.why, voice, text=fin.get("reply") or o.text, mid=mid,
                                       meta={"providers": [o.provider], "models": [o.model], "cloud": True,
                                             "by": "conversation", "speech": None})     # already spoken as it streamed
@@ -610,6 +607,21 @@ class Agency:
         return StepOut(True, res.text, sources, p.id, res.model, step_ref=sid, verification=ver)
 
     # ------------------------------------------------------------------ presentation
+    async def _orders_by_rules(self, director, tid, cid, route, voice: bool, why: str, mid: str | None = None) -> None:
+        """No AI for this turn (a limit, offline, not signed in): the module's full rules answer — as the module itself
+        did when its AI failed — and the person is told why."""
+        try:
+            out = await director.fashion.rules(tid)
+        except Exception as e:   # noqa: BLE001 — the module is down too: say so
+            return director._finish(tid, cid, f"ИИ сейчас недоступен ({why}), и модуль заказов не ответил: {e}. "
+                                    "Ничего не изменено.", mid=mid, failed=True, meta={"route": "fashion", "level": 1})
+        if not out.get("reply"):
+            return director._finish(tid, cid, f"Готового ответа у модуля заказов нет, а ИИ сейчас недоступен ({why}). "
+                                    "Ничего не изменено.", mid=mid, failed=True, meta={"route": "fashion", "level": 1})
+        await director.present_orders(tid, cid, out, route.why, voice, mid=mid,
+                                      text=f"⚠ ИИ сейчас недоступен ({why}). Ответил по правилам модуля заказов:\n\n"
+                                           + out["reply"], meta={"by": "rules"})
+
     def _present(self, director, tid, cid, d: Decision, outs: dict, final, mid: str, orders: dict | None = None):
         done = [s for s in d.steps if s.status == "done"]
         main = outs.get(final.id) if final else None
@@ -656,10 +668,11 @@ class Agency:
         text = "\n\n".join(p for p in parts if p).strip() or "Не удалось выполнить задачу."
         failed = bool(final) and (not main or not main.ok) and not done
         meta = self._meta(d, done, outs)
-        if orders and (orders.get("proposal") or orders.get("question")):
+        extra = director.orders_panel(orders.get("panel")) if orders else {}
+        if orders and (orders.get("proposal") or orders.get("question") or extra):
             p = orders.get("proposal") or {}
             meta["fashion"] = {"proposal": p.get("id"), "status": p.get("status"), "question": orders.get("question"),
-                               "card": p or None}
+                               "card": p or None, **extra}
             director.bus.publish("fashion.turn", {"conversation": director.fashion.conversation(),
                                                   "navigate": (orders.get("client") or {}).get("navigate"),
                                                   "committed": False, "show": False}, tid)
