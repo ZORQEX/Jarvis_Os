@@ -78,6 +78,14 @@ class Settings(BaseSettings):
         }
 
     @property
+    def claude_code(self) -> bool:
+        """Claude through the local Claude Code CLI (the owner's subscription): FASHION_AI_PROVIDER=claude-code."""
+        if self.ai_provider.strip().casefold() not in {"claude-code", "claude_code"}:
+            return False
+        from app import claude_code
+        return claude_code.available()
+
+    @property
     def active_ai_api_key(self) -> str:
         return (stored_ai_settings().get("api_key") or self.ai_api_key.strip() or self.anthropic_api_key.strip()
                 or self.gemini_api_key.strip())

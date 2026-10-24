@@ -153,10 +153,11 @@ async def protect_hosted_app(request: Request, call_next):
     return await call_next(request)
 
 
-app.mount("/static", StaticFiles(directory=ROOT_DIR / "app" / "static"), name="static")
+APP_DIR = Path(__file__).resolve().parent      # code (static, templates); ROOT_DIR is the data root
+app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 (ROOT_DIR / "data" / "images").mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=ROOT_DIR / "data" / "images"), name="media")
-templates = Jinja2Templates(directory=ROOT_DIR / "app" / "templates")
+templates = Jinja2Templates(directory=APP_DIR / "templates")
 templates.env.globals["item_amounts"] = item_amounts
 templates.env.globals["signed_payment"] = signed_payment_amount
 templates.env.globals["payment_labels"] = PAYMENT_TYPE_LABELS
@@ -166,7 +167,7 @@ templates.env.globals["nav_areas"] = AREAS
 templates.env.globals["workspace_views"] = WORKSPACE_VIEWS
 # Cache-busting version for /static files: changes whenever a stylesheet or script changes.
 templates.env.globals["asset_version"] = lambda: str(int(max(
-    (path.stat().st_mtime for path in (ROOT_DIR / "app" / "static").glob("*.*")), default=0)))
+    (path.stat().st_mtime for path in (APP_DIR / "static").glob("*.*")), default=0)))
 
 
 def money_filter(value) -> str:

@@ -421,7 +421,7 @@ def install_factory(app, templates, context):
         from app.config import settings
         conversation = c if re.fullmatch(r"[a-f0-9]{16}", c or "") else ""
         return templates.TemplateResponse(request, "fx_assistant.html", context(
-            request, conversation=conversation, c=bool(conversation), ai_connected=bool(settings.active_ai_api_key)))
+            request, conversation=conversation, c=bool(conversation), ai_connected=bool(settings.active_ai_api_key or settings.claude_code)))
 
     @app.post("/api/agent/message")
     async def agent_message(request: Request, db: Session = Depends(get_db)):

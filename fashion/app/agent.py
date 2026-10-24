@@ -609,7 +609,8 @@ def handle(db: Session, conversation: str, text: str, screen: dict | None = None
     if isinstance(result, dict):
         text, result = result["continue_with"], None
     if result is None:
-        if client is None and not settings.active_ai_api_key:
+        claude_code = client is None and not settings.active_ai_api_key and settings.claude_code
+        if client is None and not settings.active_ai_api_key and not claude_code:
             result = RuleInterpreter(db, conversation, screen).run(text)
         else:
             # Navigation, "what is open", the file picker, dropped-file follow-ups, workbook rows and the deposit
@@ -617,7 +618,8 @@ def handle(db: Session, conversation: str, text: str, screen: dict | None = None
             result = RuleInterpreter(db, conversation, screen).fast(text)
             if result is None:
                 try:
-                    result = _llm_turn(db, conversation, text, screen, client or ClaudeClient())
+                    result = _claude_code_turn(db, conversation, text, screen) if claude_code \
+                        else _llm_turn(db, conversation, text, screen, client or ClaudeClient())
                 except ValueError as exc:
                     # Claude busy, offline or rejected: answer with the built-in commands instead of an error.
                     db.rollback()
@@ -762,6 +764,40 @@ def _llm_turn(db: Session, conversation: str, text: str, screen: dict, client: M
         merged.append({"role": "user", "content": results})
         if question:
             break
+    return _finish_turn(db, conversation, text, screen, pending, calls, question, reply)
+
+
+def _turn_prompt(db: Session, conversation: str, text: str, screen: dict) -> str:
+    """The conversation so far as one prompt for Claude Code (it starts fresh for every turn)."""
+    lines = []
+    for row in history(db, conversation)[:-1]:
+        if row.text:
+            lines.append(f"{'Владелица' if row.role == 'user' else 'Ассистент'}: {row.text[:1500]}")
+    context = f"[Экран: {json.dumps(screen, ensure_ascii=False)}; сегодня {date.today().isoformat()}]" if screen \
+        else f"[Сегодня {date.today().isoformat()}]"
+    earlier = ("Ранее в этом диалоге:\n" + "\n".join(lines[-10:]) + "\n\n") if lines else ""
+    return f"{earlier}{context}\nНовое сообщение владелицы:\n{text}"
+
+
+def _claude_code_turn(db: Session, conversation: str, text: str, screen: dict) -> TurnResult:
+    """The same tools and rules as ``_llm_turn``, run by the local Claude Code CLI (the owner's subscription)."""
+    from app import claude_code
+    pending, calls, state = _Pending(), [], {"question": None}
+
+    def execute(name: str, params: dict) -> dict:
+        output = run_tool(db, name, params or {}, pending, screen)
+        calls.append({"name": name, "input": params, "output": output})
+        if name == "ask_user" and "error" not in output:
+            state["question"] = {"question": params.get("question"), "options": params.get("options") or []}
+            output = output | {"note": "Вопрос показан владелице с вариантами. Закончи ответ этим вопросом, больше ничего не делай."}
+        return output
+
+    reply = claude_code.run_turn(SYSTEM, _turn_prompt(db, conversation, text, screen), TOOLS, execute)
+    return _finish_turn(db, conversation, text, screen, pending, calls, state["question"], reply)
+
+
+def _finish_turn(db: Session, conversation: str, text: str, screen: dict, pending: _Pending, calls: list[dict],
+                 question: dict | None, reply: str) -> TurnResult:
     proposal = _store_proposal(db, text, pending, conversation)
     if question and not reply:
         reply = question["question"]

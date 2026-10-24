@@ -22,6 +22,10 @@ REF = "ai-settings"
 def status() -> dict:
     stored = stored_ai_settings()
     key = settings.active_ai_api_key
+    if not key and settings.claude_code:
+        from app import claude_code
+        return {"source": "claude-code", "provider": "claude-code", "model": f"Claude Code · {claude_code.model()}",
+                "fallback": None, "hint": None, "saved_at": None}
     return {
         "source": "app" if stored.get("api_key") else ("env" if key else None),
         "provider": settings.active_ai_provider if key else None,

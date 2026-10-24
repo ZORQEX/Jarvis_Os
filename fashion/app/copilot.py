@@ -346,7 +346,7 @@ def install_copilot(app, templates, context, get_db):
         except Exception:  # noqa: BLE001 - the bar must render even if the secret store is unreadable
             voice = {"configured": False}
         return {"voice": {k: voice.get(k) for k in ("configured", "speak_replies", "review_before_send")},
-                "ai": bool(settings.active_ai_api_key)}
+                "ai": bool(settings.active_ai_api_key or settings.claude_code)}
     templates.env.globals["copilot_config"] = copilot_config
     from app.assistant_flow import fill_meaning
     templates.env.globals["fill_meaning"] = fill_meaning
