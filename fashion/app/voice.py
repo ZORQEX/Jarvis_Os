@@ -303,6 +303,43 @@ def _spoken_code_pattern(code: str) -> str | None:
     return r"(?<![\w-])" + r"[\s-]?".join(parts) + r"(?![\w-])"
 
 
+# Letters said the Russian way come out of JARVIS's local recogniser in Cyrillic («эс-эс» → «СС», «и-дэ-эс» → «ИДС»):
+# the Latin letter each one sounds like (И can be I or E).
+CYR_LATIN = {"А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Е": "E", "Э": "E", "З": "Z", "И": "IE", "Й": "Y",
+             "К": "K", "Л": "L", "М": "M", "Н": "N", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T", "У": "U",
+             "Ф": "F", "Х": "H"}
+
+
+def _cyrillic_code(word: str, codes: set[str]) -> str | None:
+    options = [""]
+    for ch in word:
+        latin = CYR_LATIN.get(ch)
+        if not latin:
+            return None
+        options = [o + c for o in options for c in latin]
+    found = [o for o in options if o in codes]
+    return found[0] if len(found) == 1 else None
+
+
+# The recogniser sometimes drops a code's last letter («ай ди эс» → «ID», «эс эс» → «S»). Restored only in a phrase
+# about orders, only when exactly one code fits, and never right after «размер» (S / M / L are sizes).
+ORDER_TALK = re.compile(r"%|процент|наценк|предоплат|депозит|заказ|клиент|excel|pdf|документ|оплат|позици|сезон", re.I)
+SIZE_WORD = re.compile(r"(?:размер\w*|size)\s*$", re.I)
+
+
+def _clipped_codes(text: str, codes: set[str]) -> str:
+    if not ORDER_TALK.search(text):
+        return text
+
+    def fix(m: re.Match) -> str:
+        token = m.group(0)
+        if token in codes or SIZE_WORD.search(text[:m.start()]):
+            return token
+        fits = [c for c in codes if len(c) == len(token) + 1 and c.startswith(token)]
+        return fits[0] if len(fits) == 1 else token
+    return re.sub(r"(?<![\w-])[A-Z]{1,3}(?![\w-])", fix, text)
+
+
 def normalize_transcript(text: str, codes: list[str], brands: list[str]) -> str:
     """Spoken forms → the names the app uses. Raw text is kept separately for the audit trail.
 
@@ -317,6 +354,11 @@ def normalize_transcript(text: str, codes: list[str], brands: list[str]) -> str:
         pattern = _spoken_code_pattern(code.upper())
         if pattern:
             result = re.sub(pattern, code.upper(), result, flags=re.I)
+    upper = {c.upper() for c in codes}
+    result = re.sub(r"(?<![\w-])[А-ЯЁ]{2,4}(?![\w-])", lambda m: _cyrillic_code(m.group(0), upper) or m.group(0), result)
+    # «Excel и PDF» run together by the recogniser: «Excel EPDF», «Excel EPD», «экселли PDF».
+    result = re.sub(r"(?i)(?<!\w)(?:excel|эксел\w*)\s*(?:и\s+)?e?\s*(?:pdf|пдф|pd)(?!\w)", "Excel и PDF", result)
+    result = _clipped_codes(result, upper)
     known = {b.casefold(): b for brand in brands for b in brand.split()}
     def brand_word(match: re.Match) -> str:
         word = match.group(0)

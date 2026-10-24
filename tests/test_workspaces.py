@@ -285,3 +285,10 @@ def test_wake_word_survives_speaker_to_mic_spelling(text, woke):
     assert bool(router.wake_len(text)) is woke
     if woke:
         assert router.strip_wake(text) == text[router.wake_len(text):]
+
+
+@pytest.mark.parametrize("heard,command", [("Джарвезда, сохрани.", "да, сохрани."),     # «Джарвис, да» run together
+                                           ("Джарвиснет, не надо", "нет, не надо"),
+                                           ("Джарвис, да, сохрани", "да, сохрани")])
+def test_name_glued_to_the_answer_keeps_the_answer(heard, command):
+    assert router.find_wake(heard) == 0 and router.strip_wake(heard) == command

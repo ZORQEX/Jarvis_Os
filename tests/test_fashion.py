@@ -22,10 +22,12 @@ class Alive:
 @pytest.fixture
 async def fake_app():
     """The orders app as JARVIS sees it: claims by keyword, a proposal for a markup, a navigation for «открой»."""
-    seen = {"messages": []}
+    seen = {"messages": [], "claims": []}
 
     async def claims(req):
-        t = (await req.json())["text"].lower()
+        t = (await req.json())["text"]
+        seen["claims"].append(t)
+        t = t.lower()
         kind = "strong" if any(w in t for w in ("ids", "ай ди эс", "предоплат", "да, сохрани")) else \
             "weak" if "заказ" in t else None
         return web.json_response({"claim": kind, "why": "тест", "normalized": t})
@@ -84,6 +86,13 @@ async def test_a_spoken_markup_goes_to_the_orders_assistant(core, orders, fake_a
     assert "fashion.turn" in kinds
     steps = core.db.all("SELECT tool_id FROM task_steps WHERE task_id=?", (tid,))
     assert [s["tool_id"] for s in steps] == ["window_show"]          # the workspace is shown for a spoken request
+
+
+async def test_the_name_does_not_hide_the_answer(core, orders, fake_app):
+    """«Джарвис, да, сохрани» is checked without the name: the app sees «да, сохрани» (its pending-answer rule)."""
+    tid = await core.director.submit("Джарвезда, сохрани.", source="voice")       # «Джарвис, да» run together
+    await wait_done(core, tid)
+    assert fake_app["claims"][-1] == "да, сохрани."
 
 
 async def test_the_spoken_answer_is_the_short_version(core):

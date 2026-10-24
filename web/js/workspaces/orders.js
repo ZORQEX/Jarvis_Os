@@ -31,7 +31,13 @@ export function create(ctx) {
         st.ready = false;
         el.innerHTML = `<div class="orders-wrap"><iframe class="orders-frame" title="Заказы" src="${esc(s.url)}/board"></iframe></div>`;
         st.frame = el.querySelector("iframe");
-        st.frame.addEventListener("load", () => { st.ready = true; if (st.queued) { const q = st.queued; st.queued = null; turn(q); } });
+        st.frame.addEventListener("load", async () => {
+          // Every page of the app adopts JARVIS's dialog first, so a voice turn and the dock are one conversation.
+          try { st.state = await ctx.link.request("fashion.state"); } catch { /* keep the last state */ }
+          st.frame?.contentWindow.postMessage({ type: "jarvis.conversation", conversation: st.state?.conversation }, st.origin);
+          st.ready = true;
+          if (st.queued) { const q = st.queued; st.queued = null; turn(q); }
+        });
       }
       return;
     }

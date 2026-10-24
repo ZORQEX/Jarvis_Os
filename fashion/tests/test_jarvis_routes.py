@@ -64,3 +64,20 @@ def test_endpoints_and_cross_site_writes(client, db, tmp_path, monkeypatch):  # 
     monkeypatch.setattr(settings, "jarvis_origin", "http://127.0.0.1:8791")
     page = client.get("/board").text
     assert "&#34;jarvis&#34;: &#34;http://127.0.0.1:8791&#34;" in page or '"jarvis": "http://127.0.0.1:8791"' in page
+
+
+@pytest.mark.parametrize("heard,expected", [
+    ("Покажи заказы клиента СС.", "Покажи заказы клиента SS."),       # «эс-эс» written in Cyrillic by the recogniser
+    ("Сделай Excel и PDF для ИДС", "Сделай Excel и PDF для IDS"),
+    ("Сделай Excel EPDF для IDS.", "Сделай Excel и PDF для IDS."),   # «Excel и PDF» run together
+    ("Сделай экселли PDF для IDS.", "Сделай Excel и PDF для IDS."),
+    ("ООО Ромашка", "ООО Ромашка"),                                   # not a customer code: unchanged
+    ("размер S и M", "размер S и M"),                                 # sizes are not codes
+    ("Джарвис, поставь ID 35%.", "Джарвис, поставь IDS 35%."),       # the last letter dropped by the recogniser
+    ("Покажи все заказы S.", "Покажи все заказы SS."),
+    ("Покажи заказы размера S клиента IDS", "Покажи заказы размера S клиента IDS"),
+    ("Какой у меня Apple ID", "Какой у меня Apple ID"),               # not about orders: left alone
+])
+def test_what_the_local_recogniser_writes(heard, expected):
+    from app.voice import normalize_transcript
+    assert normalize_transcript(heard, ["AA", "IDS", "SS", "ALINA"], ["Dior cruise"]) == expected

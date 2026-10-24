@@ -857,16 +857,19 @@
     [mic, $('[data-dock-mic]', dock)].forEach((b) => { if (!b) return;
       b.classList.remove('is-off'); b.title = 'Говорить с JARVIS (скажите «Джарвис, …» или нажмите)';
       b.addEventListener('click', (e) => { e.stopImmediatePropagation(); window.parent.postMessage({ type: 'fashion.listen' }, jarvis); }, true); });
+    // JARVIS's dialog is the one both share: adopted when the page loads (jarvis.conversation) and with every voice
+    // turn; this page tells JARVIS only when the owner starts a new dialog or opens an old one here.
     window.addEventListener('message', (e) => {
-      if (e.origin !== jarvis || !e.data || typeof e.data !== 'object' || e.data.type !== 'jarvis.turn') return;
-      if (/^[a-f0-9]{16}$/.test(e.data.conversation || '') && e.data.conversation !== conversation) {
-        conversation = e.data.conversation; local.set('copilot-conversation', conversation);
-      }
-      if (e.data.navigate) { navigate(e.data.navigate); return; }      // the dock re-opens there with this conversation
-      if (e.data.committed && !slot) { location.reload(); return; }    // the page under the dock shows the new figures
+      if (e.origin !== jarvis || !e.data || typeof e.data !== 'object') return;
+      const d = e.data;
+      if (!['jarvis.turn', 'jarvis.conversation'].includes(d.type)) return;
+      const switched = /^[a-f0-9]{16}$/.test(d.conversation || '') && d.conversation !== conversation;
+      if (switched) { conversation = d.conversation; local.set('copilot-conversation', conversation); }
+      if (d.type === 'jarvis.conversation') { if (switched && loaded) loadConversation(); return; }
+      if (d.navigate) { navigate(d.navigate); return; }      // the dock re-opens there with this conversation
+      if (d.committed && !slot) { location.reload(); return; }    // the page under the dock shows the new figures
       openDock(); loadConversation();
     });
-    tellJarvis();
   }
 
   refreshContext();

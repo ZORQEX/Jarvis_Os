@@ -61,6 +61,11 @@ _FIRST_WORD = re.compile(r"^\s*(?:(?:hey|эй|хэй|хей|ok|окей)[\s,]+)?
                          re.I)
 
 
+# «Джарвис, да» run together by the recogniser: «Джарвезда» (measured 2026-10-25, a confirmation said right after the
+# name). No Russian word starts with «джарв», so the glued word is the name plus the answer.
+_GLUED = re.compile(r"^(?:джарв|джерв|жарв|чарв)[а-я]{0,3}?(да|нет)$")
+
+
 def wake_len(text: str) -> int:
     """Length of the «Джарвис, » at the start of text, or 0. Besides the known spellings, a first word within two letters
     of «джарвис» counts: through the laptop's speakers and mic the local recogniser heard «Джарвес» (measured 2026-10-23)."""
@@ -70,13 +75,16 @@ def wake_len(text: str) -> int:
     m = _FIRST_WORD.match(text or "")
     if not m:
         return 0
+    g = _GLUED.match(m.group(1).casefold().replace("ё", "е"))
+    if g:
+        return m.start(1) + g.start(1)          # keep the glued «да» / «нет»: it is the answer
     return m.end() if is_wake_word(m.group(1)) else 0
 
 
 def is_wake_word(word: str) -> bool:
     """«Джарвис» as the recognisers hear it: «Джарвес», «Джорис», «Чарвис», «Javis», «Jervis»…"""
     w = word.casefold().replace("ё", "е")
-    if w == "jarvis" or WAKE.fullmatch(w):
+    if w == "jarvis" or WAKE.fullmatch(w) or _GLUED.match(w):
         return True
     if 5 <= len(w) <= 9 and w[0] in "джчзj" and w[-1] in "сзш" and _lev(w, "джарвис") <= 2:
         return True
