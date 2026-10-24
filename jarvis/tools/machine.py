@@ -416,7 +416,7 @@ def _temps() -> list[dict]:
 
 def _battery() -> dict | None:
     for bat in sorted(Path("/sys/class/power_supply").glob("BAT*")):
-        def read(n):
+        def read(n, bat=bat):
             try:
                 return (bat / n).read_text().strip()
             except OSError:

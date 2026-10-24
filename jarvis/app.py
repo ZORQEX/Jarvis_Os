@@ -34,6 +34,7 @@ class Core:
     director: Director
     recovered: list[str]
     comms: object = None          # CommsHub
+    phone: object = None          # Phone: the owner's private Telegram bot
 
 
 def build(paths: Paths | None = None, config: Config | None = None, extra_tools: list | None = None) -> Core:
@@ -121,6 +122,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     from .voice.stt import LocalSTT
     director.stt = LocalSTT()           # speech recognition on this computer (GigaAM + Parakeet) — the only one
     comms = build_comms(paths, config, db, bus, audit, registry, policy, claude, director)
+    from .phone import Phone
+    phone = Phone(director, db, bus, audit, comms.store)     # JARVIS from the phone (a private Telegram bot)
     from .history import ActionHistory
     director.history = ActionHistory(db, bus)       # lasting actions only (sites, code, files, programs, notes)
     director.github = github
@@ -129,7 +132,7 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     approvals.expire_old()
     audit.write("core.start", recovered_tasks=len(recovered))
     return Core(paths, config, db, bus, audit, tasks, policy, approvals, registry, gateway, claude, scheduler,
-                director, recovered, comms)
+                director, recovered, comms, phone)
 
 
 def build_comms(paths, config, db, bus, audit, registry, policy, ai, director):
@@ -148,6 +151,7 @@ def build_comms(paths, config, db, bus, audit, registry, policy, ai, director):
     store = secrets.Namespaced("dev-" + hashlib.sha256(home.encode()).hexdigest()[:8] + ":" if home else "")
     providers = [TelegramProvider(store), WhatsAppProvider(db, paths.data / "whatsapp"), EmailProvider(db, store)]
     hub = CommsHub(db, bus, audit, providers)
+    hub.store = store
     for t in (MessageSend(hub), MessageDeliver(hub), MessageCancel(hub), TrustRuleAdd(hub), ContactSave(hub),
               ContactFind(hub)):
         registry.tools[t.spec.id] = t

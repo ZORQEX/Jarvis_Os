@@ -55,6 +55,10 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   changing ones against the real desktop from tests; `screen_locked()` (hyprlock) blocks capture and typing.
 - Dictation (`jarvis/dictation.py`): `jarvis dictate` / Super+Alt+D / «Джарвис, диктовка»; while on, `_wake_text`
   accepts every phrase and `_after_stt` types it (wtype) into the window recorded at start; «Джарвис, …» stays a command.
+- Phone (`jarvis/phone.py`): the owner's private Telegram bot (Bot API long poll, token in the keyring, pairing code
+  only from the window). Only tasks it started answer back; high risk and CLICK_ONLY approvals stay on the computer.
+  Tests use a fake Bot API (`tests/test_phone.py`) — never a real bot token.
+- Calendar (`jarvis/agenda.py`, `ics.py`): own events with reminders, read-only iCal subscriptions, in the briefing.
 - Memory (`jarvis/memory.py`, table `memory`): «запомни, что …» / «что ты обо мне помнишь» / «забудь, что …»;
   `memory_line` goes into the state line of every AI request; the AI may save lasting facts itself (memory_save).
 - Living speech: `router.simplify` strips fillers / «можешь» / infinitives so «Мне нужно открыть папку с колледжем»

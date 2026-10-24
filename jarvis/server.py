@@ -149,6 +149,8 @@ class Server:
         spawn(self._check_providers(), "providers-check")
         if self.core.director.fashion:
             spawn(self.core.director.fashion.start(), "fashion-start")
+        if self.core.phone:
+            await self.core.phone.start()        # only when a bot token is stored
 
     async def _prewarm_speech(self):
         try:
@@ -185,6 +187,8 @@ class Server:
             await self.core.comms.stop()
         if self.core.director.fashion:
             await self.core.director.fashion.stop()
+        if self.core.phone:
+            await self.core.phone.stop()
         for ws in list(self.sockets):
             await ws.close()
         self.core.audit.write("core.stop")
@@ -839,6 +843,23 @@ class Server:
             elif typ == "tasks.list":
                 res = self.core.tasks.recent(min(300, int(data.get("limit", 50))),
                                              exclude_route=None if data.get("include_ui_read") else "ui_read")
+            elif str(typ).startswith("phone.") and self.core.phone:   # the phone bot (window only, user-driven)
+                ph = self.core.phone
+                if typ == "phone.token":
+                    res = await ph.set_token(str(data.get("token") or ""))
+                elif typ == "phone.pair":
+                    res = {**ph.state(), "code": ph.pair_code()}
+                elif typ == "phone.unpair":
+                    ph.unpair()
+                    res = ph.state()
+                elif typ == "phone.forget":
+                    await ph.forget()
+                    self.core.audit.write("phone.bot_removed")
+                    res = ph.state()
+                elif typ == "phone.state":
+                    res = ph.state()
+                else:
+                    raise ValueError(f"Неизвестный запрос: {typ}")
             elif typ == "publish.state":          # GitHub for site publishing (window only, user-driven)
                 res = await d.github.state()
             elif typ == "publish.github.begin":

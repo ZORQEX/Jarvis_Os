@@ -2,7 +2,6 @@
 exceptions, time zones, all-day), the day's events in the briefing, a broken subscription never shown or fatal.
 VERIFIED LOCAL (a real iCal file served over HTTP on this machine)."""
 import socket
-import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -53,7 +52,7 @@ def ctx(core):
 
 async def test_an_event_gets_a_reminder_and_can_be_removed(core):
     start = (datetime.now() + timedelta(days=1)).replace(hour=15, minute=0, second=0, microsecond=0)
-    tid = await core.director.submit(f"запиши в календарь созвон с Романом завтра в 15:00", source="text")
+    tid = await core.director.submit("запиши в календарь созвон с Романом завтра в 15:00", source="text")
     t = await wait_done(core, tid)
     assert t["state"] == "completed" and t["steps"][-1]["verification"]["status"] == "verified"
     ev = core.db.one("SELECT * FROM calendar_events")

@@ -79,6 +79,13 @@ function renderSettings() {
       <div id="publishBox" style="margin-top:10px"><span class="faint">Проверяю…</span></div>
     </div>
     <div class="panel">
+      <h2>Телефон</h2>
+      <div class="muted" style="font-size:13.5px">Свой бот Telegram: пишите или присылайте голосовые JARVIS с телефона — ответ придёт туда же.
+        Файлы фабрик из чата попадают в «Заказы», остальные — в ~/Downloads/JARVIS. Отвечает только вашему телефону;
+        выключение, удаление и установка программ подтверждаются только здесь, на компьютере.</div>
+      <div id="phoneBox" style="margin-top:10px"><span class="faint">Проверяю…</span></div>
+    </div>
+    <div class="panel">
       <h2>Разрешения</h2>
       <div class="muted" style="font-size:13.5px">Каждое действие проходит через единую политику. Средний и высокий риск требуют вашего решения.</div>
       <label class="toggle"><input type="checkbox" id="fullAccess" ${ctx.S.core.access === "full" ? "checked" : ""}> <span><b>Полный доступ к ноутбуку</b> —
@@ -123,6 +130,7 @@ function renderSettings() {
     .then(() => ctx.toast("Компаньон появится в правом верхнем углу", "ok")).catch((er) => ctx.toast(er.message, "err")));
   wireAgency(el, { link: ctx.link, S: ctx.S, toast: ctx.toast, rerender: () => { renderSettings(); ctx.onChange(); } });
   renderPublish();
+  renderPhone();
   renderImprove();
   renderMemory();
   $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {
@@ -195,6 +203,42 @@ async function renderPublish(poll = 0) {
     try { await ctx.link.request("publish.github.begin", {}, 30000); } catch (er) { ctx.toast(er.message, "err"); }
     renderPublish();
   };
+}
+
+async function renderPhone(op = null, args = {}) {
+  const box = $("#phoneBox");
+  if (!box) return;
+  let st;
+  try { st = await ctx.link.request(op || "phone.state", args, 20000); }
+  catch (e) { if (!op) { box.innerHTML = `<span class="faint">${esc(e.message)}</span>`; return; } ctx.toast(e.message, "err"); st = await ctx.link.request("phone.state").catch(() => null); }
+  if (!st || !box.isConnected) return;
+  const err = st.error ? `<div class="cerr" style="margin-bottom:6px">${esc(st.error)}</div>` : "";
+  if (!st.configured) {
+    box.innerHTML = `${err}<div style="font-size:13.5px">Создайте бота: в Telegram откройте <b>@BotFather</b>, отправьте /newbot и вставьте сюда токен, который он пришлёт.</div>
+      <div class="field"><input id="phoneToken" type="password" autocomplete="off" placeholder="123456789:AA…" style="flex:1;min-width:220px">
+        <button class="btn primary" id="phoneSave">Подключить</button>
+        <button class="btn ghost" id="phoneFather">Открыть @BotFather</button></div>`;
+    $("#phoneSave", box).onclick = () => renderPhone("phone.token", { token: $("#phoneToken", box).value });
+    $("#phoneFather", box).onclick = () => ctx.link.request("tool.run", { tool: "open_url", args: { url: "https://t.me/BotFather" } }).catch((e) => ctx.toast(e.message, "err"));
+    return;
+  }
+  const bot = st.bot ? `@${esc(st.bot)}` : "бот";
+  const pill = st.running && !st.error ? `<span class="cpill ok">${bot} работает</span>` : `<span class="cpill">${bot} не на связи</span>`;
+  if (!st.paired) {
+    box.innerHTML = `${err}<div class="field" style="margin-top:0">${pill}
+        <button class="btn ghost" id="phoneForget">Отключить бота</button></div>
+      ${st.code ? `<div style="font-size:13.5px">Отправьте боту ${bot} с телефона этот код (действует 15 минут):</div><div class="gh-code">${esc(st.code)}</div>`
+        : `<div class="field"><button class="btn primary" id="phonePair">Привязать телефон</button></div>`}`;
+    const pb = $("#phonePair", box);
+    if (pb) pb.onclick = () => renderPhone("phone.pair");
+    if (st.code && ctx.currentView() === "settings") setTimeout(() => $("#phoneBox")?.isConnected && renderPhone(), 4000);
+  } else {
+    box.innerHTML = `${err}<div class="field" style="margin-top:0">${pill} <span class="faint">телефон привязан</span>
+        <button class="btn ghost" id="phoneUnpair">Отвязать телефон</button>
+        <button class="btn ghost" id="phoneForget">Отключить бота</button></div>`;
+    $("#phoneUnpair", box).onclick = () => renderPhone("phone.unpair");
+  }
+  $("#phoneForget", box).onclick = () => renderPhone("phone.forget");
 }
 
 async function renderMemory(op = null) {

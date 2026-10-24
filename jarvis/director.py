@@ -196,7 +196,7 @@ class Director:
             return ""
         # About orders (a customer code, brand, season, factory money, or an answer to the orders assistant's pending
         # proposal): the orders assistant handles the whole phrase, several steps included.
-        if not answer and self.fashion and source in ("voice", "text"):
+        if not answer and self.fashion and source in ("voice", "text", "phone"):
             claim = await self.fashion.claims(rt.strip_wake(text) or text)      # «Джарвис, да» → «да»
             kind = (claim or {}).get("claim")
             if kind == "strong" or (kind == "weak" and (route is None or self.view == "orders")):
