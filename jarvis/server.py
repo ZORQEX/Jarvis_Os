@@ -268,7 +268,6 @@ class Server:
     async def _voice_wake(self, data: dict) -> dict:
         """Always-on listening from the desktop companion. Speech that is not addressed to JARVIS is recognised on this
         computer and dropped at once: no turn, no transcript stored, nothing sent anywhere."""
-        d = self.core.director
         audio = self._voice_audio(data)
         t0 = time.time()
         text = await self._transcribe(audio, data)
