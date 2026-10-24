@@ -25,3 +25,7 @@ dev = [
     "pytest==9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
+
+[tool.ruff]
+# fashion/ is the vendored fashion-orders app (git subtree of morph-rq/alina-fashion-ai) with its own style and tests.
+extend-exclude = ["fashion"]

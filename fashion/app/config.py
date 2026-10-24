@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+# Where data/, backups/ and .env live. JARVIS keeps them outside the code (FASHION_HOME); standalone: next to app/.
+ROOT_DIR = Path(os.environ.get("FASHION_HOME") or Path(__file__).resolve().parent.parent)
 # Claude models offered in Settings › AI. The other one is used automatically as the fallback.
 CLAUDE_MODELS = {
     "claude-sonnet-5-5": "Claude Sonnet 5.5 — best quality (recommended)",
