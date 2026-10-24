@@ -290,10 +290,20 @@ def _route(text: str, ctx: dict | None = None) -> Route | None:
     if re.search(r"(сделай |сними )?(скриншот|снимок экрана|скрин экрана)|заскринь|take (a )?screenshot|^screenshot$", t):
         return Route("tool", "screenshot", {}, why="grim (Wayland)")
 
+    # --- memory: facts JARVIS keeps for every later conversation ------------------------------------------------
+    m = re.match(r"\s*(?:запомни|remember)(?:\s*,?\s*(?:что|that)\s+|\s*[:,—-]\s*)(.+)$", raw, re.I | re.S)
+    if m and m.group(1).strip():
+        return Route("tool", "memory_save", {"text": m.group(1).strip()}, why="Долговременная память")
+    if re.fullmatch(r"(?:что ты (?:обо мне |про меня )?(?:помнишь|знаешь обо мне|знаешь про меня)|что ты помнишь|"
+                    r"что у тебя в памяти|покажи (?:свою )?память|what do you (?:remember|know) about me)", t):
+        return Route("tool", "memory_list", {}, why="Долговременная память")
+    m = re.match(r"\s*(?:забудь|forget)(?:\s*,?\s*(?:что|про|о|об|about|that)\s+|\s*[:,—-]\s*)(.+)$", raw, re.I | re.S)
+    if m and m.group(1).strip():
+        return Route("tool", "memory_forget", {"query": m.group(1).strip()}, why="Долговременная память")
+
     # --- notes ---------------------------------------------------------------------
     m = re.match(r"\s*(?:запиши|создай|сделай|добавь|сохрани)\s+(?:мне\s+)?заметку\s*[:,—-]?\s*(.+)$", raw, re.I | re.S) \
-        or re.match(r"\s*(?:заметка|запиши|запомни|note|take a note)\s*[:,—-]\s*(.+)$", raw, re.I | re.S) \
-        or re.match(r"\s*запомни,?\s+что\s+(.+)$", raw, re.I | re.S)
+        or re.match(r"\s*(?:заметка|запиши|note|take a note)\s*[:,—-]\s*(.+)$", raw, re.I | re.S)
     if m and m.group(1).strip():
         return Route("tool", "create_note", {"text": m.group(1).strip()}, why="Запись файла в Документы/Jarvis")
 

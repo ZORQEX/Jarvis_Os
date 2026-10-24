@@ -399,7 +399,7 @@ async def test_remember_not_granted_when_approval_invalid(core):
     ("запусти терминал пожалуйста", "tool", "app_open"), ("какая загрузка процессора", "tool", "system_info"),
     ("что с памятью", "tool", "system_info"), ("на пятый стол", "tool", "workspace_switch"),
     ("заскринь экран", "tool", "screenshot"), ("напомни в 18:00 позвонить", "tool", "reminder_create"),
-    ("запомни что встреча в пятницу", "tool", "create_note"), ("запиши: купить плитку", "tool", "create_note"),
+    ("запомни что встреча в пятницу", "tool", "memory_save"), ("запиши: купить плитку", "tool", "create_note"),
     ("где лежит смета флора", "tool", "search_files"),
 ])
 def test_router_natural_variants(text, kind, what):

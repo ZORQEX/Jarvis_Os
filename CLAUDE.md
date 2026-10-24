@@ -36,6 +36,8 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,
   then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Settings →
   «Самоулучшение». Tests use a temporary repo (monkeypatch `REPO`/`WORK`) — never the real one.
+- Memory (`jarvis/memory.py`, table `memory`): «запомни, что …» / «что ты обо мне помнишь» / «забудь, что …»;
+  `memory_line` goes into the state line of every AI request; the AI may save lasting facts itself (memory_save).
 - Living speech: `router.simplify` strips fillers / «можешь» / infinitives so «Мне нужно открыть папку с колледжем»
   runs locally; only tool/search/reply/answer/ui routes are taken from the simplified phrase (never comms or control).
 - Several tasks in one request: `router.split_tasks` (sequence words only: «первое / далее / потом / во-вторых», «1) 2)»;

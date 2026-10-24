@@ -62,6 +62,12 @@ function renderSettings() {
       <div id="voiceTurns" style="margin-top:12px"></div>
     </div>
     <div class="panel">
+      <h2>Память</h2>
+      <div class="muted" style="font-size:13.5px">Что JARVIS помнит о вас между разговорами. Хранится на этом компьютере;
+        к каждому запросу ИИ добавляется одной строкой. Голосом: «Запомни, что …», «Что ты обо мне помнишь?», «Забудь, что …».</div>
+      <div id="memoryBox" style="margin-top:10px"><span class="faint">Загружаю…</span></div>
+    </div>
+    <div class="panel">
       <h2>Самоулучшение</h2>
       <div class="muted" style="font-size:13.5px">JARVIS сам находит по своим записям, где работает плохо, и улучшает свой код: Claude Code
         правит его в отдельной ветке, JARVIS прогоняет все тесты. Применяется только после вашего «да», с перезапуском.
@@ -120,6 +126,7 @@ function renderSettings() {
   wireAgency(el, { link: ctx.link, S: ctx.S, toast: ctx.toast, rerender: () => { renderSettings(); ctx.onChange(); } });
   renderPublish();
   renderImprove();
+  renderMemory();
   $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {
     try { await ctx.link.request("privacy.set", { profile: b.dataset.privacy }); ctx.S.core.privacy = b.dataset.privacy; } catch (er) { ctx.toast(er.message, "err"); }
     renderSettings(); ctx.onChange();
@@ -190,6 +197,17 @@ async function renderPublish(poll = 0) {
     try { await ctx.link.request("publish.github.begin", {}, 30000); } catch (er) { ctx.toast(er.message, "err"); }
     renderPublish();
   };
+}
+
+async function renderMemory(op = null) {
+  const box = $("#memoryBox");
+  if (!box) return;
+  let d;
+  try { d = await ctx.link.request(op ? "memory.forget" : "memory.list", op || {}); } catch (e) { box.innerHTML = `<div class="faint">${esc(e.message)}</div>`; return; }
+  box.innerHTML = d.facts.length ? `<div class="rows">${d.facts.map((f) => `<div class="row" style="grid-template-columns:minmax(0,1fr) auto">
+      <span class="t">${esc(f.text)}</span><button class="btn ghost" data-mforget="${esc(f.id)}">Забыть</button></div>`).join("")}</div>`
+    : `<div class="faint">Пока ничего. Скажите: «Запомни, что …»</div>`;
+  $$("[data-mforget]", box).forEach((b) => b.addEventListener("click", () => renderMemory({ id: b.dataset.mforget })));
 }
 
 async function renderImprove() {

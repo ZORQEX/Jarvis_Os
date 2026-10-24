@@ -105,6 +105,12 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE reminders ADD COLUMN command TEXT;
     """,
+    # 9 — long-term memory: facts the person asked JARVIS to remember (or told about themselves)
+    """
+    CREATE TABLE memory(
+        id TEXT PRIMARY KEY, text TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'user', created_at REAL NOT NULL);
+    CREATE INDEX memory_time ON memory(created_at DESC);
+    """,
 ]
 
 

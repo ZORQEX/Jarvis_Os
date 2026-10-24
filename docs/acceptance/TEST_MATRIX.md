@@ -306,5 +306,4 @@ Measured on this laptop (i5-1235U, 23 GB, no GPU); samples and scripts in the se
 | Failing tests are never applied; only `improve/…` branches | VERIFIED MOCK | test_failing_tests_are_never_applied |
 | Both steps need the person's confirmation (HIGH risk) | VERIFIED LOCAL | test_tools_need_the_persons_confirmation |
 | Living speech → local command (no AI, no wait) | VERIFIED LOCAL | test_living_speech.py (7 phrasings; negation, «стоп», messages unchanged) |
-| «Открой папку с колледжем» opens the folder itself, any grammatical case; unknown name → the conversation | VERIFIED LOCAL | test_the_folder_itself_opens_not_a_folder_inside_it |
-
+| «Открой папку с колледжем» opens the folder itself, any grammatical case; unknown name → the conversation | VERIFIED LOCAL | test_the_folder_itself_opens_not_a_folder_inside_it || Long-term memory: remember / recall / forget by voice, facts in every AI request, near-duplicates replaced | VERIFIED LOCAL | test_memory.py (4) |

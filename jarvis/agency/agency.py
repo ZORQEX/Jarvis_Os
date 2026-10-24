@@ -78,7 +78,12 @@ def jarvis_state_line(director) -> str:
         skills = []
     if skills:
         bits.append("навыки: " + ", ".join(skills))
-    return f"[Состояние JARVIS: {'; '.join(bits)}]\n" if bits else ""
+    from ..memory import memory_line
+    try:
+        mem = memory_line(director.db)
+    except Exception:   # noqa: BLE001
+        mem = ""
+    return (f"[Состояние JARVIS: {'; '.join(bits)}]\n" if bits else "") + mem
 
 
 WRITE_GUIDE = ("\nПодготовь только черновик (ничего не отправляется). Пиши естественно и готово к отправке. "
