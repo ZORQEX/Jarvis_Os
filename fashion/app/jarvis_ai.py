@@ -68,6 +68,55 @@ def _close(turn: str) -> Turn | None:
     return t
 
 
+def _action_params() -> dict[str, tuple[set[str], list[set[str]]]]:
+    """From propose_changes' own description («set_customer_markup {customer, markup:'35', season?, …} · …»): each
+    action's parameter names and the required ones («brand|order_id» = one of them)."""
+    desc = next(t["description"] for t in agent.TOOLS if t["name"] == "propose_changes")
+    out = {}
+    for m in re.finditer(r"(\w+) \{", desc):
+        depth, i = 1, m.end()
+        while i < len(desc) and depth:
+            depth += {"{": 1, "}": -1}.get(desc[i], 0)
+            i += 1
+        body, parts, level, cur = desc[m.end():i - 1], [], 0, ""
+        for ch in body:                                   # split on top-level commas only
+            level += ch in "[{" and 1 or ch in "]}" and -1 or 0
+            if ch == "," and level == 0:
+                parts.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        parts.append(cur)
+        names, required = set(), []
+        for part in (x.strip() for x in parts if x.strip()):
+            alts = {re.match(r"[A-Za-z_]+", a.strip()).group(0) for a in part.split(":")[0].rstrip("?").split("|")
+                    if re.match(r"[A-Za-z_]+", a.strip())}
+            names |= alts
+            if not part.split(":")[0].endswith("?") and alts:
+                required.append(alts)
+        out[m.group(1)] = (names, required)
+    return out
+
+
+def check_actions(actions: list) -> str | None:
+    """A wrong parameter name must never become 0 % (seen live: «markup_percent: 25» → the markup set to 0.00 %)."""
+    known = _action_params()
+    for a in actions or []:
+        if not isinstance(a, dict):
+            return "Каждое действие — объект {action, params}"
+        name, params = a.get("action"), a.get("params") or {}
+        if name not in known:
+            continue                                      # an action the description does not list: the app decides
+        names, required = known[name]
+        bad = sorted(set(params) - names)
+        missing = [" или ".join(sorted(r)) for r in required if not (r & set(params))]
+        if bad or missing:
+            return (f"{name}: " + (f"неизвестные параметры {', '.join(bad)}; " if bad else "")
+                    + (f"не хватает {', '.join(missing)}; " if missing else "")
+                    + "ожидаются: " + ", ".join(sorted(names)) + ". Исправь и вызови снова.")
+    return None
+
+
 def spec() -> dict:
     """What JARVIS's Claude needs: the business rules and the typed tools (the same ones the app's own turn had)."""
     return {"system": agent.SYSTEM, "tools": [t for t in agent.TOOLS if t["name"] not in SKIP]}
@@ -82,7 +131,8 @@ def call(db: Session, turn: str, conversation: str, name: str, params: dict, req
     with t.lock:
         if t.closed:
             return {"error": "Этот ход уже завершён — ничего не подготовлено"}
-        output = agent.run_tool(db, name, params or {}, t.pending, t.screen)
+        problem = check_actions((params or {}).get("actions")) if name == "propose_changes" else None
+        output = {"error": problem, "saved": False} if problem else agent.run_tool(db, name, params or {}, t.pending, t.screen)
         t.calls.append({"name": name, "input": params, "output": output})
     if name == "ask_user" and "error" not in output:
         t.question = {"question": (params or {}).get("question"), "options": (params or {}).get("options") or []}

@@ -322,7 +322,12 @@ ORDERS_ACTIONS = ("list_brands_and_seasons, get_order_details{season?,brand}, ge
                   "review_ambiguous_allocations, inspect_imports, compare_revisions{season?,since:YYYY-MM-DD}, "
                   "preview_customer_report{customer,season?,brands?}, select_items{season?,brands?,customers?,status?,"
                   "categories?,sizes?,item_ids?…}, export_documents{…filters, formats:[xlsx|pdf], audiences?}, "
-                  "check_data{season?,brands?}, propose_changes{summary, actions:[{action, params}]}, "
+                  "check_data{season?,brands?}, propose_changes{summary, actions:[{action, params}]} — actions: "
+                  "set_customer_markup{customer, markup:'35', season?, brand?, order_id?}, set_factory_rate{season?, "
+                  "brand|order_id, portions:[{rate:'25', share:'50'}], deposit_rate?}, set_manual_price{item_id, "
+                  "unit_price}, update_item{item_id, size?, quantity?, color?}, move_item{item_id, customer, quantity?}, "
+                  "set_status{item_ids, status}, record_payment{payer, amount, to:factory|owner, confirmed, date?}, "
+                  "confirm_payment{payment_id}, set_owner{customer} (exact parameter names), "
                   "prepare_documents{customer,season?,brands?}, navigate{section, season?, brand?, customer?}, "
                   "inspect_workbook{action:outline|rows|search,…}, compare_uploaded_file{token,season?}, "
                   "ask_user{question, options}")

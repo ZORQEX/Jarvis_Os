@@ -374,8 +374,11 @@ class Agency:
             r.message_id = mid
         if voice and director.speech:
             asyncio.get_running_loop().call_later(3.5, director.speech.ack, tid)
+        tools = "\n".join(f"- {t['name']}({', '.join(t.get('input_schema', {}).get('properties', {}))}): "
+                          f"{t.get('description', '')[:1500]}" for t in spec.get("tools", []))
         instruction = (("[Правила модуля «Заказы» (данные для этого ответа):]\n" + spec["system"] + "\n\n" if spec.get("system")
-                        else "") + "[Работай через mcp__jarvis__orders: action = имя инструмента модуля, params = его параметры. "
+                        else "") + ("[Инструменты модуля — точные имена параметров:]\n" + tools + "\n\n" if tools else "")
+                       + "[Работай через mcp__jarvis__orders: action = имя инструмента модуля, params = ровно его параметры. "
                        "Экран — раздел «Заказы» JARVIS.]\n\nЗапрос владелицы о заказах: " + text)
         o = await self._chat_step(director, tid, cid, s, lambda t: self.bus.publish(
             "assistant.delta", {"message_id": mid, "text": t}, tid), instruction=instruction)

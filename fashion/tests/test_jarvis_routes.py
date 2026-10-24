@@ -170,3 +170,18 @@ def test_proposal_state_and_a_late_call_after_the_turn_ended(client, db, tmp_pat
     t = jarvis_ai.open_turn("t_late2", conv, "x")
     jarvis_ai._close("t_late2")
     assert t.closed
+
+
+def test_a_wrong_parameter_name_is_refused_not_turned_into_zero_percent(client, db, tmp_path, monkeypatch):  # noqa: F811
+    """Seen live 2026-10-25: «markup_percent: 25» was taken as no markup → a 0.00 % proposal."""
+    imported(db, tmp_path)
+    monkeypatch.setattr(settings, "ai_provider", "claude-code")
+    conv = "b" * 16
+    client.post("/api/agent/message", json={"conversation": conv, "text": "Почему у IDS такая сумма и что с ней делать?",
+                                            "jarvis": True, "turn": "t_bad"})
+    out = client.post("/api/jarvis/ai/tool", json={"turn": "t_bad", "conversation": conv, "name": "propose_changes",
+                                                   "params": {"summary": "IDS 25 %", "actions": [{"action": "set_customer_markup",
+                                                              "params": {"customer": "IDS", "markup_percent": 25}}]}}).json()
+    assert "markup_percent" in out["error"] and "markup" in out["error"] and out["saved"] is False
+    fin = client.post("/api/jarvis/ai/finish", json={"turn": "t_bad", "reply": "Не получилось."}).json()
+    assert fin["proposal"] is None                                     # nothing to confirm
