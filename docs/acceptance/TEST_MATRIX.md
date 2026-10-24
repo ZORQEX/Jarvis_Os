@@ -310,3 +310,16 @@ Measured on this laptop (i5-1235U, 23 GB, no GPU); samples and scripts in the se
 | Long-term memory: remember / recall / forget by voice, facts in every AI request, near-duplicates replaced | VERIFIED LOCAL | test_memory.py (4) |
 | End of a phrase by the voice (Smart Turn v3.2, 23 languages incl. Russian, 93.5 % in the authors' benchmark) | VERIFIED LOCAL | features = transformers' Whisper extractor to 1e-5; ~63 ms on this CPU; finished phrases 0.85–0.99 over 5 syntheses (never held); a phrase cut mid-thought is caught at some cut points only (0.01–0.99 by where it is cut) — only confident answers are used, otherwise behaviour as before (test_turn.py, test_a_voice_that_trails_off_waits_for_the_rest) |
 | Self-improvement end to end with the real Claude (dev core) | VERIFIED LIVE | «Улучши себя: определитель языка…» → improve_issues → self_improve (approved) → branch with a test, JARVIS's own run 389 passed + UI unit in 202 s → «Примени» → merged after re-testing the merged code (394 + 42), restarted itself in 91 s (commit 0cc5171). Review found «друга»/«доброго» shared with Russian — fixed in f487e7f |
+
+## WhatsApp without blind waits; a journal of problems that are still there (2026-10-24 night)
+
+Found in the real JARVIS's records: the 4 «WhatsApp Web не дал найти контакт» failures (9–11 s to the answer) were all on
+23.10 before the popover fix; the same request worked on 24.10. Sends since: 3.7–6.2 s.
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Search / open chat wait for the results instead of 1.5 s each (twice per message) | VERIFIED LOCAL (Chromium, page copying WhatsApp's list, results late and in parts) | test_search_waits_for_all_results_not_a_fixed_pause (both «Рома» found, 1.3 s incl. a 0.7 s late result), test_opening_a_chat_stops_waiting_when_it_is_listed (< 1 s) |
+| The next message to the same person does not search again; another open chat is never taken for it | VERIFIED LOCAL | test_the_chat_already_open_is_not_searched_again, test_another_open_chat_is_never_taken_for_the_one_asked |
+| A covering pop-up is closed before clicking (was: 5 s click attempt first) | VERIFIED LOCAL | popover test 5.8 → < 1.3 s; unknown layer 9.1 → 4.1 s |
+| Real WhatsApp send with the new code | NOT VERIFIED yet | needs the real core restarted and a message to self |
+| Problem journal: a request done fine later is not reported | VERIFIED LOCAL | test_a_problem_that_went_away_is_not_in_the_journal; real records (read-only): WhatsApp 4 → 1, e-mail failure gone |

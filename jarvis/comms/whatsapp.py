@@ -381,14 +381,18 @@ class WhatsAppProvider(Provider):
             await asyncio.sleep(0.6)
 
     async def _click(self, el, field: bool = True) -> None:
+        # Pop-ups first (a few queries when there are none): clicking through a covering layer waits out the whole
+        # click timeout before anything else is tried (measured: 5.8 s with a «what's new» popover, 9 s with an
+        # unknown layer).
+        await self._dismiss_popups()
         try:
-            await el.click(timeout=5000)
+            await el.click(timeout=2000)
             return
-        except Exception:   # noqa: BLE001 — something covers it: close pop-ups and retry
+        except Exception:   # noqa: BLE001 — something still covers it: close pop-ups and retry
             pass
         await self._dismiss_popups()
         try:
-            await el.click(timeout=4000)
+            await el.click(timeout=2000)
             return
         except Exception:   # noqa: BLE001
             pass
@@ -400,6 +404,48 @@ class WhatsAppProvider(Provider):
             await el.evaluate("(e) => e.focus()")
         else:
             await el.dispatch_event("click")
+
+    async def _chat_titles(self) -> list[str]:
+        return await self.page.evaluate(
+            "() => [...document.querySelectorAll('#pane-side span[title]')].map((s) => s.getAttribute('title'))")
+
+    async def _type_search(self, text: str, until: str | None = None, settle: float = 2.5) -> None:
+        """Type into the chat search and return as soon as the list shows the results, instead of a fixed 1.5 s wait
+        (twice per message: once to find the person, once to open the chat). `until` — an exact chat title: done when
+        it is in the list. Otherwise done when the list has changed from what it showed before typing and then stayed
+        the same for 0.4 s (results arrive in parts: returning early could miss a second chat with the same name)."""
+        box = await self._first(SEL_SEARCH, 10)
+        if not box:
+            raise CommsError("Не нашёл поиск в WhatsApp Web", "unknown", "search box selector", retryable=True)
+        await self._click(box)
+        await self.page.keyboard.press("Control+A")
+        await self.page.keyboard.press("Backspace")
+        before = await self._chat_titles()
+        await self.page.keyboard.insert_text(text)
+        t0 = time.time()
+        last, since = None, t0
+        while time.time() - t0 < settle:
+            await asyncio.sleep(0.1)
+            now_ = await self._chat_titles()
+            if until is not None and until in now_:
+                return
+            if now_ != last:
+                last, since = now_, time.time()
+            elif until is None and now_ != before and time.time() - since >= 0.4:
+                return
+
+    async def _header_title(self, timeout: float) -> str:
+        """Name in the open chat's header. WhatsApp draws emoji in names as <img alt="❤️">: text AND image alts are
+        read, or «Мама ❤️» looks like «Мама » and the (correct) chat is refused — measured 2026-10-21."""
+        head = await self._first(SEL_HEADER_TITLE, timeout)
+        if not head:
+            return ""
+        title = await head.evaluate("""(el) => {
+          let s = '';
+          const walk = (n) => { for (const c of n.childNodes) {
+            if (c.nodeType === 3) s += c.textContent; else if (c.tagName === 'IMG') s += c.alt || ''; else walk(c); } };
+          walk(el); return s; }""")
+        return title or (await head.get_attribute("title") or "")
 
     # ---------------------------------------------------------------- contacts
     async def search(self, name: str) -> list[Contact]:
@@ -421,14 +467,7 @@ class WhatsAppProvider(Provider):
         async with self._lock:
             await self._ensure()
             try:
-                box = await self._first(SEL_SEARCH, 10)
-                if not box:
-                    raise CommsError("Не нашёл поиск в WhatsApp Web", "unknown", "search box selector")
-                await self._click(box)
-                await self.page.keyboard.press("Control+A")
-                await self.page.keyboard.press("Backspace")
-                await self.page.keyboard.insert_text(name)
-                await asyncio.sleep(1.5)
+                await self._type_search(name)
                 # One entry per result row: the chat name (first title) and the last message (second title), so that
                 # three «Рома» can be told apart. Taking every span[title] mixed message previews in as «contacts».
                 rows = await self.page.evaluate("""() => {
@@ -474,14 +513,9 @@ class WhatsAppProvider(Provider):
                     raise CommsError(f"Номера +{key} нет в WhatsApp", "not_found")
                 raise CommsError("Не открылся чат WhatsApp", "unknown", "composer not found", retryable=True)
             return
-        box = await self._first(SEL_SEARCH, 10)
-        if not box:
-            raise CommsError("Не нашёл поиск в WhatsApp Web", "unknown", retryable=True)
-        await self._click(box)
-        await self.page.keyboard.press("Control+A")
-        await self.page.keyboard.press("Backspace")
-        await self.page.keyboard.insert_text(key)
-        await asyncio.sleep(1.5)
+        if _same_name(await self._header_title(0), key) and await self._first(SEL_COMPOSER):
+            return                  # this chat is already open (the next message to the same person): no search
+        await self._type_search(key, until=key)
         target = None
         for el in await self.page.query_selector_all("#pane-side span[title]"):
             if (await el.get_attribute("title")) == key:
@@ -490,17 +524,7 @@ class WhatsAppProvider(Provider):
         if not target:
             raise CommsError(f"Чат «{key}» не найден в WhatsApp", "not_found")
         await self._click(target, field=False)
-        head = await self._first(SEL_HEADER_TITLE, 10)
-        title = ""
-        if head:
-            # WhatsApp draws emoji in names as <img alt="❤️">: read text AND image alts, or «Мама ❤️» looks like «Мама »
-            # and the (correct) chat is refused — measured 2026-10-21.
-            title = await head.evaluate("""(el) => {
-              let s = '';
-              const walk = (n) => { for (const c of n.childNodes) {
-                if (c.nodeType === 3) s += c.textContent; else if (c.tagName === 'IMG') s += c.alt || ''; else walk(c); } };
-              walk(el); return s; }""")
-            title = title or (await head.get_attribute("title") or "")
+        title = await self._header_title(10)
         if not _same_name(title, key):
             # Never type into a chat we are not sure about.
             raise CommsError("Открылся не тот чат WhatsApp — отправка остановлена", "rejected", f"header={title!r}",

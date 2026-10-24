@@ -32,6 +32,25 @@ def test_journal_finds_repeats_failures_and_slow_answers(core):
     assert list(issues)[0] == "failed"                             # the most frequent first
 
 
+
+def test_a_problem_that_went_away_is_not_in_the_journal(core):
+    """The same request done fine later = solved (four WhatsApp failures of 23.10 topped the journal after the fix)."""
+    d, db, t = core.director, core.db, time.time()
+    cid = d.conversation_id()
+
+    def task(text, state, at, error=None):
+        tid = core.tasks.create(text, cid, route="comms", level=1)
+        db.execute("UPDATE tasks SET state=?, error=?, created_at=? WHERE id=?", (state, error, at, tid))
+
+    task("Отправь маме в WhatsApp привет", "failed", t - 3600, "WhatsApp Web не дал найти контакт")
+    task("Отправь Мама ❤️ в WhatsApp: привет", "failed", t - 3500, "WhatsApp Web не дал найти контакт")
+    task("Отправь маме в WhatsApp привет.", "completed", t - 600)                 # works after the fix
+    task("Открой папку с отчётами сейчас", "completed", t - 3000)
+    task("Открой папку с отчётами сейчас", "failed", t - 60, "Папка не найдена")   # broke again after working
+    issues = imp.collect_issues(db)
+    assert [i["title"] for i in issues] == ["Ошибка: Папка не найдена"]
+
+
 def git(cwd, *a):
     return subprocess.run(["git", "-C", str(cwd), *a], capture_output=True, text=True, check=True).stdout
 

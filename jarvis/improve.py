@@ -53,13 +53,23 @@ def collect_issues(db, days: float = 7.0, limit: int = 8) -> list[dict]:
     examples and an `evidence` text that goes into the improvement task as it is."""
     since = time.time() - days * 86400
     out: list[dict] = []
+    # A problem that went away is not a problem any more: the same request was done fine later (measured 2026-10-24:
+    # four WhatsApp search failures of 23.10, fixed that evening, still topped the journal and would have been
+    # «improved» again).
+    done = [(r["created_at"], _norm(r["request"])) for r in
+            db.all("SELECT created_at, request FROM tasks WHERE state='completed' AND created_at>?", (since,))]
+
+    def solved(text: str, at: float) -> bool:
+        n = _norm(text)
+        return any(t > at and _same(n, d) for t, d in done)
 
     # 1. The person had to say the same thing again within 2 minutes: JARVIS did not understand or did not act.
     rows = [dict(r) for r in db.all("SELECT created_at, text, meta FROM messages WHERE role='user' AND created_at>? "
                                     "ORDER BY created_at", (since,))]
     reps, last = [], 0.0
     for a, b in zip(rows, rows[1:]):
-        if b["created_at"] - a["created_at"] < 120 and _same(_norm(a["text"]), _norm(b["text"])):
+        if b["created_at"] - a["created_at"] < 120 and _same(_norm(a["text"]), _norm(b["text"])) \
+                and not solved(b["text"], b["created_at"] + 1):
             reps.append(b["text"][:120])
             last = b["created_at"]
     if reps:
@@ -73,6 +83,8 @@ def collect_issues(db, days: float = 7.0, limit: int = 8) -> list[dict]:
     lasts: dict[str, float] = {}
     for r in db.all("SELECT request, error, created_at FROM tasks WHERE state='failed' AND created_at>? "
                     "AND route!='ui_read'", (since,)):
+        if solved(r["request"], r["created_at"]):
+            continue
         key = re.sub(r"\s+", " ", (r["error"] or "без описания"))[:140]
         groups.setdefault(key, []).append(r["request"][:100])
         lasts[key] = max(lasts.get(key, 0.0), r["created_at"])
