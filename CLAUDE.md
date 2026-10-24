@@ -42,13 +42,23 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,
   then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Settings →
   «Самоулучшение». Tests use a temporary repo (monkeypatch `REPO`/`WORK`) — never the real one.
-- «Заказы» (`jarvis/fashion.py`): the core starts the app (127.0.0.1:`fashion_port` 8797, data <data>/fashion,
-  FASHION_AI_PROVIDER=claude-code), the window frames it (CSP frame-src that origin only, `workspaces/orders.js`).
-  `/api/jarvis/claims` decides if a phrase is about orders (codes as GigaAM writes them, brands, seasons, an answer to
-  a pending proposal) → `Director._run_fashion` → `/api/agent/message` in the shared dialog (kv fashion_conversation,
-  adopted by every app page); spoken text = the app's short `speech`. Dev core: set another `fashion_port`.
+- «Заказы» (`jarvis/fashion.py`): the core starts the module (127.0.0.1:`fashion_port` 8797, data <data>/fashion),
+  the window frames its pages (CSP frame-src that origin only, `workspaces/orders.js`: its sections are tabs in JARVIS's
+  header). Inside the frame (Sec-Fetch-Dest: iframe) the module drops its own chrome and takes JARVIS's colours
+  (`fashion/app/jarvis_embed.py`, `static/jarvis.css`). ONE assistant: `/api/jarvis/claims` decides if a phrase is about
+  orders → `Director._run_fashion` → `/api/agent/message` (jarvis=true, turn=task id): the module's rules answer, or it
+  hands the turn back (`handoff`) → `Agency.run_orders` = JARVIS's conversation with the `orders` tool (Gateway →
+  `/api/jarvis/ai/tool`, `fashion/app/jarvis_ai.py`) → `/api/jarvis/ai/finish` stores the proposal → card with
+  «Подтвердить» in JARVIS's chat (`render.orderCard`, ws `fashion.decide`, UI click only). Never add a second
+  assistant (the old `fashion_ask` was removed). Dev core: set another `fashion_port`.
   Factory PDFs: `fashion/app/pdf_order.py` (pdfplumber table + photos → factory-style workbook → analyze_workbook).
   Russian: `fashion/app/i18n_ru.py` middleware (FASHION_LANG=ru) — add phrases there, never edit upstream templates.
+- Fast web search (`jarvis/research.py`, from jarvis-os research): local SearXNG child (~/.local/share/jarvis/searxng,
+  pinned, `searxng_port` 8796; a healthy one on the port is reused, ours is adopted by pidfile and stopped with us).
+  Agency research steps are the `web_search` tool (no AI start), then one Claude answer from the numbered sources; the
+  conversation can call it too; its results stay in the conversation ctx (`last_research`) for Claude Code /
+  follow-ups (`agency/tools.research_context`). Prices: `tools/market.py` (router, no AI). Tests: fake SearXNG
+  (`tests/test_research.py`), `research_enabled=False` in conftest — never the real one from tests.
 - The computer (from jarvis-os): `tools/machine.py` (processes, disk, diagnostics, brightness, appearance, audio
   devices, network, power), `tools/desk.py` (clipboard, media, OCR), `tools/daily.py` (weather, briefing) with fast
   routes in `router._caps_route`; one risk per tool (look = LOW, end/delete = MODERATE, power = HIGH). Never run the

@@ -1,0 +1,64 @@
+# SearXNG for JARVIS's fast web search (jarvis/research.py), from morph-rq/jarvis-os omarchy/research/searxng-settings.yml.
+# JARVIS copies this once to <state>/searxng/settings.yml with a generated secret_key (mode 0600); edit that copy.
+# Everything not set here is SearXNG's own default (use_default_settings).
+use_default_settings:
+  engines:
+    # Only the engines JARVIS asks for by name (research.GROUPS); the rest are not loaded (less memory, faster start).
+    keep_only:
+      - duckduckgo
+      - duckduckgo news
+      - brave
+      - brave.news
+      - wikipedia
+      - wikidata
+      - google
+      - google news
+      - bing
+      - bing news
+      - yandex
+      - qwant
+      - qwant news
+      - currency
+
+general:
+  instance_name: "JARVIS search (local)"
+  enable_metrics: true
+
+search:
+  safe_search: 0
+  autocomplete: ""              # nothing is sent while typing
+  default_lang: "auto"
+  formats: [html, json]         # json is what JARVIS reads
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+
+server:
+  bind_address: "127.0.0.1"     # loopback only: never reachable from the network
+  port: 8796
+  secret_key: "@SECRET@"
+  limiter: false                # one local user; the limiter is for public instances
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+outgoing:
+  request_timeout: 2.5          # per engine (JARVIS asks engines in parallel and stops waiting earlier)
+  max_request_timeout: 6.0
+  pool_connections: 40
+  pool_maxsize: 8
+  enable_http2: true
+
+valkey:
+  url: false
+
+engines:
+  # Off in SearXNG's defaults (they often answer scrapers with a CAPTCHA); loaded so JARVIS can ask for them by name
+  # as the fallback group, never first.
+  - name: google
+    disabled: true
+  - name: bing
+    disabled: true
+  - name: yandex
+    disabled: true
+  - name: qwant
+    disabled: true

@@ -140,8 +140,10 @@ async def test_an_old_process_ending_never_fails_the_new_question(tmp_path):
 
 
 async def test_single_web_question_keeps_sources_and_checks(core, fake):
-    fake([["Курс сегодня 92,1 ₽. Источник: https://cbr.ru/currency_base/daily/"]])
-    tid = await core.director.submit("Найди в интернете курс доллара на сегодня")
+    # (without the fast search — off in tests — a web question goes to the warm conversation and its WebSearch;
+    # «курс доллара» itself is now market_quote, no AI)
+    fake([["Revit 2027 вышел в апреле 2026 года. Источник: https://www.autodesk.com/products/revit/new-features"]])
+    tid = await core.director.submit("Найди в интернете, когда вышел Revit 2027")
     await wait_done(core, tid)
     last = core.director.messages(core.director.conversation_id())[-1]
     assert "Проверка: Ответ модели" not in last["text"]

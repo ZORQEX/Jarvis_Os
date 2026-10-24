@@ -138,6 +138,23 @@ async def russian_pages(request: Request, call_next):
 
 
 @app.middleware("http")
+async def jarvis_embed(request: Request, call_next):
+    """Inside JARVIS's window: JARVIS's look, no second app chrome (app/jarvis_embed.py; added for JARVIS)."""
+    from app import jarvis_embed
+    if not jarvis_embed.embedded(request):
+        return await call_next(request)
+    if request.method == "GET" and request.url.path in jarvis_embed.REDIRECT:
+        return RedirectResponse(jarvis_embed.REDIRECT[request.url.path], status_code=303)
+    response = await call_next(request)
+    if not response.headers.get("content-type", "").startswith("text/html"):
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+    return Response(jarvis_embed.embed_html(body.decode("utf-8", "replace")), status_code=response.status_code,
+                    headers=headers, media_type="text/html")
+
+
+@app.middleware("http")
 async def refuse_cross_site_writes(request: Request, call_next):
     """A web page from another site open in the same browser must not change data here (CSRF): an unsafe request
     the browser marks as cross-site is refused. The app's own pages, an embedding JARVIS window and scripts are fine."""

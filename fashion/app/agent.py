@@ -588,8 +588,9 @@ def memory_of(db: Session, conversation: str) -> dict:
 
 
 def handle(db: Session, conversation: str, text: str, screen: dict | None = None, client: ModelClient | None = None,
-           channel: str = "text", raw: str | None = None) -> TurnResult:
-    """One turn, typed or spoken (``channel="voice"``; ``raw`` is the transcript before normalisation)."""
+           channel: str = "text", raw: str | None = None, handoff: bool = False) -> TurnResult:
+    """One turn, typed or spoken (``channel="voice"``; ``raw`` is the transcript before normalisation).
+    ``handoff`` (JARVIS): what the rules cannot answer goes back to JARVIS's own AI (app/jarvis_ai.py)."""
     from app.assistant_flow import intercept
     text = (text or "").strip()
     if not text:
@@ -616,6 +617,8 @@ def handle(db: Session, conversation: str, text: str, screen: dict | None = None
             # Navigation, "what is open", the file picker, dropped-file follow-ups, workbook rows and the deposit
             # table have exact rule handlers: they answer in milliseconds, so voice does not wait for the model.
             result = RuleInterpreter(db, conversation, screen).fast(text)
+            if result is None and handoff:      # JARVIS: its conversation answers with these tools (app/jarvis_ai.py)
+                return TurnResult("", data=memory, client={"handoff": True, "text": text})
             if result is None:
                 try:
                     result = _claude_code_turn(db, conversation, text, screen) if claude_code \

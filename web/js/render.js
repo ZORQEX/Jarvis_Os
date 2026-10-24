@@ -332,3 +332,44 @@ export function approvalCard(a) {
     </div>` : `<div class="actions faint" style="font-size:12px">${fmtWhen(a.decided_at || a.created_at)}</div>`}
   </div>`;
 }
+
+/** 12 345,50 € — narrow no-break spaces between thousands (JARVIS's rule for money). */
+export function eur(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return esc(String(v ?? ""));
+  const [i, f] = Math.abs(n).toFixed(2).split(".");
+  return `${n < 0 ? "−" : ""}${i.replace(/\B(?=(\d{3})+(?!\d))/g, " ")},${f} €`;
+}
+
+/** An orders change waiting for the owner («Заказы» module proposal): what will change, money before / after, and the
+ * buttons. Nothing is saved before «Подтвердить» (the click goes to the core, never to the model). */
+export function orderCard(f, messageId) {
+  const p = f?.card;
+  const q = f?.question;
+  const parts = [];
+  if (p && p.id) {
+    const st = p.status || "pending";
+    const head = { pending: "Изменение в заказах — ждёт вашего решения", committed: "Сохранено в заказах", cancelled: "Отменено" }[st]
+      || esc(st);
+    const diff = (p.diff || []).length ? `<table class="ord-diff"><thead><tr><th></th><th>Было</th><th>Станет</th><th>Разница</th></tr></thead><tbody>${
+      p.diff.map((r) => { const d = Number(r.after) - Number(r.before);
+        return `<tr><td>${esc(r.label || "")}${r.season ? ` <span class="faint">${esc(r.season)}</span>` : ""}</td><td>${eur(r.before)}</td>
+          <td><strong>${eur(r.after)}</strong></td><td class="${d > 0 ? "up" : d < 0 ? "down" : ""}">${d > 0 ? "+" : ""}${eur(d)}</td></tr>`; }).join("")}</tbody></table>` : "";
+    const items = [...(p.will_do || []).map((l) => `<li>${esc(l)}</li>`),
+      ...(p.documents || []).map((d) => `<li>Excel + PDF для ${esc(d.customer)} (${esc(d.season)})</li>`)].join("");
+    parts.push(`<div class="card approval ord-card ${st === "pending" ? "" : "closed"}" data-order="${esc(p.id)}">
+      <div class="card-head">${ICON.shield}<strong>${head}</strong></div>
+      ${p.summary ? `<div class="what">${esc(p.summary)}</div>` : ""}
+      ${items ? `<ul class="ord-will">${items}</ul>` : ""}${diff}
+      ${st === "pending" ? `<div class="actions">
+        <button class="btn warn" data-order-decide="commit" data-proposal="${esc(p.id)}" data-mid="${esc(messageId || "")}">${ICON.check} Подтвердить</button>
+        <button class="btn ghost" data-order-decide="cancel" data-proposal="${esc(p.id)}" data-mid="${esc(messageId || "")}">Отменить</button>
+        <span class="faint voice-hint">${p.button_only ? "только кнопкой" : `${ICON.mic} или скажите «да, сохрани»`}</span></div>` : ""}
+    </div>`);
+  }
+  if (q && (q.options || []).length) {
+    parts.push(`<div class="suggestions ord-options">${q.options.slice(0, 6).map((o) =>
+      `<button class="suggestion" data-suggest="${esc(o)}">${esc(o)}</button>`).join("")}</div>`);
+  }
+  return parts.join("");
+}

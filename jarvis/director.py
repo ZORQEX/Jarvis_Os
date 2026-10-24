@@ -90,6 +90,7 @@ class Director:
         self.history = None          # ActionHistory (lasting actions only), set by the composition root
         self.github = None           # GitHub account for site publishing (publish.GitHub)
         self.fashion = None          # «Заказы»: the fashion-orders app (fashion.FashionService)
+        self.research = None         # fast web search (research.Research: local SearXNG)
         self.dictation = None        # dictation.Dictation: speech typed into the person's window
         self.view = ""               # the workspace the JARVIS window shows (reported by the window)
         self.hub = None              # CommsHub
@@ -290,33 +291,66 @@ class Director:
             self._start_task(part, cid, route, source, None, speak, client, batch=batch)
 
     async def _run_fashion(self, tid: str, cid: str, text: str, route: rt.Route) -> None:
-        """A request about orders → the orders assistant (same dialog as the «Заказы» workspace); JARVIS speaks its
-        short answer and, for a spoken request, shows the workspace so the figures and the «Подтвердить» card are seen."""
+        """A request about orders → the orders module: its rules answer at once; what they cannot answer is handed back
+        and answered by JARVIS's own conversation with the module's tools (Agency.run_orders). JARVIS speaks the
+        answer; a change waits for «Подтвердить» on the card in JARVIS's chat; for a spoken request the workspace
+        is shown so the figures are seen."""
         r = self.rt.get(tid)
         voice = bool(r and r.voice)
         loop = asyncio.get_running_loop()
         ack = loop.call_later(1.5, self.speech.ack, tid) if voice and self.speech else None
         try:
-            out = await self.fashion.ask(rt.strip_wake(text) or text, "voice" if voice else "text", raw=text)
-        except Exception as e:   # noqa: BLE001 — the app is down or failed: say so, do not pretend
+            out = await self.fashion.ask(rt.strip_wake(text) or text, "voice" if voice else "text", raw=text, turn=tid)
+        except Exception as e:   # noqa: BLE001 — the module is down or failed: say so, do not pretend
             self.audit.write("fashion.failed", task_id=tid, error=repr(e)[:200])
-            return self._finish(tid, cid, f"Приложение заказов не ответило: {e}. Ничего не изменено.", failed=True,
+            return self._finish(tid, cid, f"Модуль заказов не ответил: {e}. Ничего не изменено.", failed=True,
                                 meta={"route": "fashion", "level": 1})
         finally:
             if ack:
                 ack.cancel()
-        reply = str(out.get("reply") or "Готово.")
+        if out.get("handoff"):
+            return await self.agency.run_orders(self, tid, cid, out.get("text") or text, route)
+        await self.present_orders(tid, cid, out, route.why, voice)
+
+    async def present_orders(self, tid: str, cid: str, out: dict, why: str, voice: bool, text: str | None = None,
+                             mid: str | None = None, meta: dict | None = None, failed: bool = False) -> None:
+        """One way to end an orders turn, whoever answered (the module's rules or JARVIS's conversation): the reply,
+        the proposal card (with «Подтвердить»), the module page to show."""
+        reply = text if text is not None else str(out.get("reply") or "Готово.")
         proposal = out.get("proposal") or {}
         client = out.get("client") or {}
         self.bus.publish("fashion.turn", {"conversation": self.fashion.conversation(), "navigate": client.get("navigate"),
                                           "committed": proposal.get("status") == "committed", "show": voice}, tid)
         if voice and self.view != "orders":
             await self.execute(tid, cid, "window_show", {"view": "orders"}, "Показать заказы")
-        self._finish(tid, cid, reply, meta={"route": "fashion", "level": 1, "why": route.why,
-                                            "speech": out.get("speech") or None,
-                                            "fashion": {"proposal": proposal.get("id"), "status": proposal.get("status"),
-                                                        "question": bool(out.get("question"))}},
-                     failed=bool(out.get("error")))
+        self._finish(tid, cid, reply, mid=mid, failed=failed or bool(out.get("error")),
+                     meta={"route": "fashion", "level": 1, "why": why, "speech": out.get("speech") or None, **(meta or {}),
+                           "fashion": {"proposal": proposal.get("id"), "status": proposal.get("status"),
+                                       "question": out.get("question") or None, "card": proposal or None}})
+
+    async def decide_order(self, proposal: str, approve: bool, message_id: str | None = None) -> dict:
+        """The owner's click on «Подтвердить» / «Отменить» in JARVIS's chat (UI only, like every approval)."""
+        if not self.fashion:
+            raise ValueError("Модуль заказов выключен")
+        out = await self.fashion.decide(proposal, approve)
+        status = "committed" if approve else "cancelled"
+        if message_id:
+            row = self.db.one("SELECT meta FROM messages WHERE id=?", (message_id,))
+            if row:
+                meta = loads(row["meta"], {}) or {}
+                f = meta.get("fashion") or {}
+                if f.get("proposal") == proposal:
+                    f["status"] = status
+                    if f.get("card"):
+                        f["card"] = {**f["card"], "status": status}
+                    meta["fashion"] = f
+                    self.db.execute("UPDATE messages SET meta=? WHERE id=?", (dumps(meta), message_id))
+                    self.bus.publish("message.updated", {"message_id": message_id, "meta": meta})
+        self.audit.write("fashion.decided", proposal=proposal, approve=approve)
+        self.bus.publish("fashion.turn", {"conversation": self.fashion.conversation(), "navigate": out.get("navigate"),
+                                          "committed": approve, "show": False})
+        return {"status": status, "messages": out.get("messages") or [], "documents": out.get("documents") or [],
+                "navigate": out.get("navigate")}
 
     async def run_ui_tool(self, tool: str, args: dict) -> str:
         """A button in the UI asked for a tool directly (no text command)."""

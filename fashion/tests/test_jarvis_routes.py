@@ -81,3 +81,57 @@ def test_endpoints_and_cross_site_writes(client, db, tmp_path, monkeypatch):  # 
 def test_what_the_local_recogniser_writes(heard, expected):
     from app.voice import normalize_transcript
     assert normalize_transcript(heard, ["AA", "IDS", "SS", "ALINA"], ["Dior cruise"]) == expected
+
+
+# --- JARVIS's own AI on this app's tools (app/jarvis_ai.py) and the page inside JARVIS's frame (app/jarvis_embed.py) --
+def test_no_rule_answer_is_handed_to_jarvis_and_its_tools_make_a_proposal(client, db, tmp_path, monkeypatch):  # noqa: F811
+    imported(db, tmp_path)
+    monkeypatch.setattr(settings, "ai_provider", "claude-code")
+    from app import claude_code
+
+    def no_second_assistant(*a, **k):
+        raise AssertionError("inside JARVIS this app never starts its own AI")
+    monkeypatch.setattr(claude_code, "run_turn", no_second_assistant)
+    conv = "e" * 16
+    out = client.post("/api/agent/message", json={"conversation": conv, "text": "Почему у IDS такая сумма и что с ней делать?",
+                                                   "jarvis": True, "turn": "t_test1"}).json()
+    assert out["handoff"] is True and out["turn"] == "t_test1" and "IDS" in out["text"]
+    spec = client.get("/api/jarvis/ai").json()
+    names = {t["name"] for t in spec["tools"]}
+    assert "propose_changes" in names and "open_file_picker" not in names and "ТОЛЬКО из результатов" in spec["system"]
+    alloc = client.post("/api/jarvis/ai/tool", json={"turn": "t_test1", "conversation": conv,
+                                                     "name": "get_customer_allocations", "params": {"customer": "IDS"}}).json()
+    assert "error" not in alloc
+    prop = client.post("/api/jarvis/ai/tool", json={"turn": "t_test1", "conversation": conv, "name": "propose_changes",
+                                                    "params": {"summary": "IDS 35 %", "actions": [{"action": "set_customer_markup",
+                                                               "params": {"customer": "IDS", "markup": "35"}}]}}).json()
+    assert prop["pending_approval"] is True and prop["saved"] is False and "Подтвердить" in prop["note"]
+    fin = client.post("/api/jarvis/ai/finish", json={"turn": "t_test1", "reply": "Предлагаю IDS 35 %."}).json()
+    assert fin["proposal"]["status"] == "pending" and fin["reply"] == "Предлагаю IDS 35 %." and fin["speech"]
+    assert claims(db, "да, сохрани", conv)["claim"] == "strong"          # «да» now answers JARVIS's proposal
+    hist = agent.history(db, conv)
+    assert [m.role for m in hist][-2:] == ["user", "assistant"] and hist[-1].text == "Предлагаю IDS 35 %."
+    bad = client.post("/api/jarvis/ai/tool", json={"turn": "../x", "conversation": conv, "name": "check_data"})
+    assert bad.status_code == 422
+    assert client.post("/api/jarvis/ai/tool", json={"turn": "t_test2", "conversation": conv,
+                                                    "name": "shell", "params": {}}).json()["error"].startswith("Неизвестный")
+
+
+def test_without_jarvis_the_app_keeps_its_own_assistant(client, db, tmp_path, monkeypatch):  # noqa: F811
+    imported(db, tmp_path)
+    monkeypatch.setattr(settings, "ai_provider", "")
+    out = client.post("/api/agent/message", json={"conversation": "f" * 16, "text": "Почему у IDS такая сумма?"}).json()
+    assert "handoff" not in out and out["reply"]                         # rules answer (no key here), as before
+
+
+def test_a_page_in_jarvis_frame_is_part_of_jarvis(client, db, tmp_path, monkeypatch):  # noqa: F811
+    imported(db, tmp_path)
+    monkeypatch.setattr(settings, "jarvis_origin", "http://127.0.0.1:8791")
+    framed = client.get("/board", headers={"Sec-Fetch-Dest": "iframe"}).text
+    assert "<html" in framed and "data-jarvis" in framed and "/static/jarvis.css" in framed and 'class="in-jarvis' in framed
+    direct = client.get("/board", headers={"Sec-Fetch-Dest": "document"}).text
+    assert "data-jarvis" not in direct and "/static/jarvis.css" not in direct        # opened directly: the app as is
+    r = client.get("/assistant", headers={"Sec-Fetch-Dest": "iframe"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/board"              # the assistant is JARVIS
+    monkeypatch.setattr(settings, "jarvis_origin", "")
+    assert "data-jarvis" not in client.get("/board", headers={"Sec-Fetch-Dest": "iframe"}).text

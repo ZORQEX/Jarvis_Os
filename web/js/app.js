@@ -3,7 +3,7 @@
 // plus the global companion, the command palette and notifications above everything.
 import { Link } from "./net.js";
 import { Voice } from "./voice.js";
-import { esc, md, ICON, STATE_RU, stepRow, resultCard, approvalCard, toolTitle, fmtMs, fmtWhen, decisionCard } from "./render.js";
+import { esc, md, ICON, STATE_RU, stepRow, resultCard, approvalCard, toolTitle, fmtMs, fmtWhen, decisionCard, orderCard } from "./render.js";
 import { createBus, frameBatch, prefs } from "./core/store.js";
 import { flashFor } from "./core/agent-state.js";
 import { classify } from "./core/intent.js";
@@ -129,6 +129,11 @@ function onEvent(ev) {
         S.lastReply = { text: m.text, taskId: m.task_id, at: Date.now(), pop: S.askedHere.has(m.task_id) || byVoice };
       }
       bus.emit("messages", m);
+      break;
+    }
+    case "message.updated": {               // an orders card was confirmed or cancelled
+      const m = S.messages.find((x) => x.id === ev.message_id);
+      if (m) { m.meta = ev.meta; bus.emit("messages", m); }
       break;
     }
     case "task.created": case "task.updated": {
@@ -448,7 +453,7 @@ function renderThread() {
     keys.add(t.key);
     const task = t.task_id ? S.tasks[t.task_id] : null;
     const approvals = t.task_id ? Object.values(S.approvals).filter((a) => a.task_id === t.task_id) : [];
-    const sig = JSON.stringify([t.user?.id, t.replies.map((r) => r.id), task?.state, task?.steps, task?.decision, S.dev,
+    const sig = JSON.stringify([t.user?.id, t.replies.map((r) => [r.id, r.meta?.fashion?.status]), task?.state, task?.steps, task?.decision, S.dev,
       approvals.map((a) => [a.id, a.status]), task?.steps?.map((s) => S.progress[s.id])]);
     let c = turnCache.get(t.key);
     if (!c) {
@@ -503,6 +508,7 @@ function turnHtml(t, task, approvals) {
   for (const r of t.replies) {
     const err = r.meta?.route === "error" || r.meta?.error_kind;
     body.push(`<div class="msg-ai ${err ? "error" : ""} ${t.user ? "" : "standalone"}">${md(r.text)}</div>`);
+    if (r.meta?.fashion) body.push(orderCard(r.meta.fashion, r.id));     // an orders change waiting for «Подтвердить»
   }
   const active = task && !["completed", "failed", "cancelled", "blocked"].includes(task.state);
   if (task && active && !t.replies.length) {
@@ -793,6 +799,13 @@ document.addEventListener("click", async (e) => {
       .then(() => toast("Изменил — подтвердите ещё раз", "ok")).catch((er) => { toast(er.message, "err"); t.disabled = false; });
   }
   if (t.dataset.taskAct) return link.request(t.dataset.taskAct, { task_id: t.dataset.task }).then((r) => r.message && toast(r.message)).catch((er) => toast(er.message, "err"));
+  if (t.dataset.orderDecide) {
+    const approve = t.dataset.orderDecide === "commit";
+    t.closest(".actions")?.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    return link.request("fashion.decide", { id: t.dataset.proposal, approve, message_id: t.dataset.mid || null })
+      .then((r) => toast(approve ? "Сохранено в заказах" + (r.messages?.length ? ": " + r.messages.slice(0, 2).join("; ") : "") : "Изменение отменено", "ok"))
+      .catch((er) => { toast(er.message, "err"); t.closest(".actions")?.querySelectorAll("button").forEach((b) => { b.disabled = false; }); });
+  }
   if (t.dataset.act === "estop_clear") return agent.control("estop_clear").then((r) => toast(r.message, "ok"));
   if (t.dataset.act === "conv") { voice.toggleConversation(); return; }
   if (t.dataset.act === "show-approvals") { const a = Object.values(S.approvals).find((x) => x.status === "pending"); if (a) { dock.show(); dock.focus(); } return; }

@@ -35,6 +35,8 @@ async def fake_app():
     async def message(req):
         body = await req.json()
         seen["messages"].append(body)
+        if "почему" in body["text"].lower():             # no rule for it: the turn goes back to JARVIS's own AI
+            return web.json_response({"handoff": True, "turn": body["turn"], "text": body["text"]})
         if "открой" in body["text"].lower():
             return web.json_response({"reply": "Открываю заказы.", "speech": "Открываю.", "client": {"navigate": "/board"}})
         return web.json_response({"reply": "Предлагаю: IDS 35 % для SS27.\n\n| Было | Станет |", "speech":
@@ -42,10 +44,38 @@ async def fake_app():
 
     async def health(req):
         return web.json_response({"ok": True})
+
+    async def ai_spec(req):
+        return web.json_response({"system": "Все суммы бери ТОЛЬКО из результатов инструментов.", "tools": []})
+
+    async def ai_tool(req):
+        body = await req.json()
+        seen.setdefault("tools", []).append(body)
+        if body["name"] == "propose_changes":
+            return web.json_response({"saved": False, "pending_approval": True, "will_do": ["IDS: 35% для SS27"]})
+        return web.json_response({"customers": ["IDS"], "total": "4128.50"})
+
+    async def ai_finish(req):
+        body = await req.json()
+        seen.setdefault("finished", []).append(body)
+        proposed = any(t["name"] == "propose_changes" and t["turn"] == body["turn"] for t in seen.get("tools", []))
+        return web.json_response({"reply": body["reply"], "speech": "Коротко.", "client": None, "question": None,
+                                  "proposal": {"id": "a" * 24, "status": "pending", "summary": "Наценка IDS 35 %",
+                                               "will_do": ["IDS: 35% для SS27"],
+                                               "diff": [{"label": "IDS", "before": "100", "after": "135"}]}
+                                  if proposed else None})
+
+    async def commit(req):
+        seen.setdefault("decided", []).append((req.match_info["pid"], req.match_info["what"]))
+        return web.json_response({"ok": True, "messages": ["IDS: 35% для SS27 — изменено позиций: 3"]})
     app = web.Application()
     app.router.add_post("/api/jarvis/claims", claims)
     app.router.add_post("/api/agent/message", message)
     app.router.add_get("/health", health)
+    app.router.add_get("/api/jarvis/ai", ai_spec)
+    app.router.add_post("/api/jarvis/ai/tool", ai_tool)
+    app.router.add_post("/api/jarvis/ai/finish", ai_finish)
+    app.router.add_post("/api/agent/proposals/{pid}/{what}", commit)
     runner = web.AppRunner(app)
     await runner.setup()
     with socket.socket() as s:
@@ -63,6 +93,8 @@ def orders(core, fake_app):
     svc = FashionService(core.config, core.paths, core.db, core.audit)
     svc.port, svc.proc = fake_app["port"], Alive()
     core.director.fashion = svc
+    from jarvis.fashion import Orders
+    core.registry.tools["orders"] = Orders(svc)        # (the test core is built with the module off)
     return svc
 
 
@@ -76,7 +108,9 @@ async def test_a_spoken_markup_goes_to_the_orders_assistant(core, orders, fake_a
     assert sent["conversation"] == orders.conversation() and len(sent["conversation"]) == 16
     msg = core.director.messages(core.director.conversation_id())[-1]
     assert msg["text"].startswith("Предлагаю") and msg["meta"]["speech"] == "IDS тридцать пять процентов. Сохранить?"
-    assert msg["meta"]["fashion"] == {"proposal": "p1", "status": "pending", "question": False}
+    assert msg["meta"]["fashion"] == {"proposal": "p1", "status": "pending", "question": None,
+                                      "card": {"id": "p1", "status": "pending"}}
+    assert sent["jarvis"] is True and sent["turn"] == tid          # the module may hand the turn back to JARVIS
     kinds = []
     while not events.empty():
         ev = events.get_nowait()
@@ -86,6 +120,65 @@ async def test_a_spoken_markup_goes_to_the_orders_assistant(core, orders, fake_a
     assert "fashion.turn" in kinds
     steps = core.db.all("SELECT tool_id FROM task_steps WHERE task_id=?", (tid,))
     assert [s["tool_id"] for s in steps] == ["window_show"]          # the workspace is shown for a spoken request
+
+
+async def test_no_rule_answer_means_jarvis_own_conversation_answers_with_the_module_tools(core, orders, fake_app):
+    """One assistant: the module hands the turn back; JARVIS's conversation calls the module's tools through the
+    Gateway; the module stores the proposal at the end; the owner confirms on the card in JARVIS's chat."""
+    from conftest import ScriptedClaude, install
+    g = ScriptedClaude(core.config, [[("orders", {"action": "get_customer_allocations", "params": {"customer": "IDS"}}),
+                                      ("orders", {"action": "propose_changes", "params": {"summary": "IDS 35 %",
+                                       "actions": [{"action": "set_customer_markup", "params": {"customer": "IDS", "markup": "35"}}]}}),
+                                      "У IDS сейчас 4 128,50 €. Предлагаю 35 % — подтвердите."]])
+    install(core, claude=g)
+    tid = await core.director.submit("почему у IDS такая сумма? поставь ей 35", source="text")
+    t = await wait_done(core, tid)
+    assert t["state"] == "completed" and t["route"] == "fashion"
+    assert [x["name"] for x in fake_app["tools"]] == ["get_customer_allocations", "propose_changes"]
+    assert all(x["turn"] == tid and x["conversation"] == orders.conversation() for x in fake_app["tools"])
+    assert "Все суммы бери ТОЛЬКО" in g.calls[0]["user"]                 # the module's rules, as data for this turn
+    assert fake_app["finished"][0]["turn"] == tid and tid not in orders.turns
+    steps = [s["tool_id"] for s in t["steps"]]
+    assert steps.count("orders") == 2 and "agent_chat" in steps            # through JARVIS's Gateway, in this task
+    msg = core.director.messages(core.director.conversation_id())[-1]
+    card = msg["meta"]["fashion"]["card"]
+    assert card["id"] == "a" * 24 and card["status"] == "pending" and msg["meta"]["fashion"]["status"] == "pending"
+    events = core.bus.subscribe()
+    out = await core.director.decide_order("a" * 24, True, msg["id"])
+    assert out["status"] == "committed" and fake_app["decided"] == [("a" * 24, "commit")]
+    msg = core.director.messages(core.director.conversation_id())[-1]
+    assert msg["meta"]["fashion"]["status"] == "committed" and msg["meta"]["fashion"]["card"]["status"] == "committed"
+    kinds = []
+    while not events.empty():
+        kinds.append(events.get_nowait()["kind"])
+    assert "message.updated" in kinds and "fashion.turn" in kinds
+
+
+async def test_handoff_without_claude_says_so_and_closes_the_turn(core, orders, fake_app):
+    tid = await core.director.submit("почему у IDS такая сумма", source="text")       # Claude not configured in tests
+    t = await wait_done(core, tid)
+    assert t["state"] == "failed"
+    msg = core.director.messages(core.director.conversation_id())[-1]["text"]
+    assert "ИИ сейчас недоступен" in msg and "Ничего не изменено" in msg
+    assert tid not in orders.turns
+
+
+async def test_the_conversation_may_use_the_orders_tool_itself(core, orders, fake_app):
+    """A request the module did not claim: JARVIS's conversation decided to look at orders — the same tools, the
+    proposal is stored when the task ends and shown as a card."""
+    from conftest import ScriptedClaude, install
+    install(core, claude=ScriptedClaude(core.config, [[("orders", {"action": "propose_changes", "params": {
+        "summary": "x", "actions": []}}), "Подготовил изменение."]]))
+    tid = await core.director.submit("подготовь изменение наценки для моей подруги", source="text")
+    t = await wait_done(core, tid)
+    assert t["route"] == "ai" and fake_app["finished"][0]["turn"] == tid
+    msg = core.director.messages(core.director.conversation_id())[-1]
+    assert msg["meta"]["fashion"]["card"]["id"] == "a" * 24
+
+
+async def test_decide_order_refuses_a_bad_id(core, orders):
+    with pytest.raises(ValueError):
+        await core.director.decide_order("../../x", True)
 
 
 async def test_the_name_does_not_hide_the_answer(core, orders, fake_app):
@@ -147,7 +240,7 @@ async def test_failed_app_answer_is_reported_honestly(core, orders, monkeypatch)
     t = await wait_done(core, tid)
     assert t["state"] == "failed"
     msg = core.director.messages(core.director.conversation_id())[-1]["text"]
-    assert "не ответило" in msg and "Ничего не изменено" in msg
+    assert "не ответил" in msg and "Ничего не изменено" in msg
 
 
 async def test_window_requests(ws_client, core):

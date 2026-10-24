@@ -93,6 +93,37 @@ def install_jarvis(app, get_db):
         return JSONResponse(claims(db, str(body.get("text") or "")[:2000], str(body.get("conversation") or "")),
                             headers={"Cache-Control": "no-store"})
 
+    # JARVIS's own AI answers what the rules cannot (app/jarvis_ai.py): the rules and tools, a tool call, the end.
+    @app.get("/api/jarvis/ai")
+    def jarvis_ai_spec():
+        from app import jarvis_ai
+        return JSONResponse(jarvis_ai.spec(), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/jarvis/ai/tool")
+    async def jarvis_ai_tool(request: Request, db: Session = Depends(get_db)):
+        from starlette.concurrency import run_in_threadpool
+        from app import jarvis_ai
+        body = await request.json()
+        params = body.get("params") if isinstance(body.get("params"), dict) else {}
+        try:
+            out = await run_in_threadpool(jarvis_ai.call, db, str(body.get("turn") or ""), str(body.get("conversation") or ""),
+                                          str(body.get("name") or ""), params, str(body.get("request") or "")[:4000])
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        return JSONResponse(json.loads(json.dumps(out, ensure_ascii=False, default=str)), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/jarvis/ai/finish")
+    async def jarvis_ai_finish(request: Request, db: Session = Depends(get_db)):
+        from starlette.concurrency import run_in_threadpool
+        from app import jarvis_ai
+        body = await request.json()
+        out = await run_in_threadpool(jarvis_ai.finish, db, str(body.get("turn") or ""), str(body.get("reply") or "")[:8000])
+        if out.get("reply"):
+            from app.models import Customer
+            from app.voice import to_speech
+            out["speech"] = to_speech(out["reply"], [c.code for c in db.scalars(select(Customer))])
+        return JSONResponse(json.loads(json.dumps(out, ensure_ascii=False, default=str)), headers={"Cache-Control": "no-store"})
+
     @app.get("/api/jarvis/state")
     def jarvis_state(db: Session = Depends(get_db)):
         from app.models import AgentProposal, Customer, OrderItem, Season

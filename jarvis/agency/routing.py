@@ -21,7 +21,7 @@ PREFS: dict[str, list[str]] = {
     Cap.DESKTOP_TOOLS: ["claude"], Cap.PLANNING: ["claude"],
 }
 TOOL_FOR = {"read_mail": "mail_read", "send_message": "email_send",
-            "read_file": "read_file"}
+            "read_file": "read_file", "research": "web_search"}     # research is a tool only with the fast search
 TOOL_MISSING = {"mail_read": "Почта (Gmail) ещё не подключена — читать письма пока нельзя.",
                 "email_send": "Сообщения и письма отправляет модуль связи — скажите, например: «Отправь Ивану в Telegram: "
                               "текст» или «Напиши Сергею на почту, что документы готовы». Перед отправкой я переспрошу."}

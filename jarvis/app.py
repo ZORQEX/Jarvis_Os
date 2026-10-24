@@ -82,17 +82,23 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     for t in (ImproveIssues(db), SelfImprove(manager, config), SelfImproveApply(config), MemorySave(db),
               MemoryList(db), MemoryForget(db)):
         registry.tools[t.spec.id] = t
-    from .fashion import FashionAsk, FashionAttach, FashionService   # «Заказы»: the fashion-orders app
+    from .fashion import FashionAttach, FashionService, Orders   # «Заказы»: the orders module (fashion/)
     fashion = FashionService(config, paths, db, audit)
     if fashion.enabled():
-        for t in (FashionAsk(fashion), FashionAttach(fashion, config)):
+        # JARVIS's own conversation works with the module's tools (no second assistant behind a «fashion_ask»)
+        for t in (Orders(fashion), FashionAttach(fashion, config)):
             registry.tools[t.spec.id] = t
     from .agenda import Agenda, CalendarAdd, CalendarCancel, CalendarShow, CalendarSubscribe   # the calendar
     agenda = Agenda(db, scheduler)
     from .tools.daily import DailyBriefing, Weather
+    from .tools.market import MarketQuote
     for t in (Weather(db), DailyBriefing(db, fashion if fashion.enabled() else None, agenda), CalendarShow(agenda),
-              CalendarAdd(agenda), CalendarCancel(agenda), CalendarSubscribe(agenda)):
+              CalendarAdd(agenda), CalendarCancel(agenda), CalendarSubscribe(agenda), MarketQuote(db)):
         registry.tools[t.spec.id] = t
+    from .research import Research, WebSearch         # fast web search (SearXNG; from morph-rq/jarvis-os)
+    research = Research(config, paths, audit)
+    if research.enabled():
+        registry.tools["web_search"] = WebSearch(research)
     agency = Agency(manager, registry, config, db, bus, audit)
     director = Director(db=db, bus=bus, audit=audit, tasks=tasks, policy=policy, approvals=approvals,
                         gateway=gateway, ai=claude, scheduler=scheduler, config=config,
@@ -118,6 +124,7 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
                          kokoro=KokoroTTS(), en_voice_id=db.get_kv("tts_voice_en"), supertonic=supertonic)
     director.speech = SpeechManager(db, bus, engine)
     director.fashion = fashion if fashion.enabled() else None
+    director.research = research if research.enabled() else None
     from .dictation import Dictation
     director.dictation = Dictation(bus, audit)       # speech typed into the person's window (wtype)
     from .voice.stt import LocalSTT

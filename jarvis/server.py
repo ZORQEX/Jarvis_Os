@@ -149,6 +149,8 @@ class Server:
         spawn(self._check_providers(), "providers-check")
         if self.core.director.fashion:
             spawn(self.core.director.fashion.start(), "fashion-start")
+        if self.core.director.research:
+            spawn(self.core.director.research.start(), "research-start")     # SearXNG: ~2.5 s, before the first search
         if self.core.phone:
             await self.core.phone.start()        # only when a bot token is stored
         if self.core.proactive:
@@ -175,6 +177,8 @@ class Server:
         if self.core.director.fashion:
             # A new core may already be starting (restart): this one must not bring its «Заказы» back meanwhile.
             self.core.director.fashion.stopping = True
+        if self.core.director.research:
+            self.core.director.research.signal_stop()
         for ws in list(self.sockets):
             await ws.close(code=WSCloseCode.GOING_AWAY, message=b"JARVIS restarting")
 
@@ -192,6 +196,8 @@ class Server:
             await self.core.comms.stop()
         if self.core.director.fashion:
             await self.core.director.fashion.stop()
+        if self.core.director.research:
+            await self.core.director.research.stop()
         if self.core.phone:
             await self.core.phone.stop()
         if self.core.proactive:
@@ -812,6 +818,9 @@ class Server:
                     elif typ == "fashion.start":
                         await f.start()
                     res = await f.state()
+            elif typ == "fashion.decide":         # «Подтвердить» / «Отменить» on an orders card in JARVIS's chat (a click)
+                res = await d.decide_order(str(data.get("id") or ""), bool(data.get("approve")),
+                                           str(data.get("message_id") or "") or None)
             elif typ == "voice.presence":         # the window's mic is on/off: the desktop companion yields to it
                 if str(data.get("client", "window")) == "window":
                     self._mic[ws] = bool(data.get("listening"))

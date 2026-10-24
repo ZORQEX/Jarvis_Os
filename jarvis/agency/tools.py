@@ -283,8 +283,30 @@ class ComputerTask(ClaudeChange):
             if shutil.which("git"):               # a new project is tracked from the start (local only, no commits)
                 await run_cmd(["git", "init", "-q", args["workdir"]])
         from ..providers.base import StepRequest
-        ctx.payload = {**(ctx.payload or {}), "req": StepRequest(Cap.CODE, args["instruction"])}
-        return await super().run(args, ctx)
+        found = research_context(ctx.conversation, ctx.task_id, args["instruction"])
+        ctx.payload = {**(ctx.payload or {}), "req": StepRequest(Cap.CODE, args["instruction"],
+                                                               context=[found] if found else [])}
+        res = await super().run(args, ctx)
+        if found:
+            res.data["research"] = {"query": found["query"], "sources": len(found["sources"])}
+        return res
+
+
+def research_context(conv: dict, task_id: str, instruction: str) -> dict | None:
+    """What JARVIS's web search found, for a Claude Code job about the same thing: found in this task («найди … и
+    сделай …»), referred to («используй найденное»), or sharing the search's key words within the hour. Claude Code
+    reads it as data; the person does not repeat it."""
+    lr = (conv or {}).get("last_research")
+    if not lr or time.time() - float(lr.get("at") or 0) > 6 * 3600:
+        return None
+    from ..research import terms
+    from .agency import REFERS_RESEARCH
+    shared = set(terms(lr.get("query", ""))) & set(terms(instruction))
+    if not (lr.get("task_id") == task_id or REFERS_RESEARCH.search(instruction)
+            or (len(shared) >= 2 and time.time() - float(lr["at"]) < 3600)):
+        return None
+    return {"label": f"Найдено JARVIS в интернете (поиск «{lr.get('query', '')}»)", "text": lr.get("text", ""),
+            "sources": lr.get("sources", []), "query": lr.get("query", "")}
 
 
 async def _run_claude(manager, ctx: ToolContext, args: dict, mode: str) -> ToolResult:

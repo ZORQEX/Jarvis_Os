@@ -226,6 +226,12 @@ def _caps_route(t: str, raw: str = "") -> Route | None:
     if re.fullmatch(r"(?:что|за чем) ты (?:сейчас )?(?:наблюдаешь|следишь)|(?:мои|покажи|какие) наблюдения", t):
         return tool("watch", {"action": "list"}, "Наблюдения")
 
+    # prices that change every minute: crypto and currency rates (tools/market.py), no AI and no web search
+    from .tools.market import parse_quote
+    q = parse_quote(t)
+    if q:
+        return tool("market_quote", q, "CoinGecko / ExchangeRate-API")
+
     # weather and the day
     m = re.search(r"\bпогод\w*(?: (?:сейчас|сегодня|завтра|на улице|на неделю))*(?: (?:в|во) (?P<city>[\w -]+?))?"
                   r"(?: (?:сейчас|сегодня|завтра|на неделю))?$", t)
@@ -569,7 +575,7 @@ def _route(text: str, ctx: dict | None = None) -> Route | None:
 
     # --- file search ----------------------------------------------------------------
     m = re.fullmatch(r"(?:найди|поищи|ищи|где (?:лежит|находится)|find|search(?: for)?)\s+(?:мне\s+)?"
-                     r"(?:файл\w*|документ\w*|папк\w*|file|files|folder)\s+(.+)", t)
+                     r"(?:файл\w*|документ(?!аци)\w*|папк\w*|file|files|folder)\s+(.+)", t)   # «документацию» = the web
     if m:
         return Route("tool", "search_files", {"query": _clean_query(m.group(1))}, why="Поиск по разрешённым папкам")
     m = re.fullmatch(r"(?:где (?:лежит|лежат|находится)|where is)\s+(.+)", t)

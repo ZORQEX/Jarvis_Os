@@ -99,6 +99,17 @@ FASHION="$HOME/.local/share/jarvis/fashion"
 mkdir -p "$FASHION" && (cd "$FASHION" && { [[ -x .venv/bin/python ]] || uv venv -q --python 3.12 .venv; } \
   && uv pip install -q --python .venv/bin/python -r "$ROOT/fashion/requirements.txt")
 
+# Fast web search (jarvis/research.py, the research engine of morph-rq/jarvis-os): a local SearXNG — pinned git checkout
+# (the commit jarvis-os tested) + its own venv. JARVIS starts it with the core on 127.0.0.1:8796, loopback only.
+SEARX="$HOME/.local/share/jarvis/searxng"
+SEARX_COMMIT=81371861f67226091d1c4df2e3908a11d3b54eb9
+if [[ ! -d "$SEARX/src/searx" ]]; then
+  mkdir -p "$SEARX" && git clone -q --filter=blob:none https://github.com/searxng/searxng.git "$SEARX/src" \
+    && git -C "$SEARX/src" -c advice.detachedHead=false checkout -q "$SEARX_COMMIT"
+fi
+[[ -x "$SEARX/venv/bin/granian" ]] || (uv venv -q --python 3.12 "$SEARX/venv" && uv pip install -q \
+  --python "$SEARX/venv/bin/python" -r "$SEARX/src/requirements.txt" -r "$SEARX/src/requirements-server.txt")
+
 # Browser control for Claude Code tasks the user allows (Microsoft Playwright MCP, pinned; uses /usr/bin/chromium).
 command -v npx >/dev/null && npx -y @playwright/mcp@0.0.83 --help >/dev/null 2>&1 || true
 

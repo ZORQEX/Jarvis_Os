@@ -859,17 +859,27 @@
       b.addEventListener('click', (e) => { e.stopImmediatePropagation(); window.parent.postMessage({ type: 'fashion.listen' }, jarvis); }, true); });
     // JARVIS's dialog is the one both share: adopted when the page loads (jarvis.conversation) and with every voice
     // turn; this page tells JARVIS only when the owner starts a new dialog or opens an old one here.
+    // Embedded by the server (app/jarvis_embed.py, JARVIS 2026-10-25): JARVIS is the assistant — this page tells it
+    // which section is open (its header tabs), takes its theme, and never opens the hidden dock.
+    const embedded = document.documentElement.hasAttribute('data-jarvis');
     window.addEventListener('message', (e) => {
       if (e.origin !== jarvis || !e.data || typeof e.data !== 'object') return;
       const d = e.data;
+      if (d.type === 'jarvis.theme') {
+        if (['light', 'dark'].includes(d.theme)) document.documentElement.dataset.jarvisTheme = d.theme;
+        else delete document.documentElement.dataset.jarvisTheme;
+        return;
+      }
       if (!['jarvis.turn', 'jarvis.conversation'].includes(d.type)) return;
       const switched = /^[a-f0-9]{16}$/.test(d.conversation || '') && d.conversation !== conversation;
       if (switched) { conversation = d.conversation; local.set('copilot-conversation', conversation); }
       if (d.type === 'jarvis.conversation') { if (switched && loaded) loadConversation(); return; }
       if (d.navigate) { navigate(d.navigate); return; }      // the dock re-opens there with this conversation
-      if (d.committed && !slot) { location.reload(); return; }    // the page under the dock shows the new figures
+      if (d.committed && (embedded || !slot)) { location.reload(); return; }    // the page shows the new figures
+      if (embedded) return;
       openDock(); loadConversation();
     });
+    if (embedded) tellJarvis();
   }
 
   refreshContext();

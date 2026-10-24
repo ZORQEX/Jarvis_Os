@@ -109,6 +109,11 @@ class Config:
     fashion_enabled: bool = True
     fashion_port: int = 8797
     fashion_claude_model: str = "sonnet"     # its assistant's model in Claude Code (the user's subscription)
+    # Fast web search (jarvis/research.py): a local SearXNG started with the core when installed (scripts/install.sh).
+    # searxng_url = an already running SearXNG to use instead (JARVIS then does not start or stop one).
+    research_enabled: bool = True
+    searxng_port: int = 8796
+    searxng_url: str = ""
     # Spoken/typed app names -> argv. Only these can be launched.
     apps: dict[str, list[str]] = field(default_factory=dict)
 

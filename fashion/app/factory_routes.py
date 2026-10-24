@@ -448,7 +448,8 @@ def install_factory(app, templates, context):
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(agent.handle, db, conversation, str(body.get("text") or "")[:6000], screen,
-                                             None, channel, (str(body.get("raw"))[:6000] if body.get("raw") else None))
+                                             None, channel, (str(body.get("raw"))[:6000] if body.get("raw") else None),
+                                             bool(body.get("jarvis")))
         except ValueError as exc:
             return JSONResponse({"reply": str(exc), "error": True, "speech": str(exc)})
         except Exception:       # never a bare 500 in the dialog: say what happened and keep the conversation usable
@@ -457,6 +458,14 @@ def install_factory(app, templates, context):
             db.rollback()
             return JSONResponse({"reply": "Не получилось выполнить запрос — ничего не изменено. Попробуйте ещё раз или скажите иначе.",
                                  "error": True, "retry": True, "speech": "Не получилось. Ничего не изменено, попробуйте ещё раз."})
+        if (result.client or {}).get("handoff"):      # JARVIS: its own AI answers this turn (app/jarvis_ai.py)
+            from app import jarvis_ai
+            turn = str(body.get("turn") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{4,64}", turn):
+                raise HTTPException(422, "Неверный ход")
+            jarvis_ai.open_turn(turn, conversation, result.client["text"], screen)
+            return JSONResponse({"handoff": True, "turn": turn, "text": result.client["text"], "context": result.data},
+                                headers={"Cache-Control": "no-store"})
         from app.voice import to_speech
         codes = [c.code for c in db.scalars(select(Customer))]
         return JSONResponse({"reply": result.reply, "proposal": result.proposal, "question": result.question,
