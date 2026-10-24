@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% import "_ui.html" as ui with context %}
+{% block title %}Product images{% endblock %}
+{% block content %}
+{{ ui.workspace_bar() }}
+<header class="page-header">
+  <div><h1>Product images</h1><p class="page-sub">Every managed product image, searchable by product, article/SKU, brand, colour, customer, season or the original file name.</p></div>
+  <div class="page-actions"><a class="btn" href="/seasons/new">Assign images in a season setup</a></div>
+</header>
+<form class="filter-bar" method="get" action="/product-images" role="search">
+  <label class="search" for="image-search">Find an image<input id="image-search" type="search" name="q" value="{{ q }}" placeholder="FAQ9434, coat, navy, Loro Piana, AA…"></label>
+  <div class="filter-actions"><button class="btn primary" type="submit">Search</button>{% if q %}<a class="btn quiet" href="/product-images">Clear</a>{% endif %}</div>
+  <p class="muted" style="margin:0 0 9px;flex-basis:100%">{{ items|length }} image{{ '' if items|length == 1 else 's' }}</p>
+</form>
+{% if items %}
+<div class="image-grid">
+  {% for item in items %}
+  <article class="image-card">
+    <a href="/worksheet/items/{{ item.id }}"><img src="{{ item.image_path|media }}" alt="{{ item.name or item.article or 'Product image' }}" loading="lazy"></a>
+    <div>
+      <p class="muted" style="font-size:12.5px;margin:0">{{ item.order.season.name }} · {{ item.order.brand.name }}</p>
+      <h3><a href="/worksheet/items/{{ item.id }}" style="color:inherit">{{ item.name or 'Unnamed product' }}</a></h3>
+      <p><strong style="color:var(--ink)">{{ item.article or 'No article/SKU' }}</strong></p>
+      <p>{{ item.color or 'No colour' }}{% if item.size %} · Size {{ item.size }}{% endif %}{% if item.customer %} · {{ item.customer.code }}{% endif %}</p>
+      <small>Uploaded as {{ item.image_source_filename or 'image' }} · {{ (item.image_match_method or 'manual')|replace('_', ' ') }}</small>
+      <p style="margin-top:6px"><a href="/orders/{{ item.order_id }}#product-{{ item.id }}">Open brand table</a></p>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+{% call ui.empty('No product images found', 'Try another product name, SKU, brand, customer or season.' if q else 'Images assigned during a season setup, saved from an intake, or uploaded on a product page appear here.') %}{% if q %}<a class="btn" href="/product-images">Show all images</a>{% endif %}{% endcall %}
+{% endif %}
+{% endblock %}

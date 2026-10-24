@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "_ui.html" as ui with context %}
+{% block title %}Excel files{% endblock %}
+{% block content %}
+{{ ui.workspace_bar() }}
+<header class="page-header"><div><h1>Excel workspace</h1><p class="page-sub">Download the editable product table, change it in Excel, upload it, and review every change before anything is saved.</p></div></header>
+
+{% if request.query_params.get('saved') %}<div class="notice ok" role="status"><span class="notice-icon" aria-hidden="true">✓</span><div><strong>{{ request.query_params.get('saved') }} product rows saved.</strong><p>Payments and shipment history were preserved. Download a fresh copy before your next edits.</p></div><a class="btn" href="/worksheet">See the updated products</a></div>{% endif %}
+{% if error %}<div class="notice error" role="alert"><span class="notice-icon" aria-hidden="true">!</span><div><strong>No changes saved</strong><p>{{ error }}</p></div><div class="btn-row"><a class="btn" href="/excel/download">Download the latest file</a><a class="btn quiet" href="/ai-intake">Use the AI draft table for another layout</a><a class="btn quiet" href="/import">Original SS26 importer</a></div></div>{% endif %}
+
+<section class="panel">
+<h2>Upload a supplier or existing workbook</h2>
+<p>Open every worksheet, edit cells, and save your own column and pricing rules. No AI required.</p>
+<form action="/workbooks/upload" method="post" enctype="multipart/form-data" data-once>
+<label>Excel workbook (.xlsx, up to 1 GB)<input type="file" name="file" accept=".xlsx" required></label>
+<button class="btn primary">Open workbook for editing</button>
+</form>
+<p>Your original stays intact. The editor works with cell values; images, formatting and formulas remain in the original. Formula results use the values last saved by Excel.</p>
+</section>
+{% if workbooks %}<section class="panel"><h2>Your workbooks</h2><ul class="row-list">{% for book in workbooks %}<li><a href="/workbooks/{{ book.token }}">{{ book.filename }}</a><span>{{ book.sheets }} sheets</span></li>{% endfor %}</ul></section>{% endif %}
+<details><summary class="btn">Update existing app products using an app-exported workbook</summary>
+<div class="exchange-steps">
+  <section class="panel"><h2>1. Download a working copy</h2><p class="muted">Every product row, including completed and not-completed rows. No pictures.</p><div class="btn-row"><a class="btn primary" href="/excel/download">{{ ui.icon('download') }}Download editable Excel</a><a class="btn quiet" href="/excel/download?blank=true">Blank template</a></div></section>
+  <section class="panel"><h2>2. Edit the Orders sheet</h2><p class="muted">Change details, customer codes, prices and notes; pick a status from the dropdown to set its colour. Keep existing IDs and leave ID blank for a new product. Deleting a spreadsheet row never deletes it from the app.</p><a href="/logistics?focus=groups">Find group IDs and group costs</a></section>
+  <section class="panel"><h2>3. Upload and review</h2>
+    <form action="/excel/preview" method="post" enctype="multipart/form-data" class="form-grid one" data-once>
+      <label>Edited workbook (.xlsx, up to 8 MB)<input type="file" name="file" accept=".xlsx" required><small>Uploading only creates a preview.</small></label>
+      <div><button class="btn primary">Preview changes</button></div>
+    </form>
+  </section>
+</div>
+
+</details>
+{% if result is defined %}
+<section class="panel" id="preview" aria-labelledby="preview-title">
+  <div class="section-head"><div><h2 id="preview-title">{{ result.rows|length }} proposed change{{ '' if result.rows|length == 1 else 's' }} · {{ result.errors|length }} issue{{ '' if result.errors|length == 1 else 's' }}</h2><p>From {{ filename }}. {{ result.unchanged }} unchanged rows; {{ result.missing }} rows not in the file stay in the app. Payments, seller credit and shipments are untouched.</p></div></div>
+  {% if result.errors %}<div class="notice error" role="alert"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Fix these rows in Excel and upload again. Nothing has been applied.</strong>
+    {% for issue in result.errors %}<div class="exchange-issue"><div><b>Excel row {{ issue.row }}</b><p>{{ issue.message }}</p></div><a class="btn sm" href="{{ issue.url }}">{{ 'Open product' if issue.url != '/excel' else 'Download or upload again' }}</a></div>{% endfor %}</div></div>{% endif %}
+  {% if result.rows %}<div class="table-frame"><table class="table">
+    <thead><tr><th>Excel row</th><th>Action</th><th>Customer</th><th>Brand / product</th><th>Changes</th><th>Notes</th></tr></thead>
+    <tbody>{% for row in result.rows %}<tr><td>{{ row.row }}</td><td>{{ row.kind }}{% if row.data.ID %} #{{ row.data.ID }}{% endif %}</td><td>{{ row.data['Customer code'] or 'Unallocated' }}<small>{{ row.data['Customer name'] }}</small></td><td>{{ row.data.Brand }}<small>{{ row.data.Product }} · {{ row.data['Article / SKU'] }}</small></td>
+      <td>{% for change in row.changes %}<div><b>{{ change.field }}:</b> {{ change.before or '(blank)' }} → {{ change.after or '(blank)' }}</div>{% else %}<details><summary>View all new values</summary>{% for key, value in row.data.items() %}<div>{{ key }}: {{ value or '—' }}</div>{% endfor %}</details>{% endfor %}</td>
+      <td>{% for warning in row.warnings %}<div>{{ warning }}</div>{% else %}<span class="badge tone-ok">Ready</span>{% endfor %}</td></tr>{% endfor %}</tbody>
+  </table></div>{% endif %}
+  {% if result.rows and not result.errors %}<form action="/excel/apply" method="post" class="btn-row" style="margin-top:14px" data-once><input type="hidden" name="token" value="{{ token }}"><button class="btn primary">Apply {{ result.rows|length }} reviewed changes</button><a class="btn quiet" href="/excel">Discard preview</a></form>
+  {% elif not result.errors %}<p class="muted">No edits to apply: your workbook already matches its downloaded version.</p>{% endif %}
+</section>
+{% endif %}
+
+<section class="section" aria-labelledby="other-title">
+  <div class="section-head"><h2 id="other-title">Other files</h2></div>
+  <ul class="row-list">
+    <li><div><strong>A different spreadsheet, screenshot, photo or PDF</strong><p>The assistant reads it and drafts editable rows; you confirm customer, price and size.</p></div><a class="btn sm" href="/inbox#compose">New intake</a></li>
+    <li><div><strong>Full accounting report</strong><p>A reference export with ledgers and rules, not the editable upload format.</p></div><a class="btn sm" href="/exports/business.xlsx">Download</a></li>
+    <li><div><strong>Original SS26 source workbook</strong><p>Keeps the original sheet layout and source history; revised versions import incrementally.</p></div><a class="btn sm" href="/import">Import</a></li>
+  </ul>
+</section>
+{% endblock %}
