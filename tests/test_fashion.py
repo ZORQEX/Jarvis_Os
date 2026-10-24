@@ -72,7 +72,8 @@ async def fake_app():
 
     async def commit(req):
         seen.setdefault("decided", []).append((req.match_info["pid"], req.match_info["what"]))
-        return web.json_response({"ok": True, "messages": ["IDS: 35% для SS27 — изменено позиций: 3"]})
+        return web.json_response({"ok": True, "messages": ["IDS: 35% для SS27 — изменено позиций: 3"],
+                                  **({"follow_up": seen["follow_up"]} if seen.get("follow_up") else {})})
     app = web.Application()
     app.router.add_post("/api/jarvis/claims", claims)
     app.router.add_post("/api/agent/message", message)
@@ -341,3 +342,12 @@ async def test_files_and_figures_the_module_made_are_shown_in_jarvis_chat(core, 
                              "customer": "IDS"}]
     assert out["figures"] == [{"label": "Предоплата", "value": "1518.75"}]
     assert core.director.orders_panel(None) == {}
+
+
+
+async def test_the_rest_of_the_request_goes_on_after_the_click(core, orders, fake_app):
+    """«Поставь IDS 35 % и потом сделай PDF»: the module keeps «сделай PDF» until the change is confirmed."""
+    fake_app["follow_up"] = "Сделай Excel и PDF для IDS"
+    await core.director.decide_order("b" * 24, True)
+    from conftest import wait_for
+    await wait_for(lambda: any(m["text"] == "Сделай Excel и PDF для IDS" for m in fake_app["messages"]))

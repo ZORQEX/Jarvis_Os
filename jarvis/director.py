@@ -360,6 +360,9 @@ class Director:
                     meta["fashion"] = f
                     self.db.execute("UPDATE messages SET meta=? WHERE id=?", (dumps(meta), message_id))
                     self.bus.publish("message.updated", {"message_id": message_id, "meta": meta})
+        if approve and out.get("follow_up"):
+            # The rest of the owner's own request waited for this change («…и потом сделай PDF»): it goes on now.
+            spawn(self.submit(str(out["follow_up"])[:2000], source="text"), "orders-follow-up")
         self.audit.write("fashion.decided", proposal=proposal, approve=approve)
         self.bus.publish("fashion.turn", {"conversation": self.fashion.conversation(), "navigate": out.get("navigate"),
                                           "committed": approve, "show": False})

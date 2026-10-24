@@ -248,6 +248,11 @@
   /* One request at a time: a message sent while the assistant is working waits in line and is answered in order. */
   const queue = [];
   async function send(message, options = {}) {
+    // Inside JARVIS (added for JARVIS 2026-10-25): JARVIS is the assistant — a question from this page goes to JARVIS.
+    if (document.documentElement.hasAttribute('data-jarvis') && config.jarvis && window.parent !== window) {
+      window.parent.postMessage({ type: 'fashion.ask', text: String(message || '').slice(0, 2000) }, config.jarvis);
+      return;
+    }
     message = (message || '').trim();
     if (!message) return;
     if (busy) {

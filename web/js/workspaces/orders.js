@@ -123,6 +123,8 @@ export function create(ctx) {
     if (d.type === "fashion.state") {
       if (typeof d.path === "string" && d.path.startsWith("/")) { st.path = d.path; markTabs(); }
       if (/^[a-f0-9]{16}$/.test(d.conversation || "")) ctx.link.request("fashion.conversation", { id: d.conversation }).catch(() => {});
+    } else if (d.type === "fashion.ask" && typeof d.text === "string" && d.text.trim()) {
+      ctx.submit(d.text.trim().slice(0, 2000), { source: "text", stay: true });    // a question from a module page: to JARVIS
     } else if (d.type === "fashion.listen") {
       ctx.voice.listenOnce();               // a microphone button on a module page: JARVIS listens (local recognition)
     }
