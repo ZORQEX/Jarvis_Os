@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}{{ app_name }}{% endblock %} · Alina Fashion</title>
+  <link rel="stylesheet" href="/static/ui.css?v={{ asset_version() }}">
+  {% block head %}{% endblock %}
+</head>
+{% import "_ui.html" as ui with context %}
+{% set area = nav_area(request.url.path) %}
+<body data-currency="{{ currency }}" data-area="{{ area }}">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="shell-bar">
+    <div class="shell-inner">
+      <a class="wordmark" href="/" aria-label="Alina Fashion, overview">
+        <svg viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1.5" width="20" height="5.4" rx="1.6" fill="#ebaa12"/><rect x="1" y="8.3" width="20" height="5.4" rx="1.6" fill="#2d7a55"/><rect x="1.75" y="15.85" width="18.5" height="4.4" rx="1.3" fill="#fff" stroke="#a9afa4" stroke-width="1.4" stroke-dasharray="2.4 1.8"/></svg>
+        <span class="wordmark-name">Alina</span><span class="wordmark-note">Fashion orders</span>
+      </a>
+      <nav class="shell-nav" aria-label="Main">
+        {% for key, label, href in nav_areas %}<a href="{{ href }}" {% if key == 'workspace' %}data-workspace-link{% endif %} {% if area == key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}
+      </nav>
+      <div class="shell-tools">
+        <button class="tool-btn search-btn" type="button" data-search-open aria-haspopup="dialog" aria-label="Search everything (Ctrl K)">{{ ui.icon('search') }}<span>Search</span><kbd>Ctrl K</kbd></button>
+        <details class="menu add-menu">
+          <summary class="btn primary" aria-haspopup="menu">{{ ui.icon('plus') }}Add</summary>
+          <div class="menu-panel" role="menu">{{ ui.add_menu_items() }}</div>
+        </details>
+        <button class="tool-btn" type="button" data-tour-start aria-label="Guide: a short tour of the app" title="Guide: a short tour of the app"><span class="guide-glyph" aria-hidden="true">?</span><span class="tool-label" aria-hidden="true">Guide</span></button>
+        <a class="tool-btn" href="/settings" aria-label="Settings" title="Settings" {% if area == 'settings' %}aria-current="page"{% endif %}>{{ ui.icon('gear') }}</a>
+      </div>
+    </div>
+  </header>
+
+  {% include "_copilot.html" %}
+
+  <main class="page" id="main" tabindex="-1">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="shell-foot"><span>Money is calculated from the rules; every change is recorded.</span><a href="/audit">Audit history</a></footer>
+
+  <nav class="tabbar" aria-label="Main">
+    <a href="/" {% if area == 'overview' %}aria-current="page"{% endif %}>{{ ui.icon('overview') }}<span>Обзор</span></a>
+    <a href="/board" data-workspace-link {% if area == 'workspace' %}aria-current="page"{% endif %}>{{ ui.icon('workspace') }}<span>Заказы</span></a>
+    <details class="menu tab-add">
+      <summary aria-label="Add"><span class="plus">{{ ui.icon('plus') }}</span><span>Add</span></summary>
+      <div class="menu-panel" role="menu">{{ ui.add_menu_items() }}</div>
+    </details>
+    <a href="/factories" {% if area == 'factories' %}aria-current="page"{% endif %}>{{ ui.icon('money') }}<span>Фабрики</span></a>
+    <a href="/assistant" {% if area == 'assistant' %}aria-current="page"{% endif %}>{{ ui.icon('inbox') }}<span>Ассистент</span></a>
+  </nav>
+
+  <dialog class="search-dialog" id="search-dialog" aria-label="Search everything">
+    <div class="search-input-row">{{ ui.icon('search') }}<label class="sr-only" for="global-search-query">Search customers, products, brands and files</label><input id="global-search-query" type="search" autocomplete="off" placeholder="Search a customer, product, SKU, brand, file…"><button class="icon-btn" type="button" data-close aria-label="Close search">×</button></div>
+    <div class="search-results" id="global-search-results" aria-live="polite"><div class="search-welcome"><strong>Find anything</strong><span>A customer, phone, SKU, product, brand, season or file.</span></div></div>
+    <div class="search-foot"><span>Type at least 2 characters, then use ↓ to move through results.</span><a href="/exports/business.xlsx">Download all data as Excel</a></div>
+  </dialog>
+
+
+  <script src="/static/app.js?v={{ asset_version() }}" defer></script>
+  <script src="/static/tour.js?v={{ asset_version() }}" defer></script>
+  <script src="/static/copilot.js?v={{ asset_version() }}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
