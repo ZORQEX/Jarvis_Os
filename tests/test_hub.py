@@ -134,13 +134,14 @@ async def test_model_turns_become_tool_calls_and_streams():
 # ---------------------------------------------------------------- inside the core
 
 @pytest.fixture
-async def hub(core, vault, monkeypatch, tmp_path):
+async def hub(core, vault, monkeypatch, tmp_path, request):
     """The core's hub against the stand-ins: agents «installed», never started as real processes."""
     gw, hm = FakeGateway(TOKEN), FakeHermes(HKEY)
     await gw.start()
     await hm.start()
     caps = core.director.capabilities
     caps.cfg.openclaw_enabled = caps.cfg.hermes_enabled = True
+    caps.cfg.openclaw_on_demand = request.param if hasattr(request, "param") else False
     caps.cfg.openclaw_port, caps.cfg.hermes_port = gw.port, hm.port
     caps.store.store("hub-openclaw-token", TOKEN, "t")
     caps.store.store("hub-hermes-key", HKEY, "t")
@@ -152,7 +153,8 @@ async def hub(core, vault, monkeypatch, tmp_path):
     for t in hub_tools(caps):
         core.registry.tools[t.spec.id] = t
     await caps.start()
-    await caps.backends.openclaw.c.wait_ready(5)
+    if not caps.cfg.openclaw_on_demand:
+        await caps.backends.openclaw.c.wait_ready(5)
     await caps.registry.refresh("openclaw", "hermes")
     caps.gw, caps.hm = gw, hm
     yield caps
@@ -194,7 +196,7 @@ async def test_one_catalog_over_jarvis_and_both_agents(hub):
 async def test_an_upstream_skill_runs_only_after_a_yes(hub, core):
     out, asked = await run_with_approvals(core, "capability_use", {"id": "openclaw:skill:github", "request": "мои issues"})
     assert [a["risk"] for a in asked] == ["high"] and out.status == "ok"
-    assert out.result.data["text"] == "Голубое." and out.verification.status == "unverified"
+    assert out.result.data["text"] == "Голубое." and out.result.summary == "OpenClaw: Голубое." and out.verification.status == "unverified"
     assert any(m == "agent" and "github" in p["message"] for m, p in hub.gw.requests)
     out, asked = await run_with_approvals(core, "capability_use", {"id": "openclaw:skill:github", "request": "ещё"},
                                           approve=False)
@@ -280,6 +282,36 @@ async def test_model_endpoint_and_search_bridge_have_their_own_keys(core, vault)
         assert r.status == 503
     finally:
         await tc.close()
+
+
+@pytest.mark.parametrize("hub", [True], indirect=True)
+async def test_openclaw_sleeps_until_needed_and_after_work(hub, core, monkeypatch):
+    b = hub.backends
+    assert b.snapshot()["openclaw"]["state"] == "sleeping" and not b.openclaw.c.connected
+    assert await b.wake("openclaw")                              # the first catalog (the hub loop does this once)
+    await hub.registry.refresh("openclaw")
+    caps_before = len(hub.registry.list(provider="openclaw"))
+    await b.sleep("openclaw")
+    assert b.snapshot()["openclaw"]["state"] == "sleeping" and not b.openclaw.c.connected
+    await hub.registry.refresh("openclaw")                       # asleep: its skills stay listed, marked «sleeping»
+    assert len(hub.registry.list(provider="openclaw")) == caps_before > 0
+    assert hub.registry.get("openclaw:skill:github").health == "sleeping" and hub.registry.get("openclaw:skill:github").usable
+    monkeypatch.setattr(bk.Child, "running", property(lambda self: True))   # the stand-in gateway is «its» process
+    out, _ = await run_with_approvals(core, "capability_use", {"id": "openclaw:skill:github", "request": "мои issues"})
+    assert out.status == "ok" and b.openclaw.c.connected, out.error         # woken by the work itself
+    b.cfg.agents_idle_min = 0.0001
+    b.last_used["openclaw"] = 0
+    slept = []
+
+    async def sleep(name):
+        slept.append(name)
+    monkeypatch.setattr(b, "sleep", sleep)
+    task = asyncio.ensure_future(b._health_loop())
+    await wait_for(lambda: slept, 6)
+    task.cancel()
+    assert slept == ["openclaw"]
+    b.set_keep(True)                                                        # a channel / own automation: stays up
+    assert not b.on_demand("openclaw") and b.snapshot()["keep_openclaw"]
 
 
 # ---------------------------------------------------------------- settings, processes

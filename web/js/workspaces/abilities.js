@@ -11,7 +11,7 @@ const SECTIONS = [
   ["overview", "Обзор"], ["skills", "Навыки"], ["connect", "Каналы"], ["discover", "ClawHub"],
   ["automations", "Автоматизации"], ["updates", "Обновления"], ["coding", "На компьютере"], ["activity", "Журнал"],
 ];
-const STATE_RU = { connected: "работает", starting: "запускается", connecting: "подключается", disconnected: "нет связи",
+const STATE_RU = { connected: "работает", starting: "запускается", sleeping: "спит", connecting: "подключается", disconnected: "нет связи",
   not_installed: "не установлен", auth_failed: "ключ не принят", off: "выключен", error: "ошибка", unknown: "проверяю…" };
 const PROVIDER_RU = { jarvis: "JARVIS", app: "JARVIS", openclaw: "OpenClaw", hermes: "Hermes", shared: "Общий" };
 const HEALTH_RU = { ok: "готов", degraded: "не всё есть", disconnected: "агент недоступен", failed: "сбой", disabled: "выключен",
@@ -70,16 +70,24 @@ export function create(ctx) {
       ? "Каналы (Telegram-боты, WhatsApp, Slack, Discord), плагины, навыки ClawHub, автоматизации."
       : "Долгие многошаговые поручения, навыки и память; пишет новые навыки. Ищет через быстрый поиск JARVIS.";
     let body;
-    if (!a.installed) {
+    if (a.installed && a.state === "sleeping") {
+      const keep = name === "openclaw" ? `<label class="toggle" style="display:flex;gap:8px;align-items:center;font-size:13px">
+          <input type="checkbox" data-keep ${st.data.backends?.keep_openclaw ? "checked" : ""}> Держать запущенным (нужно для каналов и своих автоматизаций)</label>` : "";
+      body = `<div class="muted" style="font-size:12.5px">${esc(what)}</div>
+        <div class="muted" style="font-size:12.5px">Запускается сам, когда нужен (10–25 с), и засыпает после ${esc(String(st.data.backends?.idle_min ?? 20))} мин без дела — так он не держит ~1,5 ГБ памяти. Навыки остаются в каталоге.</div>
+        <div class="tc-ctl"><button class="btn" data-wake="${name}">${ICON.play} Запустить сейчас</button></div>${keep}`;
+    } else if (!a.installed) {
       body = `<p class="muted">Не установлен. Установка (без root, всё закреплено по версиям): <code>${esc(st.data.install_command || "scripts/install-agents.sh")}</code></p>`;
     } else {
       body = `<div class="muted" style="font-size:12.5px">${esc(what)}</div>
         <div class="muted" style="font-size:12.5px">Версия ${esc(a.version || "?")} · модель ${esc(model)}${a.restarts ? ` · перезапусков: ${a.restarts}` : ""}${a.active_runs ? ` · сейчас работает: ${a.active_runs}` : ""}${esc(llm)}</div>
         ${a.error && !a.healthy ? `<div class="muted" style="color:var(--warn);font-size:12.5px">${esc(a.error)}</div>` : ""}
         ${a.setup_error ? `<div class="muted" style="color:var(--warn);font-size:12.5px">Настройки: ${esc(a.setup_error)}</div>` : ""}
-        <div class="tc-ctl"><button class="btn ghost" data-restart="${name}">${ICON.refresh} Перезапустить</button></div>`;
+        <div class="tc-ctl"><button class="btn ghost" data-restart="${name}">${ICON.refresh} Перезапустить</button></div>
+        ${name === "openclaw" && st.data.backends?.openclaw?.enabled ? `<label class="toggle" style="display:flex;gap:8px;align-items:center;font-size:13px">
+          <input type="checkbox" data-keep ${st.data.backends?.keep_openclaw ? "checked" : ""}> Держать запущенным (иначе засыпает после ${esc(String(st.data.backends?.idle_min ?? 20))} мин без дела)</label>` : ""}`;
     }
-    return `<section class="blk"><div class="blk-h">${esc(a.label || name)} ${chipOf(a.healthy ? true : a.installed ? (a.state === "starting" ? null : false) : null,
+    return `<section class="blk"><div class="blk-h">${esc(a.label || name)} ${chipOf(a.healthy ? true : a.installed ? (["starting", "sleeping"].includes(a.state) ? null : false) : null,
       STATE_RU[a.state] || a.state || "…")}</div>${body}</section>`;
   }
 
@@ -211,6 +219,10 @@ export function create(ctx) {
   }
 
   function automations() {
+    if (st.data.backends?.openclaw?.state === "sleeping") {
+      return emptyState({ icon: "clock", title: "OpenClaw спит", text: "Автоматизации живут в OpenClaw. Запустите его, чтобы увидеть и изменить их; свои автоматизации держат его запущенным.",
+        actions: `<button class="btn" data-wake="openclaw">${ICON.play} Запустить OpenClaw</button>` });
+    }
     const list = (st.data.automations || []).filter((a) => !a.error);
     const err = (st.data.automations || []).find((a) => a.error);
     return `<section class="card"><div class="rows">${list.length ? list.map((a) => `<div class="row"><span class="n">${a.enabled ? "●" : "○"}</span>
@@ -292,6 +304,7 @@ export function create(ctx) {
     if (ds.filter) { st.filter = ds.filter; draw(); return; }
     if (ds.goto) { st.section = ds.goto; draw(); return; }
     if (ds.restart) { await hub("restart", { name: ds.restart }); setTimeout(load, 1500); return; }
+    if (ds.wake) { ctx.toast("Запускаю — 10–25 секунд…", ""); await hub("wake", { name: ds.wake }); load(); return; }
     if (ds.stopall !== undefined) { await runTool("agents_stop", {}, "Остановить агентов"); setTimeout(load, 800); return; }
     if (ds.resume !== undefined) { await runTool("agents_resume", {}, "Возобновить агентов"); return; }
     if (ds.manage) { await runTool("skill_manage", { action: ds.manage, id: ds.id }, "Навык " + ds.id); return; }
@@ -312,6 +325,9 @@ export function create(ctx) {
     }
   });
   el.addEventListener("change", async (e) => {
+    if (e.target.dataset.keep !== undefined) {
+      await hub("keep", { on: e.target.checked }, true); load(); return;
+    }
     if (e.target.id === "abAnswer") {
       try { st.coding = { ...st.coding, ...(await ctx.link.request("coding.settings", { answer: e.target.checked })) }; draw(); }
       catch (er) { ctx.toast(er.message, "err"); }

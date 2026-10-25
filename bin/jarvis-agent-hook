@@ -47,6 +47,8 @@ def arg(name, default=""):
 
 
 def main():
+    if os.environ.get("OPENCLAW_STATE_DIR") or os.environ.get("HERMES_HOME"):
+        return      # a Claude run that JARVIS's own agents started: already shown as their run, not a coding session
     agent = arg("--agent", "claude")
     account = arg("--account", "")
     try:

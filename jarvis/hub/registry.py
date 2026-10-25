@@ -135,6 +135,10 @@ class Capability:
         return d
 
 
+class Sleeping(Exception):
+    """The agent is stopped on purpose (on demand): its capabilities stay listed and wake it when used."""
+
+
 def skill_hash(text: str) -> str:
     body = re.sub(r"\s+", " ", text.strip())
     return hashlib.sha256(body.encode()).hexdigest()[:16]
@@ -162,7 +166,7 @@ class Registry:
         known = set(Capability.__dataclass_fields__)
         for row in data.get("capabilities", []):
             cap = Capability(**{k: v for k, v in row.items() if k in known})
-            if cap.provider in ("openclaw", "hermes"):
+            if cap.provider in ("openclaw", "hermes") and cap.health == "ok":
                 cap.health = "disconnected"   # until the agent answers again
             self.caps[cap.id] = cap
         self.refreshed = data.get("refreshed", {})
@@ -196,10 +200,11 @@ class Registry:
                 try:
                     found = await fn()
                 except Exception as exc:   # noqa: BLE001
+                    asleep = isinstance(exc, Sleeping)
                     for cap in self.caps.values():
-                        if cap.source == name:
-                            cap.health = "disconnected"
-                    report[name] = {"ok": False, "error": str(exc)[:200]}
+                        if cap.source == name and cap.health not in ("disabled", "failed"):
+                            cap.health = "sleeping" if asleep else "disconnected"
+                    report[name] = {"ok": False, "error": str(exc)[:200], "sleeping": asleep}
                     continue
                 for cid in [c.id for c in self.caps.values() if c.source == name]:
                     del self.caps[cid]

@@ -23,6 +23,11 @@ HERMES_STEP = ToolSpec(
     impact="Hermes выполнит этот шаг на компьютере")
 
 
+def clip(text: str, n: int = 1500) -> str:
+    t = " ".join(str(text or "").split()) if len(str(text or "")) > n else str(text or "").strip()
+    return t if len(t) <= n else t[: n - 1].rsplit(" ", 1)[0] + "…"
+
+
 def _hub(t) -> object:
     if t.hub is None:
         raise ToolError("«Возможности» не запущены")
@@ -109,8 +114,8 @@ class CapabilityFind(_HubTool):
             ref = str(args.get("ref") or args.get("id") or "")
             if not ref:
                 raise ToolInputError("Укажите ref навыка ClawHub (@автор/имя)")
-            if hub.lifecycle is None or hub.oc is None:
-                raise ToolError("OpenClaw не подключён — проверить навык нельзя")
+            if hub.lifecycle is None or await hub.need_oc() is None:
+                raise ToolError("OpenClaw не запустился — проверить навык нельзя")
             r = await hub.lifecycle.review(ref, str(args.get("version") or ""))
             REVIEWS[r["ref"]] = REVIEWS[ref] = r
             req = ", ".join(r["requirements"]) or "ничего дополнительно"
@@ -134,11 +139,13 @@ class CapabilityFind(_HubTool):
             return ToolResult({"backends": b, "summary": hub.registry.summary()}, msg + ("; агенты остановлены вами"
                                                                                        if b.get("lockdown") else ""))
         if mode in ("updates", "history"):
-            if hub.lifecycle is None or hub.oc is None:
-                raise ToolError("OpenClaw не подключён")
             if mode == "history":
+                if hub.lifecycle is None:
+                    raise ToolError("«Возможности» не запущены")
                 h = hub.lifecycle.history(20)
                 return ToolResult({"history": h}, f"Последних обновлений: {len(h)}")
+            if await hub.need_oc() is None:
+                raise ToolError("OpenClaw не запустился")
             rows = await hub.lifecycle.check()
             return ToolResult({"updates": rows}, f"Доступно обновлений: {len(rows)}" if rows else "Всё обновлено")
         from .extend import assess
@@ -194,10 +201,9 @@ class CapabilityUse(_HubTool):
         if not r.get("ok"):
             raise ToolError(str(r.get("message") or "агент не справился")[:400])
         out = str(r.get("output") or r.get("message") or "")
+        who = {"openclaw": "OpenClaw", "hermes": "Hermes"}.get(str(r.get("executor")), "Агент")
         return ToolResult({"text": out[:8000], "executor": r.get("executor"), "capability": r.get("capability"),
-                           "ms": r.get("ms"), "joined": bool(r.get("joined"))},
-                          f"{r.get('executor', 'агент').title()} ответил за {round((r.get('ms') or 0) / 1000)} с",
-                          untrusted=True)
+                           "ms": r.get("ms"), "joined": bool(r.get("joined"))}, f"{who}: {clip(out)}", untrusted=True)
 
     async def verify(self, args, result, ctx):
         return Verification("unverified", "Агент ответил; последствия его действий JARVIS не проверял")
@@ -241,8 +247,9 @@ class Specialist(_HubTool):
             hub.delegations.pop(ctx.task_id, None)
         if not r["ok"]:
             raise ToolError(f"Hermes не справился: {r['error'] or r['status']}"[:400])
+        # The reply the person hears / reads is Hermes's own answer (a direct «поручи Гермесу …» has no other step).
         return ToolResult({"text": r["output"][:8000], "tools": r["tools"], "run_id": r["run_id"], "status": r["status"]},
-                          f"Hermes закончил: шагов {len(r['tools'])}", untrusted=True)
+                          "Hermes: " + clip(r["output"]), untrusted=True)
 
     async def verify(self, args, result, ctx):
         if result.data.get("status") == "completed" and result.data.get("text"):
@@ -276,8 +283,8 @@ class SkillInstall(_HubTool):
 
     async def run(self, args, ctx):
         hub = _hub(self)
-        if hub.lifecycle is None or hub.oc is None:
-            raise ToolError("OpenClaw не подключён — устанавливать навыки сейчас нельзя")
+        if hub.lifecycle is None or await hub.need_oc() is None:
+            raise ToolError("OpenClaw не запустился — устанавливать навыки сейчас нельзя")
         ref = str(args["ref"])
         shown = REVIEWS.get(ref)
         if shown is None:
@@ -337,8 +344,8 @@ class SkillManage(_HubTool):
                 raise ToolError(r["message"])
             return ToolResult(r, r["message"])
         lc = hub.lifecycle
-        if lc is None or hub.oc is None:
-            raise ToolError("OpenClaw не подключён")
+        if lc is None or await hub.need_oc() is None:
+            raise ToolError("OpenClaw не запустился")
         from .updates import UpdateError
         try:
             if action in ("enable", "disable"):

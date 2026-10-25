@@ -73,7 +73,7 @@ class Hub:
         r = self.registry
         r.add_source("jarvis", self._src_jarvis)
         r.add_source("apps", self._src_apps)
-        r.add_source("openclaw", lambda: reg.openclaw_caps(self.oc, set(self.cfg.hub_trusted)))
+        r.add_source("openclaw", self._src_openclaw)
         r.add_source("hermes", self._src_hermes)
         r.add_source("shared", self._src_shared)
 
@@ -88,6 +88,21 @@ class Hub:
     @property
     def hermes(self):
         return self.backends.hermes
+
+    async def need_oc(self):
+        """OpenClaw, started first when it sleeps (on demand). None when it is off, not installed or did not start."""
+        b = self.backends
+        if b.openclaw is None:
+            return None
+        if not b.openclaw.c.connected and not await b.wake("openclaw"):
+            return None
+        b.touch("openclaw")
+        return self.oc
+
+    async def _src_openclaw(self) -> list[Capability]:
+        if self.oc is None and self.backends.openclaw is not None and self.backends.on_demand("openclaw"):
+            raise reg.Sleeping("OpenClaw спит до первой задачи")
+        return await reg.openclaw_caps(self.oc, set(self.cfg.hub_trusted))
 
     async def _src_jarvis(self) -> list[Capability]:
         return reg.jarvis_tools(self.gateway.registry) + reg.jarvis_skills(self.cfg)
@@ -175,19 +190,26 @@ class Hub:
 
     async def _loop(self) -> None:
         await asyncio.sleep(5)
+        b = self.backends
+        if (b.openclaw is not None and b.on_demand("openclaw") and b.layout.installed("openclaw")
+                and not self.registry.list(provider="openclaw", include_duplicates=True)):
+            await b.wake("openclaw")          # the first catalog of its skills; it sleeps again when idle
         await self.registry.refresh("openclaw", "hermes")
         self.bus.publish("hub.catalog", {"summary": self.registry.summary()})
         next_sync = next_check = 0.0
         while True:
             now = time.time()
             try:
-                if now >= next_sync and self.oc is not None:
-                    result = await self.clawhub.sync()
+                if now >= next_sync and self.enabled():
+                    result = await self.clawhub.sync()           # ClawHub's own listing: no OpenClaw needed
                     next_sync = now + self.cfg.hub_sync_hours * 3600
                     if result.get("ok") and result.get("new"):
                         self._notice("hub_new", f"Новых навыков в ClawHub: {len(result['new'])}",
                                      ", ".join(result["new"][:5]))
-                if now >= next_check and self.oc is not None:
+                has_clawhub = any(c.origin == "clawhub" for c in self.registry.list(provider="openclaw"))
+                if now >= next_check and not has_clawhub:
+                    next_check = now + self.cfg.hub_update_check_hours * 3600
+                elif now >= next_check and await self.need_oc() is not None:
                     found = await self.lifecycle.check()
                     done = await self.lifecycle.auto_apply()
                     waiting = [f for f in found if f["needs_approval"]]
@@ -246,8 +268,8 @@ class Hub:
         if s in CHANNELS:
             info = CHANNELS[s]
             out = {"service": s, "label": info["label"], "via": "openclaw", "flow": info["flow"], "needs": info["needs"]}
-            if self.oc is None:
-                out["blocked"] = "OpenClaw сейчас не запущен (Возможности → Агенты)."
+            if self.backends.openclaw is None or not self.backends.layout.installed("openclaw"):
+                out["blocked"] = "OpenClaw не установлен или выключен (Возможности → Обзор)."
             if info["flow"] == "terminal":
                 out["command"] = info["command"]
             return out
@@ -258,8 +280,9 @@ class Hub:
         """Hand a bot token to OpenClaw through its environment (kept in the keyring), enable the channel with
         OpenClaw's pairing policy for direct messages, restart the gateway and check that it connects."""
         b = self.backends
-        if b.openclaw is None:
-            return {"ok": False, "message": "OpenClaw не запущен."}
+        if await self.need_oc() is None:
+            return {"ok": False, "message": "OpenClaw не запустился."}
+        b.set_keep(True)                     # a channel must be listened to: OpenClaw stays running from now on
         own = self.store.get(PHONE_TOKEN)
         if own and own == token:
             return {"ok": False, "message": "Это токен бота, через которого JARVIS уже отвечает на телефоне — "
@@ -292,7 +315,7 @@ class Hub:
         return state
 
     async def disconnect_channel(self, channel: str) -> dict:
-        oc = self.oc
+        oc = await self.need_oc()
         if oc is None:
             return {"ok": False, "message": "OpenClaw не запущен."}
         try:
@@ -345,9 +368,9 @@ class Hub:
     async def _run(self, cap: Capability, request: str, *, approve=None, progress=None) -> dict:
         executor = cap.requires.get("executor", "hermes") if cap.provider == "shared" else cap.provider
         if executor == "openclaw" and cap.kind == "skill":
-            oc = self.oc
+            oc = await self.need_oc()
             if oc is None:
-                return {"ok": False, "message": "OpenClaw не подключён."}
+                return {"ok": False, "message": "OpenClaw не запустился."}
             r = await oc.run_agent(f"Use the {cap.name} skill for this request: {request}", timeout=300, title=cap.title)
             return {"ok": r["status"] == "ok", "output": r["text"], "executor": "openclaw", "run_id": r["run_id"],
                     "message": r["text"][:2000] or r.get("error", "")}
@@ -390,7 +413,7 @@ class Hub:
     async def panel(self) -> dict:
         """Everything «Возможности» shows when it opens: caches plus two quick gateway reads."""
         b = self.backends
-        fresh = [n for n in ("openclaw", "hermes") if b.enabled(n) and n not in b.health]
+        fresh = [n for n in ("openclaw", "hermes") if b.enabled(n) and n not in b.health and not b.on_demand(n)]
         if fresh:                                   # opened right after start: check now, don't show «unknown»
             await asyncio.gather(*(b.refresh(n) for n in fresh), return_exceptions=True)
         automations, runs = [], []
@@ -398,6 +421,8 @@ class Hub:
         if oc is not None:
             try:
                 automations = await asyncio.wait_for(oc.automations(), 3)
+                if any(a.get("enabled") and not a.get("system") for a in automations) and not b.keep_openclaw:
+                    b.set_keep(True)         # the person's own automation runs on its schedule only while OpenClaw runs
             except Exception as exc:   # noqa: BLE001
                 automations = [{"error": str(exc)[:120]}]
             runs += [{"agent": "openclaw", "id": k, "title": v.get("title", ""), "started": v["started"]}
@@ -435,17 +460,15 @@ class Hub:
             return {"items": self.clawhub.items(view=str(data.get("view") or "new")) if self.clawhub else [],
                     "last_sync": self.clawhub.last_sync if self.clawhub else 0}
         if action == "sync":
-            if self.oc is None:
-                return {"ok": False, "message": "OpenClaw не подключён."}
             return await self.clawhub.sync()
         if action == "check_updates":
-            if self.oc is None:
-                return {"ok": False, "message": "OpenClaw не подключён."}
+            if await self.need_oc() is None:
+                return {"ok": False, "message": "OpenClaw не запустился."}
             return {"ok": True, "updates": await self.lifecycle.check()}
         if action == "review":
             # What the install card will show (kept for skill_install, which refuses a release that changed since).
-            if self.lifecycle is None or self.oc is None:
-                return {"ok": False, "message": "OpenClaw не подключён."}
+            if self.lifecycle is None or await self.need_oc() is None:
+                return {"ok": False, "message": "OpenClaw не запустился."}
             from .tools import REVIEWS
             ref = str(data.get("ref") or "")[:200]
             r = await self.lifecycle.review(ref, str(data.get("version") or "")[:40])
@@ -464,9 +487,9 @@ class Hub:
                 return {"ok": False, "message": "Это не похоже на токен бота (вида 123456:ABC…)."}
             return await self.connect_telegram(token)
         if action in ("automation_pause", "automation_resume", "automation_run"):
-            oc = self.oc
+            oc = await self.need_oc()
             if oc is None:
-                return {"ok": False, "message": "OpenClaw не подключён."}
+                return {"ok": False, "message": "OpenClaw не запустился."}
             job = str(data.get("target") or "")
             known = {a["id"]: a for a in await oc.automations()}
             if job not in known:
@@ -485,6 +508,17 @@ class Hub:
                 raise ValueError("name: openclaw или hermes")
             self.audit.write("hub.restart", agent=name)
             return await b.restart(name)
+        if action == "wake":
+            name = str(data.get("name") or "openclaw")
+            ok = await b.wake(name) if name in ("openclaw", "hermes") else False
+            label = {"openclaw": "OpenClaw", "hermes": "Hermes"}.get(name, name)
+            return {"ok": ok, "message": f"{label} запущен." if ok else f"{label} не запустился — см. журнал агента."}
+        if action == "keep":
+            b.set_keep(bool(data.get("on")))
+            self.audit.write("hub.keep_openclaw", on=bool(data.get("on")))
+            if b.keep_openclaw:
+                await b.wake("openclaw")
+            return {"ok": True, "backends": b.snapshot()}
         if action == "stop_all":
             return {"ok": True, **await b.stop_all()}
         if action == "resume":

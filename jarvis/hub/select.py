@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from .registry import METHOD_WEIGHT, Capability, Registry, stem, terms, words
 
-HEALTH = {"ok": 1.0, "degraded": 0.6, "disconnected": 0.35}
+HEALTH = {"ok": 1.0, "sleeping": 0.92, "degraded": 0.6, "disconnected": 0.35}
 AUTH = {"none": 1.0, "connected": 1.0, "needs_auth": 0.75, "not_configured": 0.5}
 LATENCY = {"instant": 1.0, "fast": 0.95, "slow": 0.85}
 

@@ -347,6 +347,15 @@ def terminate(pids: list[int], grace: float = 10.0) -> int:
     return len(pids)
 
 
+async def _port_open(port: int) -> bool:
+    try:
+        _r, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), 1)
+        w.close()
+        return True
+    except (OSError, asyncio.TimeoutError):
+        return False
+
+
 def _zombie(pid: int) -> bool:
     try:
         return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] == "Z"
@@ -429,6 +438,8 @@ class Backends:
         self.lockdown = False                 # «стоп всем агентам»: their runs stop, new ones are refused until lifted
         self._task: asyncio.Task | None = None
         self._listeners: list = []
+        self.last_used: dict[str, float] = {}
+        self._waking: dict[str, asyncio.Future] = {}
 
     def enabled(self, name: str) -> bool:
         return bool(getattr(self.cfg, f"{name}_enabled"))
@@ -444,13 +455,93 @@ class Backends:
             self.openclaw = OpenClaw(client)
             for event in ("skills.changed", "plugins.changed", "jarvis.state", "health", "cron", "shutdown"):
                 client.on(event, self._openclaw_event)
-            await self._ensure("openclaw")
-            client.start()
+            if not self.on_demand("openclaw"):
+                await self._ensure("openclaw")
+                client.start()
+            else:
+                self.health["openclaw"] = self._sleeping("openclaw")
         if self.enabled("hermes"):
             self.hermes = Hermes(f"http://127.0.0.1:{self.cfg.hermes_port}", key=lambda: key(self.store, "hermes"),
                                  home=self.layout.hermes_home)
             await self._ensure("hermes")
         self._task = spawn(self._health_loop(), "hub-health")
+
+    # ---------------------------------------------------------------- on demand (OpenClaw: ~1.5 GB resident)
+    @property
+    def keep_openclaw(self) -> bool:
+        return bool(self.db.get_kv("hub_keep_openclaw", False))
+
+    def set_keep(self, keep: bool) -> None:
+        self.db.set_kv("hub_keep_openclaw", bool(keep))
+
+    def on_demand(self, name: str) -> bool:
+        return name == "openclaw" and bool(self.cfg.openclaw_on_demand) and not self.keep_openclaw
+
+    def running(self, name: str) -> bool:
+        child = self.children.get(name)
+        return child is not None and child.running
+
+    def _sleeping(self, name: str) -> dict:
+        return {"name": name, "label": LABELS[name], "state": "sleeping", "healthy": False, "error": "",
+                "version": self.layout.version(name)}
+
+    def touch(self, name: str) -> None:
+        self.last_used[name] = time.monotonic()
+
+    async def wake(self, name: str, timeout: float = 90) -> bool:
+        """Start an on-demand agent (if needed) and wait until it answers. Concurrent callers share one start."""
+        if not self.enabled(name) or not self.layout.installed(name) or self.lockdown:
+            return False
+        self.touch(name)
+        if name == "openclaw" and self.openclaw is not None and self.openclaw.c.connected:
+            return True
+        if name == "hermes" and self.hermes is not None and self.hermes.state == "connected":
+            return True
+        fut = self._waking.get(name)
+        if fut is None:
+            fut = self._waking[name] = asyncio.ensure_future(self._wake(name, timeout))
+            fut.add_done_callback(lambda _f: self._waking.pop(name, None))
+        return await asyncio.shield(fut)
+
+    async def _wake(self, name: str, timeout: float) -> bool:
+        self.health[name] = {**self._sleeping(name), "state": "starting"}
+        self.bus.publish("hub.backends", {"status": self.snapshot()})
+        await self._ensure(name)
+        ok = False
+        if name == "openclaw" and self.openclaw is not None:
+            # Connect once the port is open: retrying earlier only waits out the client's backoff (measured: 23 s → ~11 s).
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline and not await _port_open(self.cfg.openclaw_port):
+                await asyncio.sleep(0.25)
+            self.openclaw.c.start()
+            ok = await self.openclaw.c.wait_ready(max(1.0, deadline - time.monotonic()))
+        elif name == "hermes" and self.hermes is not None:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline and not ok:
+                ok = (await self.hermes.status())["healthy"]
+                if not ok:
+                    await asyncio.sleep(0.5)
+        await self.refresh(name)
+        self.audit.write("hub.woken", agent=name, ok=ok)
+        return ok
+
+    async def sleep(self, name: str) -> None:
+        """Stop an on-demand agent that has been quiet (its data and settings stay)."""
+        if name == "openclaw" and self.openclaw is not None:
+            await self.openclaw.c.close()
+        child = self.children.pop(name, None)
+        if child is not None:
+            await child.stop()
+        left = await asyncio.to_thread(agent_pids, name, self.layout)
+        if left:
+            await asyncio.to_thread(terminate, left, 5.0)
+        self.health[name] = self._sleeping(name)
+        self.bus.publish("hub.backends", {"status": self.snapshot()})
+        self.audit.write("hub.slept", agent=name)
+
+    def busy(self, name: str) -> bool:
+        b = self.openclaw if name == "openclaw" else self.hermes
+        return bool(b is not None and b.runs) or name in self._waking
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -501,8 +592,10 @@ class Backends:
             if left:
                 await asyncio.to_thread(terminate, left, 5.0)
         await self._ensure(name)
+        self.touch(name)
         if name == "openclaw" and self.openclaw is not None:
             self.openclaw.c.reconnects = 0
+            self.openclaw.c.start()
         return {"ok": True, "message": f"{LABELS[name]} перезапущен"}
 
     def _openclaw_event(self, frame: dict) -> None:
@@ -515,7 +608,9 @@ class Backends:
 
     async def refresh(self, name: str) -> dict:
         backend = self.openclaw if name == "openclaw" else self.hermes
-        if backend is None:
+        if backend is not None and self.on_demand(name) and not self.running(name) and name not in self._waking:
+            st = self._sleeping(name)
+        elif backend is None:
             st = {"name": name, "label": LABELS[name], "state": "off", "healthy": False, "error": ""}
         elif not self.layout.installed(name):
             st = {"name": name, "label": LABELS[name], "state": "not_installed", "healthy": False,
@@ -534,7 +629,7 @@ class Backends:
         child = self.children.get(name)
         if child is not None:
             st["restarts"] = child.restarts
-            st["pid"] = child.proc.pid if child.running else None
+            st["pid"] = child.proc.pid if child.running and child.proc is not None else None
         before = self.health.get(name, {})
         self.health[name] = st
         if (before.get("state"), before.get("healthy")) != (st.get("state"), st.get("healthy")):
@@ -547,12 +642,22 @@ class Backends:
         await asyncio.sleep(3)
         while True:
             for name in ("openclaw", "hermes"):
-                if self.enabled(name):
-                    try:
-                        await self.refresh(name)
-                    except Exception:   # noqa: BLE001 — health is best effort
-                        pass
-            await asyncio.sleep(self.HEALTH_S if all(h.get("healthy") for h in self.health.values()) else 5)
+                if not self.enabled(name):
+                    continue
+                try:
+                    if self.on_demand(name) and not self.running(name):
+                        if self.health.get(name, {}).get("state") != "sleeping":
+                            self.health[name] = self._sleeping(name)
+                        continue
+                    await self.refresh(name)
+                    quiet = time.monotonic() - self.last_used.get(name, 0)
+                    if (self.on_demand(name) and self.running(name) and not self.busy(name)
+                            and self.cfg.agents_idle_min and quiet > self.cfg.agents_idle_min * 60):
+                        await self.sleep(name)
+                except Exception:   # noqa: BLE001 — health is best effort
+                    pass
+            awake = [h for n, h in self.health.items() if h.get("state") != "sleeping"]
+            await asyncio.sleep(self.HEALTH_S if all(h.get("healthy") for h in awake) else 5)
 
     def snapshot(self) -> dict:
         out: dict[str, Any] = {}
@@ -561,6 +666,9 @@ class Backends:
                                                        "state": "starting" if self.enabled(name) else "off"})
             out[name]["installed"] = self.layout.installed(name)
             out[name]["enabled"] = self.enabled(name)
+            out[name]["on_demand"] = self.on_demand(name)
+        out["keep_openclaw"] = self.keep_openclaw
+        out["idle_min"] = self.cfg.agents_idle_min
         out["lockdown"] = self.lockdown
         return out
 

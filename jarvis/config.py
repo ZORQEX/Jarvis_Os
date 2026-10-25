@@ -123,6 +123,11 @@ class Config:
     openclaw_port: int = 18789
     openclaw_model: str = "claude-cli/claude-sonnet-5-5"
     openclaw_state_dir: str = ""            # "" = OpenClaw's own ~/.openclaw (a dev/test home gets its own)
+    # OpenClaw keeps ~1.5 GB of memory resident (measured 2026-10-25): it starts when something needs it (a skill,
+    # ClawHub, the panel) and stops after agents_idle_min quiet minutes — unless a channel connected through it or the
+    # person's own automation must keep running, or «держать запущенным» is on in «Возможности».
+    openclaw_on_demand: bool = True
+    agents_idle_min: float = 20.0
     clawhub_url: str = ""                   # "" = https://clawhub.ai (read only; installs go through OpenClaw)
     hermes_enabled: bool = True
     hermes_port: int = 18642
