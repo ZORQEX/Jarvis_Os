@@ -329,6 +329,9 @@ def test_an_agent_gets_only_the_keys_jarvis_hands_it(core, vault, monkeypatch):
     assert argv[1:6] == ["gateway", "run", "--bind", "loopback", "--auth"] and env["OPENCLAW_STATE_DIR"].startswith(str(core.paths.data))
     w = bk.wanted("openclaw", core.config, lay)
     assert w["agents.defaults.heartbeat.every?"] == "0m" and w["agents.defaults.model.primary?"].startswith("claude-cli/")
+    core.config.openclaw_port, core.config.hermes_port = 18789, 18642        # left at the defaults in a test home:
+    assert bk.agent_port("openclaw", core.config) not in (18789, 18642) != bk.agent_port("hermes", core.config)
+    assert bk.launch_spec("hermes", core.config, lay, caps.store)[1]["API_SERVER_PORT"] != "18642"   # never the real one
 
 
 def test_settings_go_through_the_agents_own_tools_once(core, vault, tmp_path):
@@ -343,7 +346,7 @@ def test_settings_go_through_the_agents_own_tools_once(core, vault, tmp_path):
     assert calls[-1][0] == ["config", "patch", "--stdin"] and patch["gateway"]["bind"] == "loopback"
     assert patch["agents"]["defaults"]["heartbeat"]["every"] == "0m" and len(changes) >= 5
     (lay.openclaw_state / "openclaw.json").write_text(json.dumps({
-        "gateway": {"mode": "local", "auth": {"mode": "token"}, "bind": "loopback", "port": core.config.openclaw_port},
+        "gateway": {"mode": "local", "auth": {"mode": "token"}, "bind": "loopback", "port": bk.agent_port("openclaw", core.config)},
         "skills": {"load": {"extraDirs": [str(lay.shared_skills)]}},
         "agents": {"defaults": {"model": {"primary": "anthropic/my-own"}, "heartbeat": {"every": "2h"}}}}))
     calls.clear()

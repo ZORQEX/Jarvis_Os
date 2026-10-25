@@ -45,6 +45,18 @@ def dev_home() -> bool:
     return bool(os.environ.get("JARVIS_HOME"))
 
 
+DEFAULT_PORTS = {"openclaw": 18789, "hermes": 18642}
+
+
+def agent_port(name: str, cfg) -> int:
+    """The agent's port. A dev/test home left at the default gets its own (derived from its core port), so it can never
+    take the real JARVIS's port or talk to the real agent with its own key."""
+    port = int(getattr(cfg, f"{name}_port"))
+    if dev_home() and port == DEFAULT_PORTS[name]:
+        return (20000 if name == "openclaw" else 30000) + int(cfg.port) % 10000
+    return port
+
+
 class Layout:
     """Where the agents and their data are, for one JARVIS home."""
 
@@ -138,10 +150,10 @@ def launch_spec(name: str, cfg, layout: Layout, store) -> tuple[list[str], dict[
         if cfg.clawhub_url:
             env["OPENCLAW_CLAWHUB_URL"] = cfg.clawhub_url
         argv = [str(layout.binary("openclaw")), "gateway", "run", "--bind", "loopback", "--auth", "token",
-                "--port", str(cfg.openclaw_port), "--force"]   # --force: a gateway left by a crashed core is replaced
+                "--port", str(agent_port("openclaw", cfg)), "--force"]   # --force: a gateway left by a crashed core is replaced
     else:
         env["HERMES_HOME"] = str(layout.hermes_home)
-        env.update(API_SERVER_ENABLED="true", API_SERVER_HOST="127.0.0.1", API_SERVER_PORT=str(cfg.hermes_port),
+        env.update(API_SERVER_ENABLED="true", API_SERVER_HOST="127.0.0.1", API_SERVER_PORT=str(agent_port("hermes", cfg)),
                    API_SERVER_KEY=ensure_key(store, "hermes"), JARVIS_LLM_KEY=ensure_key(store, "llm"))
         argv = [str(layout.binary("hermes")), "gateway", "run", "--external-supervisor", "--replace"]
     return argv, env
@@ -174,7 +186,7 @@ def wanted(name: str, cfg, layout: Layout) -> dict:
     share = bool(cfg.hub_share_research and cfg.research_enabled)
     if name == "openclaw":
         return {"gateway.mode": "local", "gateway.auth.mode": "token", "gateway.bind": "loopback",
-                "gateway.port": cfg.openclaw_port, "skills.load.extraDirs+": str(layout.shared_skills),
+                "gateway.port": agent_port("openclaw", cfg), "skills.load.extraDirs+": str(layout.shared_skills),
                 "mcp.servers.jarvis_research": ({**research_mcp(layout), "enabled": True, "requestTimeoutMs": 120000}
                                                 if share else None),
                 "agents.defaults.model.primary?": cfg.openclaw_model,
@@ -451,7 +463,7 @@ class Backends:
         from .hermes import Hermes
         from .openclaw import GatewayClient, OpenClaw
         if self.enabled("openclaw"):
-            client = GatewayClient(f"ws://127.0.0.1:{self.cfg.openclaw_port}", token=lambda: key(self.store, "openclaw"))
+            client = GatewayClient(f"ws://127.0.0.1:{agent_port('openclaw', self.cfg)}", token=lambda: key(self.store, "openclaw"))
             self.openclaw = OpenClaw(client)
             for event in ("skills.changed", "plugins.changed", "jarvis.state", "health", "cron", "shutdown"):
                 client.on(event, self._openclaw_event)
@@ -461,7 +473,7 @@ class Backends:
             else:
                 self.health["openclaw"] = self._sleeping("openclaw")
         if self.enabled("hermes"):
-            self.hermes = Hermes(f"http://127.0.0.1:{self.cfg.hermes_port}", key=lambda: key(self.store, "hermes"),
+            self.hermes = Hermes(f"http://127.0.0.1:{agent_port('hermes', self.cfg)}", key=lambda: key(self.store, "hermes"),
                                  home=self.layout.hermes_home)
             await self._ensure("hermes")
         self._task = spawn(self._health_loop(), "hub-health")
@@ -511,7 +523,7 @@ class Backends:
         if name == "openclaw" and self.openclaw is not None:
             # Connect once the port is open: retrying earlier only waits out the client's backoff (measured: 23 s → ~11 s).
             deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline and not await _port_open(self.cfg.openclaw_port):
+            while time.monotonic() < deadline and not await _port_open(agent_port("openclaw", self.cfg)):
                 await asyncio.sleep(0.25)
             self.openclaw.c.start()
             ok = await self.openclaw.c.wait_ready(max(1.0, deadline - time.monotonic()))
