@@ -56,6 +56,8 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     from .tools.install import SystemInstall
     tools.append(SystemInstall())               # system programs: the user types the password in the system dialog
     tools += [FolderCreate(), FileWrite(config), FolderList(), FileTrash(), ShellRead()]   # quick file actions
+    from .tools.sheets import SheetCreate, SheetEdit, SheetQuery, SheetRead
+    tools += [SheetRead(), SheetQuery(), SheetCreate(config), SheetEdit(config)]   # Excel / CSV without Claude Code
     from .tools.window import WindowShow
     tools.append(WindowShow(bus))               # show a workspace of the JARVIS window (the server sets presence)
     from .tools import desk, machine

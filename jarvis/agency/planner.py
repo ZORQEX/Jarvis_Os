@@ -35,6 +35,14 @@ R = {
                            r"(?:письм|текст|сообщени|документ|переводе|смет))|\b(код\w*|баг\w*|тест\w*|скрипт\w*|функци\w*|репозитори\w*|модул\w*|сборк\w*|"
                            r"компиляц\w*|лог\w*|traceback|python|javascript|typescript|rust|программ\w*|"
                            r"приложени\w* не запуска\w*|не запускается|падает|крашится)"),
+    # Excel / CSV: the conversation has its own table tools (sheet_read / sheet_query / sheet_create / sheet_edit) —
+    # an answer in seconds instead of a Claude Code job (measured 2026-10-26: 25–70 s and an approval per question).
+    "sheet": re.compile(r"\.(?:xlsx|xlsm|xls|ods|csv|tsv)\b|\b(?:эксел|эксель|excel|xlsx)\w*|"
+                        r"\bтаблиц\w*\b.{0,40}\bфайл|\bфайл\w*\b.{0,40}\bтаблиц"),
+    # …unless the table is only the subject of code work («исправь скрипт, который читает xlsx»). Not «тест»/«лог»: a
+    # folder «Excel-тест» or a «лог» column is still a table.
+    "sheet_code": re.compile(r"\b(?:скрипт\w*|код|кода|коде|программ\w*|функци\w*|репозитори\w*|python|pytest|"
+                             r"traceback)\b|~/projects|\b(?:исправь|почини|устрани)\w*\s+(?:ошибк|баг)"),
     "files": re.compile(r"\b(созда\w*|сохрани\w*|запиши|перемести\w*|переименуй\w*|скопируй\w*|удали\w*|скачай\w*|"
                         r"загрузи\w*|распакуй\w*|упакуй\w*|заархивируй\w*|разложи\w*|упорядочи\w*)\b.{0,70}"
                         r"\b(файл\w*|папк\w*|директори\w*|каталог\w*|архив\w*|документы|загрузки|рабочий стол|прайс\w*)"
@@ -127,6 +135,8 @@ def classify_clause(c: str, prev: str | None) -> tuple[str, float]:
     explicit_web = re.search(r"в интернете|в сети\b|онлайн|погугли|загугли", t)
     if explicit_web and not R["files"].search(t):
         return "research", 0.9
+    if R["sheet"].search(t) and not R["install"].search(t) and not R["sheet_code"].search(t):
+        return "chat", 0.9                  # a table: read, compute, create or change it with the sheet tools
     if R["sys_install"].search(t) and not R["project_deps"].search(t):
         return "chat", 0.9                  # a program for the system: Claude picks the packages → system_install
     if R["install"].search(t):

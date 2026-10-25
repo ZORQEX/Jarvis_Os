@@ -5,6 +5,7 @@ description = "JARVIS WorkOS — voice-first desktop assistant core"
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp==3.14.5",
+    "openpyxl==3.1.5",
     "playwright==1.64.0",
     "telethon==1.45.0",
 ]

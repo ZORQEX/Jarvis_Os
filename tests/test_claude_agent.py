@@ -205,6 +205,23 @@ async def test_a_claude_limit_is_said_plainly_by_voice(core, tmp_path, almaty):
     assert '"ai.failed"' in journal and "session limit" in journal
 
 
+async def test_while_the_limit_lasts_every_request_hears_the_same_plain_words(core, tmp_path, almaty):
+    """Seen live 2026-10-26: after the first «Лимит Claude исчерпан…» the next requests got «Не могу выполнить это
+    сейчас: нет доступного исполнителя для «беседа» (claude: Claude недоступен (RATE_LIMITED))»."""
+    tts = FakeTTS()
+    core.director.speech = SpeechManager(core.db, core.bus, tts)
+    real = ClaudeChatProvider(core.config, None, tmp_path)
+    real.configured = lambda: True
+    real._failure("You've hit your session limit · resets 4am (Asia/Almaty)")
+    install(core, claude=real)
+    tid = await core.director.submit("Расскажи что-нибудь интересное", "voice")
+    t = await wait_done(core, tid)
+    msg = core.director.messages(core.director.conversation_id())[-1]["text"]
+    assert t["state"] == S.FAILED and msg.startswith("⚠ Лимит Claude исчерпан — снова заработает")
+    assert "исполнителя" not in msg and "RATE_LIMITED" not in msg
+    await wait_for(lambda: any("Лимит Claude закончился" in c for c in tts.calls))
+
+
 # ---------------------------------------------------------------- a hung process
 class _In:
     def write(self, b):

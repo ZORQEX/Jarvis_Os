@@ -165,7 +165,8 @@ const TITLES = { system_info: "Система", search_files: "Поиск", read
   claude_code_change: "Claude Code", open_url: "Ссылка", folder_list: "Папка", message_send: "Сообщение",
   message_deliver: "Доставка", message_cancel: "Отмена сообщения", contact_find: "Поиск контакта", contact_save: "Контакт",
   file_write: "Запись файла", folder_create: "Новая папка", file_trash: "В корзину", computer_task: "Claude Code",
-  system_install: "Установка", shell_read: "Команда", trust_rule_add: "Правило", site_publish: "Публикация" };
+  system_install: "Установка", shell_read: "Команда", trust_rule_add: "Правило", site_publish: "Публикация",
+  sheet_read: "Таблица", sheet_query: "Расчёт по таблице", sheet_create: "Новый Excel", sheet_edit: "Правка Excel" };
 export const toolTitle = (id) => TITLES[id] || id;
 
 // ---------------------------------------------------------------- result cards
@@ -180,6 +181,7 @@ export function resultCard(step) {
     case "screenshot": return shotCard(d);
     case "note": return noteCard(d);
     case "file_preview": return previewCard(d);
+    case "table": return tableCard(d.card || {});
     case "reminder": return reminderCard(d);
     case "agent_result": return agentCard(d);
     default: return "";
@@ -239,6 +241,17 @@ function previewCard(d) {
   return `<div class="card"><div class="card-head">${ICON.file}<strong>${esc(d.name)}</strong>
     <span class="faint">${fmtBytes(d.size)}${d.clipped ? " · показано начало" : ""}</span></div>
     <pre class="preview-text">${esc((d.text || "").slice(0, 4000))}</pre></div>`;
+}
+
+function tableCard(c) {
+  if (!c.columns?.length) return "";
+  const head = c.columns.map((h) => `<th>${esc(h)}</th>`).join("");
+  const num = (v) => /^[−-]?\d[\d\s\u00a0]*(,\d+)?$/.test(String(v ?? ""));     // «79 261 000», «3 781 020,78»: right-aligned, like Excel
+  const rows = (c.rows || []).map((r) => `<tr>${c.columns.map((_, j) => `<td${num(r[j]) ? ' class="num"' : ""}>${esc(r[j] ?? "")}</td>`).join("")}</tr>`).join("");
+  return `<div class="card"><div class="card-head">${ICON.file}<strong>${esc(c.title || "")}</strong>
+    <span class="faint">${esc(c.sub || "")}</span>
+    ${c.path ? `<button class="btn ghost" style="margin-left:auto" data-open="${esc(c.path)}">${ICON.open} Открыть</button>` : ""}</div>
+    <div class="sheet"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 function reminderCard(d) {

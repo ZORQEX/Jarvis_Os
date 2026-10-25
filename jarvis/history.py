@@ -13,7 +13,7 @@ from .events import EventBus
 
 # tool -> kind of lasting change
 LASTING = {"claude_code_change": "change", "computer_task": "change", "create_note": "note", "file_write": "file",
-           "folder_create": "file",
+           "folder_create": "file", "sheet_create": "file", "sheet_edit": "file",
            "system_install": "install", "site_publish": "publish"}
 TERMINAL = {"completed", "failed", "cancelled", "blocked"}
 _WAKE = re.compile(r"^\s*(джарвис|jarvis)[\s,!.:—-]*", re.I)

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..db import dumps, new_id, now
 from ..providers.base import Cap, ProviderFailure, StepRequest
+from ..tools.sheets import SHEET_EXT
 from .decision import Decision, Step, validate
 from .verifier import verify_step
 from .planner import claude_roots, find_workdir, heuristic_plan, llm_plan, R as PLAN_RE, verifications
@@ -257,7 +258,7 @@ class Agency:
             if s.action in ("analyze", "write", "translate", "chat") and not s.depends_on:
                 for m in re.finditer(r"(~?/[\w./\-]+\.\w{1,5})", s.instruction):
                     p = Path(os.path.expanduser(m.group(1))).resolve()
-                    if p.is_file():
+                    if p.is_file() and p.suffix.lower() not in SHEET_EXT:   # a table: sheet_query computes it
                         rid = f"r{len(new) + 1}"
                         new.append(Step(id=rid, action="read_file", instruction=f"Прочитать {p.name}",
                                         args={"path": str(p)}))
@@ -284,7 +285,12 @@ class Agency:
         self._save(tid, d)
         runnable = [s for s in d.steps if s.status == "planned"]
         if not runnable:
-            # Nothing could run: an honest «не выполнено», not «готово».
+            # Nothing could run: an honest «не выполнено», not «готово». Claude remembered as out of its limit (or
+            # signed out): the same plain sentence as when the limit was hit, never «нет доступного исполнителя».
+            down = self._claude_down(d)
+            if down:
+                return director._finish(tid, cid, "⚠ " + down.text, meta={**self._meta(d, []), "speech": down.speech},
+                                        failed=True)
             return director._finish(tid, cid, self._blocked_message(director, d), meta=self._meta(d, []),
                                     failed=any(s.executor_kind == "provider" or s.action == "send_message"
                                                for s in d.steps) and not self._is_plain_chat(d))
@@ -731,6 +737,12 @@ class Agency:
     @staticmethod
     def _is_plain_chat(d: Decision) -> bool:
         return len(d.steps) == 1 and d.steps[0].action == "chat"
+
+    def _claude_down(self, d: Decision):
+        if not any(s.executor_kind == "provider" for s in d.steps):
+            return None
+        p = self.mgr.providers.get("claude")
+        return p.trouble_now() if p is not None and hasattr(p, "trouble_now") else None
 
     def _blocked_message(self, director, d: Decision) -> str:
         if director.privacy_profile() == "STRICT_OFFLINE" and any(s.executor_kind == "provider" for s in d.steps):

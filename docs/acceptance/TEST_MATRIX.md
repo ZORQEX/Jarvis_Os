@@ -470,3 +470,33 @@ Tests: `uv run pytest -q`, `node --test tests/ui/unit/`, `node tests/ui/workos.m
 | «Секунду, думаю.» when a spoken answer has not started after 2.5 s; none for quick answers | VERIFIED MOCK | test_slow_answer_says_it_is_thinking, test_quick_answer_gets_no_thinking_phrase |
 | Glow blur → gradient | REJECTED | measured 0.6 % vs 0.5–0.6 % of a core while listening at 64 px: no gain, look kept |
 
+
+## Excel and other tables (2026-10-26, user's request «проверь, как JARVIS работает с Excel»)
+Ten requests typed into the chat of a dev core with the real Claude (`tests/ui/chat-run.mjs`, APPROVE=1), on test
+workbooks with known answers: generated sales (240 rows + «Итого»), a family budget in blocks, a 20 000-row export,
+a semicolon CSV, a factory order, and Microsoft's public «Financial Sample.xlsx». Before = the same ten requests on
+f7ce0f4 (every question went to a Claude Code job). Tests: `tests/test_sheets.py`.
+
+| # | Request | Before | After | Status |
+|---|---|---|---|---|
+| 1 | «Что в файле «Продажи 2026.xlsx»?» | ✗ refused («сохраните как CSV»), 12 s | sheets, columns, 240 data rows, the «Итого» row apart, 6.4 s | VERIFIED LIVE |
+| 2 | total revenue and the best product | ✓ 52 s, 1 approval | 79 261 000 ₸, «Ноутбук» 47 700 000 ₸ — exact, 5.6 s, no approval | VERIFIED LIVE |
+| 3 | Иванов in March | ✓ 31 s, 1 approval | 2 022 000 ₸ — exact, 4.3 s | VERIFIED LIVE |
+| 4 | CSV: rows, clients from Алматы | ✓ 31 s, 1 approval (routed to «Заказы» first) | 150 / 22 — exact, 5.1 s, not the orders ledger | VERIFIED LIVE |
+| 5 | Financial Sample: country with the most profit | ✓ 26 s, 1 approval | France 3 781 020,78 — exact, 5.1 s | VERIFIED LIVE |
+| 6 | 20 000 rows: orders, average, cancelled | ✓ 31 s, 1 approval | 20 000 / 125 889 / 1 008 — exact, 9.4 s (reading 0.8 s) | VERIFIED LIVE |
+| 7 | create «Бюджет на ноябрь» with formulas | ✓ 71 s, a Python project (venv, git) left next to it | one .xlsx, totals as formulas, 10–13 s, 1 approval | VERIFIED LIVE |
+| 8 | add «Связь» 6 000 to the expenses | ✓ 25 s, 1 approval | row inserted above the total, SUM range grown, 356 000 / 794 000, backup kept, 8.2–8.5 s | VERIFIED LIVE |
+| 9 | pivot: revenue by region and month, new file | ✓ 48 s, 1 approval | 3 × 6 table + totals as formulas, every cell equal to the known answer, 13–14 s | VERIFIED LIVE |
+| 10 | load the factory file into «Заказы» | ✓ 7 s | unchanged: «Заказы» read it, waits for confirmation, 6.1 s | VERIFIED LIVE |
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Reading and computing need no approval; creating / changing asks once | VERIFIED LIVE + MOCK | live: approvals only in 7, 8, 9; test_a_question_about_a_workbook_needs_no_approval, test_changing_a_workbook_asks_first |
+| Numbers come from the file, not from the model's arithmetic | VERIFIED LIVE | every figure above equals the generator's / an independent openpyxl count |
+| Inserted / deleted rows move formulas like Excel (other sheets too, a total right below grows) | VERIFIED MOCK + LIVE | test_formulas_follow_inserted_and_deleted_rows_like_excel; live #8 |
+| Saved files keep the formulas' results (phone previews, Telegram, other programs see the totals) | VERIFIED LIVE + MOCK | live: openpyxl data_only reads 356 000 / 794 000 and the pivot totals; LibreOffice opens them; test_saved_files_keep_formula_results… |
+| New formula cells shown as dates / numbers / text by what they compute | VERIFIED MOCK | test_saved_files_keep_formula_results… (=DATE → a date, not «46 327») |
+| Files with charts / pivot tables / pictures are never edited in place | VERIFIED MOCK | test_edit_never_loses_charts_in_place |
+| xls / ods via LibreOffice | IMPLEMENTED UNVERIFIED | no .xls / .ods sample in the run |
+| While Claude's limit lasts, every request hears the same plain sentence | VERIFIED LIVE (found) + MOCK | live: 2nd–9th request said «нет доступного исполнителя … (RATE_LIMITED)»; test_while_the_limit_lasts… |

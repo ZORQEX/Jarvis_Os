@@ -264,6 +264,12 @@ button.row:hover { background: var(--surface-2); }
 .row .t .p { color: var(--text-3); font-size: 12px; }
 .row .r { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 .shot { display: block; width: 100%; max-height: 300px; object-fit: contain; background: var(--bg-2); }
+.sheet { max-height: 280px; overflow: auto; border-top: 1px solid var(--line); }
+.sheet table { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
+.sheet th, .sheet td { padding: 5px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap;
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.sheet td.num { text-align: right; }
+.sheet th { position: sticky; top: 0; background: var(--surface-2); color: var(--text-2); font-weight: 600; }
 .preview-text { margin: 0; padding: 10px 14px 14px; white-space: pre-wrap; font: 12.5px/1.5 var(--mono); color: var(--text-2); max-height: 260px; overflow: auto; }
 
 /* approvals */

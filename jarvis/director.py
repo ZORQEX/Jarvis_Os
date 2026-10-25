@@ -63,12 +63,14 @@ class Runtime:
     batch: dict | None = None    # one of several tasks said in one request (they run one after another)
 
 
-def _builds_or_searches(text: str) -> bool:
-    """A request to make something (Claude Code) or to look something up on the web — a word like «заказ» in it
-    does not make it a question about the orders ledger."""
+def _not_the_ledger(text: str) -> bool:
+    """A request to make something (Claude Code), to look something up on the web, or about a table file of its own
+    («сколько клиентов из Алматы в Клиенты.csv») — a word like «заказ» or «клиент» in it does not make it a question
+    about the orders ledger. Loading a factory file into the orders stays with the orders."""
     from .agency.planner import R
     t = text.casefold().replace("ё", "е")
-    return bool(R["build"].search(t) or (R["research"].search(t) and not R["personal"].search(t)))
+    own_table = re.search(r"\.(?:xlsx|xlsm|xls|ods|csv|tsv)\b", t) and not re.search(r"\bв\s+заказ|фабрик", t)
+    return bool(R["build"].search(t) or (R["research"].search(t) and not R["personal"].search(t)) or own_table)
 
 
 def _tasks_ru(n: int) -> str:
@@ -212,7 +214,7 @@ class Director:
         if not answer and self.fashion and source in ("voice", "text", "phone"):
             claim = await self.fashion.claims(rt.strip_wake(text) or text)      # «Джарвис, да» → «да»
             kind = (claim or {}).get("claim")
-            if kind == "weak" and _builds_or_searches(text):
+            if kind == "weak" and _not_the_ledger(text):
                 kind = None       # «создай приложение для управления заказами», «найди поставщиков для заказов»: not the ledger
             if kind == "strong" or (kind == "weak" and (route is None or self.view == "orders")):
                 route = rt.Route("fashion", args={"why": claim.get("why", "")}, why=f"Заказы: {claim.get('why', '')}",

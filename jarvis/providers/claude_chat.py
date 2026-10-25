@@ -70,6 +70,10 @@ CHAT_SYSTEM = """Ты — JARVIS, персональный ассистент н
 снимок экрана, заметки, напоминания, громкость и т. п. Простые действия с файлами делай сразу быстрыми инструментами:
 folder_create (папка), file_write (текстовый файл), folder_list (что в папке), file_trash (удалить в корзину);
 «рабочий стол» — это ~/Desktop. Посмотреть что-то в терминале (ls, df, ps, git status…) — shell_read.
+Excel и другие таблицы (xlsx, xls, ods, csv) — только своими инструментами, не computer_task: что в файле — sheet_read;
+любые числа (суммы, средние, количество, лучший/худший, по месяцам, сводная) — sheet_query, сам не складывай;
+новый Excel — sheet_create (итоги формулами), сводную в новый файл — sheet_query, затем sheet_create; изменить файл —
+sheet_read formulas=true, затем sheet_edit. Файл не нашёлся по имени — search_files.
 Сделать что-то ПОЗЖЕ («через 2 минуты создай файл…», «в 18:00 открой…») — task_schedule (команду пиши полностью,
 с путями и текстом); отменить или перенести запланированное («отмени эту задачу», «перенеси на 5 минут») —
 scheduled_change. Просто напомнить — reminder_create.
@@ -333,6 +337,12 @@ class ClaudeChatProvider(AIProvider):
         if self.last_error_kind == "quota":
             return Health.RATE_LIMITED
         return Health.CONNECTED if self.status == "ready" else Health.DEGRADED
+
+    def trouble_now(self) -> Trouble | None:
+        """Why Claude cannot answer right now — a usage limit until it resets, the sign-in — in plain words, or None."""
+        if self.health() in (Health.RATE_LIMITED, Health.AUTH_ERROR) and self.last_error_raw:
+            return trouble(self.last_error_raw)
+        return None
 
     async def health_check(self, live: bool = False) -> dict:
         self.checked_at = time.time()

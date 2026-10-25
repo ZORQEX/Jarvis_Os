@@ -106,6 +106,12 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   `--fallback-model` on every `claude -p` (`claude_fallback`), CLI events → the task's `step.progress`
   (`progress_line`, never raw arguments), hang watchdog `STALL_S` (no output while no JARVIS tool runs and no API retry
   was announced). Tests `tests/test_claude_agent.py`: fake CLI processes have pid 0 — stub `_stop`, never os.killpg it.
+- Excel / CSV (`tools/sheets.py`): `sheet_read` / `sheet_query` (no approval; numbers only from `sheet_query`, never
+  summed by the model), `sheet_create` / `sheet_edit` (approval, backup; inserted/deleted rows move every formula,
+  merged range and table like Excel — `shift_formula`). A workbook whose formulas have no stored results (written by a
+  program) is recalculated by LibreOffice headless (own profile) before reading. Edits in place refuse files with
+  charts / pivots / pictures (openpyxl drops them) → `save_as`. Planner: a table clause → `chat` (`R["sheet"]`), never a
+  Claude Code job; a table file of its own is not the orders ledger (`director._not_the_ledger`).
 - Speech: one task speaks at a time (`take_floor`), never while the person talks (`voice.active` → `hold_until`).
   Echo: `_strip_echo` drops what JARVIS's voice said during the phrase (both windows; they are separate browsers, so
   neither's echo cancellation hears the other). A cut-off phrase is done as is after 4 s of quiet (`FRAGMENT_WAIT_S`).
