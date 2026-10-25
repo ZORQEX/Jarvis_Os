@@ -3,6 +3,7 @@
 #   scripts/install.sh            launcher in ~/.local/bin + app-menu entry
 #   scripts/install.sh --service  also a systemd user service for the core (starts at login)
 #   scripts/install.sh --uninstall remove everything this script added (user data is kept)
+#   JARVIS_NO_AGENTS=1 scripts/install.sh   skip OpenClaw and Hermes (scripts/install-agents.sh, ~0.9 GB on disk)
 # Waybar module and Hyprland key bindings are opt-in: see config/omarchy/README.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,6 +16,7 @@ if [[ ${1:-} == --uninstall ]]; then
   systemctl --user disable --now jarvis-workos.service 2>/dev/null || true
   rm -f "$UNIT" "$APP" "$ICON"
   [[ -L $BIN ]] && rm -f "$BIN"
+  [[ -L $HOME/.local/bin/jarvis-agent-hook ]] && rm -f "$HOME/.local/bin/jarvis-agent-hook"
   systemctl --user daemon-reload 2>/dev/null || true
   echo "Удалено. Данные остаются в ~/.local/share/jarvis и ~/.config/jarvis."
   exit 0
@@ -23,6 +25,9 @@ fi
 [[ -x "$ROOT/.venv/bin/python" ]] || (cd "$ROOT" && uv sync --frozen)
 mkdir -p "$(dirname "$BIN")" "$(dirname "$APP")" "$(dirname "$ICON")"
 if [[ -e $BIN && ! -L $BIN ]]; then echo "$BIN уже существует и не является ссылкой — не трогаю"; else ln -sf "$ROOT/bin/jarvis" "$BIN"; fi
+# The relay coding agents' hooks run (jarvis/hub/coding.py): registered only when the person presses «Подключить» in
+# «Возможности → На компьютере»; a stable path so the hooks survive a moved checkout.
+ln -sf "$ROOT/bin/jarvis-agent-hook" "$HOME/.local/bin/jarvis-agent-hook"
 cp "$ROOT/web/icon.svg" "$ICON"
 cat > "$APP" <<DESK
 [Desktop Entry]
@@ -112,6 +117,12 @@ fi
 
 # Browser control for Claude Code tasks the user allows (Microsoft Playwright MCP, pinned; uses /usr/bin/chromium).
 command -v npx >/dev/null && npx -y @playwright/mcp@0.0.83 --help >/dev/null 2>&1 || true
+
+# OpenClaw and Hermes Agent (from morph-rq/jarvis-os; «Возможности», ADR-008): pinned Node 24 + OpenClaw (npm lock) and
+# a hash-locked Hermes venv under ~/.local/share/jarvis/agents. Both think with Claude through the person's own sign-in.
+if [[ -z ${JARVIS_NO_AGENTS:-} ]]; then
+  "$ROOT/scripts/install-agents.sh" || echo "OpenClaw/Hermes не установились — JARVIS работает и без них"
+fi
 
 # Emergency fallback voice only (used if Silero cannot start): Piper (GPL-3.0, separate process), voice "denis" (CC0).
 PIPER="$HOME/.local/share/jarvis/piper"

@@ -410,3 +410,28 @@ Claude's WebSearch; after = JARVIS's fast search + one Claude answer):
 | «Какая сейчас цена Bitcoin?» | (a Claude turn) | 0.4 s, no AI |
 
 One run each (no averaging); network and Claude latency vary. SearXNG: ~170 MB RSS while JARVIS runs.
+
+## OpenClaw, Hermes and the coding agents, from morph-rq/jarvis-os (2026-10-25, ADR-008)
+Tests: `uv run pytest -q` → 597 passed, 6 skipped (19 in `tests/test_hub.py`, stand-ins for both agents and Claude);
+`node --test tests/ui/unit/` → 42 passed. Live checks on a dev core (own JARVIS_HOME, ports 8899 / 18889 / 18742).
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| OpenClaw 2026.10.6 + Hermes 0.19.0 installed pinned, user level | VERIFIED LOCAL | `scripts/install-agents.sh`: Node sha256, npm ci (344 packages), 78 hashed wheels |
+| Both started by the core on loopback with their own keys; settings through their own tools | VERIFIED LIVE | dev core: OpenClaw 505 methods, 55 skills, 62 plugins; `<data>/hub/migrations.log` |
+| OpenClaw thinks with Claude through the Claude Code sign-in (no key) | VERIFIED LIVE | agent turn via `claude-cli/claude-sonnet-5-5`, 7.6 s |
+| Hermes thinks with Claude through `/llm/v1` (`claude -p`) | VERIFIED LIVE | answer 3.8 s; file read 9.4 s; 2.5–6 s per model turn |
+| Hermes searches through JARVIS's fast search (MCP → Gateway) | VERIFIED LIVE | «Поручи Гермесу: … Лувр …» → web_search step on the same task, answer with source, 14.2 s |
+| Hermes's risky steps become JARVIS approval cards | VERIFIED MOCK | test_hermes_steps_become_jarvis_approval_cards |
+| Upstream skill runs only after a HIGH approval; deny = nothing runs | VERIFIED MOCK | test_an_upstream_skill_runs_only_after_a_yes |
+| One catalog, duplicates hidden, Russian requests ranked | VERIFIED MOCK + LIVE | test_one_catalog…; live: 211 capabilities, 2 duplicates |
+| ClawHub install only clean + reviewed, hash-checked; updates with rollback | IMPLEMENTED (ported), MOCK-tested pieces | `hub/updates.py`; not run against the real ClawHub (no skill installed) |
+| Emergency stop reaches the agents; «останови агентов» | VERIFIED MOCK | test_emergency_stop_reaches_the_agents |
+| OpenClaw on demand (sleeps, wakes for work, keeps when needed) | VERIFIED MOCK + LIVE | test_openclaw_sleeps…; live: asleep after start, woke from the panel in 23 s (its own start-up ~20 s) |
+| A gateway left by a killed core is stopped, never the real one of another home | VERIFIED LOCAL + LIVE | test_a_gateway_left…; live audit `hub.stale_stopped` |
+| Coding-agent hooks: merged with backup, idempotent, removable, unreadable file untouched | VERIFIED LOCAL | test_hooks_are_added_and_removed… |
+| Relay never blocks an agent (no JARVIS / no window / no answer → terminal asks) | VERIFIED LOCAL | test_the_relay_reports_sessions… |
+| Real Claude Code permission request answered from the window | VERIFIED LIVE | `claude -p` with hooks via `--settings` → card → «Разрешить» → Bash ran, file created, 10 s |
+| «Возможности» workspace, 8 sections, 0 console errors | VERIFIED LOCAL | headless screenshots against the dev core |
+| Telegram/WhatsApp/Slack/Discord/Signal through OpenClaw | IMPLEMENTED UNVERIFIED | needs the person's own bot tokens / QR |
+| Hooks installed into the person's own Claude Code accounts | NOT DONE YET | waits for «Подключить» in «Возможности → На компьютере» |

@@ -75,6 +75,16 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   Router phrases only when connected (`ctx["home"]`). Tests use a fake HA (`tests/test_home.py`).
 - Meetings (`jarvis/meeting.py`): pw-record mic + sink monitor → GigaAM chunks cut at pauses → Claude summary only in
   AUTHORIZED_CLOUD; no numpy in the core venv (pure-Python mix). Tests use a fake recorder script.
+- «Возможности» (`jarvis/hub/`, ADR-008, from jarvis-os): OpenClaw + Hermes Agent as the core's children
+  (`scripts/install-agents.sh`, pinned; data in ~/.openclaw, ~/.hermes; a JARVIS_HOME gets its own), keys in the keyring
+  passed only in their env. Both think with Claude: OpenClaw `claude-cli/…`, Hermes → `/llm/v1` (`hub/llm.py`, one
+  locked-down `claude -p` per turn, actions as JSON text — never `--json-schema`, it made Claude call the tools itself).
+  OpenClaw is on demand (~1.5 GB; `Backends.wake/sleep`, `Hub.need_oc()`), its heartbeat off. One catalog
+  (`registry.py`/`select.py`); tools in `hub/tools.py` (one risk each; Hermes's risky steps → `hermes_step` cards);
+  agents search via `/mcp/research` (Gateway). Coding agents: `bin/jarvis-agent-hook` → `$XDG_RUNTIME_DIR/jarvis/
+  hooks.sock` (`hub/coding.py`; hooks only after «Подключить»; permission answers opt-in, silence = terminal). Window:
+  `workspaces/abilities.js`, `ui/coding-ask.js`. Tests: stand-ins `tests/hub_fakes.py` — never the real agents; dev
+  cores need other `openclaw_port`/`hermes_port`. A killed core's gateway is found by its state folder (`agent_pids`).
 - Memory (`jarvis/memory.py`, table `memory`): «запомни, что …» / «что ты обо мне помнишь» / «забудь, что …»;
   `memory_line` goes into the state line of every AI request; the AI may save lasting facts itself (memory_save).
 - Living speech: `router.simplify` strips fillers / «можешь» / infinitives so «Мне нужно открыть папку с колледжем»
