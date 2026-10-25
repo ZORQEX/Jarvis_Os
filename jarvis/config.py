@@ -81,6 +81,9 @@ class Config:
     # Haiku 0.9–1.9 s to first words, never stalled; Sonnet ~1.0 s typical but 4–10 s stalls in 1–4 of 10 answers.
     # Settings → Голос can switch voice back to the main model («подробнее, но иногда дольше»).
     claude_voice_model: str = "claude-haiku-5-5"
+    # When a model is overloaded or unavailable, the CLI answers with the other models above (`--fallback-model`) and
+    # tries the chosen one again on the next question. false = fail instead (JARVIS then says so in plain words).
+    claude_fallback: bool = True
     # Claude Code as the computer/code executor: empty model = the CLI's own default
     claude_model: str = ""
     # No limits on thinking time by default: research, builds and installs take what they need and give a result.

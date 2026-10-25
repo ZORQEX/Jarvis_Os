@@ -153,7 +153,8 @@ class ScriptedClaude(ClaudeChatProvider):
         return None
 
     async def run_tool_loop(self, system, history, user_text, tools, execute, on_delta=None, max_rounds=6,
-                            estop=lambda: False, checkpoint=None, thinking=None, role="main", conversation=None):
+                            estop=lambda: False, checkpoint=None, thinking=None, role="main", conversation=None,
+                            progress=None):
         self.calls.append({"system": system, "history": list(history), "user": user_text, "role": role})
         self.last_system, self.last_role = system, role
         turn = self.turns.pop(0)
@@ -166,6 +167,9 @@ class ScriptedClaude(ClaudeChatProvider):
                 text += item
                 if on_delta:
                     on_delta(item)
+            elif isinstance(item, dict):       # {"progress": (text, kind, info)}: what the real CLI's events report
+                if progress:
+                    progress(*item["progress"])
             else:              # the same path a real MCP call takes: allowed-tool check, step limit, then the Gateway
                 self.tool_results.append(await self.mcp_call(item[0], item[1]))
         self.current_execute = None

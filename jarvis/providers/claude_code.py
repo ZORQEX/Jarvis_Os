@@ -266,8 +266,14 @@ class ClaudeCodeProvider(AIProvider):
             low = msg.casefold()
             kind = "auth" if ("login" in low or "auth" in low) else "quota" if ("limit" in low or "budget" in low) \
                 else "invalid"
-            self.last_error, self.last_error_kind = "Claude Code: " + msg[:300], kind
-            raise ProviderFailure(kind, "Claude Code: " + msg[:300])
+            shown = "Claude Code: " + msg[:300]
+            if kind in ("auth", "quota"):
+                from .claude_chat import trouble       # a usage limit / sign-in: plain words and the reset time
+                t = trouble(msg)
+                if t.kind in ("auth", "quota"):
+                    kind, shown = t.kind, t.text
+            self.last_error, self.last_error_kind = shown, kind
+            raise ProviderFailure(kind, shown)
         self.last_error = self.last_error_kind = None
         self.db.set_kv("claude_code_verified_at", time.time())
         usage = result.get("usage") or {}

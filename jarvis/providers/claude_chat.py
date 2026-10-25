@@ -137,12 +137,143 @@ def classify(text: str) -> str:
     return "server"
 
 
+# ---------------------------------------------------------------- failures in plain words
+# The CLI's own wording (seen live 2026-10-22 and 10-25): «You've hit your session limit · resets 4am (Asia/Almaty)»;
+# also «weekly limit · resets Oct 30, 9am», «Opus limit», «monthly spend limit», «team's shared budget».
+STOPPED = "Claude Code остановился"
+STALLED = "Claude Code перестал отвечать"
+LIMIT_RE = re.compile(r"\b(?:hit|reached) your\b[^.·\n]{0,40}?\b(?:limit|budget)\b|usage limit|out of (?:extra )?usage",
+                      re.I)
+RESET_RE = re.compile(r"resets\s+(?:at\s+)?(?:(?P<mon>[A-Z][a-z]{2})[a-z]*\.?\s+(?P<day>\d{1,2}),?\s+(?:at\s+)?)?"
+                      r"(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>[ap])\.?m\b\.?(?:\s*\((?P<tz>[\w/+\-]+)\))?", re.I)
+OVERLOAD_RE = re.compile(r"overloaded|\b5(?:29|03|02|00)\b|internal server error|api error|rate.?limit|\b429\b", re.I)
+MODEL_RE = re.compile(r"selected model|not_found_error|(?:invalid|unknown) model|model\b.{0,60}\b(?:not (?:found|exist|"
+                      r"available)|may not exist|unavailable)", re.I)
+AUTH_RE = re.compile(r"\blog ?in\b|/login|\bauth|oauth|api key|\b401\b|\b403\b|credential", re.I)
+NETWORK_RE = re.compile(r"timed? ?out|timeout|econn|enotfound|getaddrinfo|network|connection (?:error|refused|reset)|"
+                        r"fetch failed|offline", re.I)
+MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
+                                      "dec"), 1)}
+MONTHS_RU = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября",
+             "декабря")
+LOCAL_OK = "Простые команды — открыть приложение, папку или сайт, громкость, заметки, напоминания — работают и без него."
+
+
+class Trouble:
+    """A Claude failure for a person: what happened and what still works (screen), one short sentence (voice)."""
+
+    def __init__(self, kind: str, text: str, speech: str, until: float | None = None):
+        self.kind, self.text, self.speech, self.until = kind, text, speech, until
+
+
+def reset_at(raw: str, now: float | None = None) -> float | None:
+    """«resets 4am (Asia/Almaty)» / «resets Oct 30, 9:20pm» → the next such moment (epoch seconds)."""
+    import datetime as dt
+    m = RESET_RE.search(raw or "")
+    if not m:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(m["tz"]) if m["tz"] else None
+    except (ImportError, KeyError, ValueError):
+        tz = None
+    hour = int(m["h"]) % 12 + (12 if m["ap"].lower() == "p" else 0)
+    base = dt.datetime.fromtimestamp(now or time.time(), tz).astimezone(tz)
+    try:
+        if m["mon"]:
+            month = MONTHS.get(m["mon"][:3].lower())
+            if not month:
+                return None
+            t = base.replace(month=month, day=int(m["day"]), hour=hour, minute=int(m["m"] or 0), second=0, microsecond=0)
+            if t < base - dt.timedelta(days=1):
+                t = t.replace(year=t.year + 1)
+        else:
+            t = base.replace(hour=hour, minute=int(m["m"] or 0), second=0, microsecond=0)
+            if t <= base:
+                t += dt.timedelta(days=1)
+    except ValueError:
+        return None
+    return t.timestamp()
+
+
+def when_ru(ts: float, now: float | None = None) -> tuple[str, str]:
+    """(«в 4:00» | «завтра в 9:00» | «30 октября в 9:00», spoken «в 4 утра» | «в 9 20 вечера» …) in this computer's time."""
+    import datetime as dt
+    t, n = dt.datetime.fromtimestamp(ts), dt.datetime.fromtimestamp(now or time.time())
+    clock = f"{t.hour}:{t.minute:02d}"
+    part = "ночи" if t.hour < 4 else "утра" if t.hour < 12 else "дня" if t.hour < 17 else "вечера"
+    said = f"в {t.hour % 12 or 12}" + (f" {t.minute:02d}" if t.minute else "") + f" {part}"
+    if t.date() == n.date() or (t - n).total_seconds() < 12 * 3600:
+        return f"в {clock}", said
+    if t.date() == n.date() + dt.timedelta(days=1):
+        return f"завтра в {clock}", "завтра " + said
+    day = f"{t.day} {MONTHS_RU[t.month - 1]}"
+    return f"{day} в {clock}", f"{day} {said}"
+
+
+def trouble(raw: str, now: float | None = None) -> Trouble:
+    """The CLI's error (English, technical) → what the person reads and hears. Never invents a reason: an unknown
+    error is shown as it came."""
+    raw = " ".join(str(raw or "").split())
+    if raw.startswith(STALLED):
+        return Trouble("server", "Claude перестал отвечать — я остановил его, со следующей просьбой он запустится заново. "
+                       "Повторите, пожалуйста.", "Claude завис. Повторите, пожалуйста, я запущу его заново.")
+    if raw.startswith(STOPPED):
+        return Trouble("server", "Claude Code неожиданно остановился — со следующей просьбой он запустится заново. "
+                       "Повторите, пожалуйста.", "Claude остановился. Повторите, пожалуйста.")
+    if LIMIT_RE.search(raw):
+        until = reset_at(raw, now)
+        weekly = re.search(r"weekly|seven.day|opus limit|sonnet limit|fable limit", raw, re.I)
+        what = "Недельный лимит Claude" if weekly else "Лимит Claude"
+        if re.search(r"spend|budget|credit", raw, re.I):
+            what = "Оплаченный лимит Claude"
+        if until:
+            screen, said = when_ru(until, now)
+            return Trouble("quota", f"{what} исчерпан — снова заработает {screen}. {LOCAL_OK}",
+                           f"{what} закончился, он вернётся {said}. Простые команды выполняю и без него.", until)
+        return Trouble("quota", f"{what} сейчас исчерпан. {LOCAL_OK}",
+                       f"{what} закончился. Простые команды выполняю и без него.")
+    if MODEL_RE.search(raw):
+        m = re.search(r"model[\s(:«\"']+(claude-[\w.\-]+|opus|sonnet|haiku|fable)", raw, re.I)
+        name = f" ({m.group(1)})" if m else ""
+        return Trouble("model", f"Выбранная модель Claude{name} сейчас недоступна. Я попробую её снова со следующим "
+                       "вопросом; если не пройдёт — модель нужно сменить в настройках JARVIS (claude_chat_model).",
+                       "Модель Claude сейчас недоступна. Подробности на экране.")
+    if OVERLOAD_RE.search(raw):
+        return Trouble("server", "Claude сейчас перегружен: я повторял запрос и пробовал запасную модель — не вышло. "
+                       "Попробуйте через минуту.", "Claude сейчас перегружен. Попробуйте через минуту.")
+    if AUTH_RE.search(raw):
+        return Trouble("auth", "Claude Code вышел из аккаунта — нужно войти заново: в терминале команда claude, затем "
+                       f"/login. {LOCAL_OK}", "Claude вышел из аккаунта, нужно войти заново. Как — написал на экране.")
+    if NETWORK_RE.search(raw):
+        return Trouble("network", f"Нет связи с Claude — похоже, пропал интернет. {LOCAL_OK}",
+                       "Нет связи с Claude, похоже, пропал интернет.")
+    return Trouble("server", f"Claude не смог ответить: {raw[:200].rstrip('. ') or 'без объяснения причины'}.",
+                   "Claude не смог ответить. Причина на экране.")
+
+
+def progress_line(name: str, args: dict | None, titles: dict | None = None) -> str:
+    """What Claude is doing now, for the task's progress line — never raw tool calls or terminal output."""
+    a = args if isinstance(args, dict) else {}
+    if name == "WebSearch":
+        return f"Ищу в интернете: {str(a.get('query', ''))[:80]}".rstrip(": ")
+    if name == "WebFetch":
+        host = re.sub(r"^https?://(www\.)?", "", str(a.get("url", ""))).split("/")[0]
+        return f"Читаю страницу {host}".strip()
+    name = name.replace("mcp__jarvis__", "")
+    title = (titles or {}).get(name)
+    return title or "Выполняю действие"
+
+
 class _Turn:
-    def __init__(self, on_delta, on_tool, proc=None):
-        self.on_delta, self.on_tool, self.proc = on_delta, on_tool, proc
+    def __init__(self, on_delta, on_tool, proc=None, on_status=None):
+        self.on_delta, self.on_tool, self.proc, self.on_status = on_delta, on_tool, proc, on_status
         self.text, self.result, self.tools = "", None, []
         self.first_ms = None
+        self.model = None                 # the fallback model, when the main one was overloaded for this answer
         self.t0 = time.perf_counter()
+        self.heard = time.monotonic()     # the last output of the process for this answer (stall watchdog)
+        self.quiet_until = 0.0            # Claude announced a wait (API retry with back-off): silence is expected
         self.done = asyncio.Event()
 
 
@@ -156,6 +287,10 @@ class ClaudeChatProvider(AIProvider):
     cloud = True     # the CLI sends the conversation to Anthropic
 
     MAX_TURNS = 40   # then a fresh session (the context would only grow)
+    # No output at all for this long while no JARVIS tool runs for the answer = the process hangs (it streams every
+    # token, thinking included, and announces API retries). Work itself has no time limit.
+    STALL_S = 180.0
+    TICK_S = 5.0     # how often the watchdog looks
 
     def __init__(self, config, db, state_dir: Path, registry=None):
         self.config, self.db, self.registry = config, db, registry
@@ -175,9 +310,12 @@ class ClaudeChatProvider(AIProvider):
         self.active_model = config.claude_chat_model    # the model the running process answers with now
         self._ctl: dict[str, asyncio.Future] = {}       # control requests waiting for Claude's confirmation
         self.current_execute = None              # the active task's executor for MCP tool calls
+        self.inflight = 0                        # JARVIS tool calls running for the current answer
         self.logged_in: bool | None = None
         self.last_error: str | None = None
         self.last_error_kind: str | None = None
+        self.last_error_raw: str | None = None   # the CLI's own words, for the journal
+        self.limited_until: float | None = None  # a usage limit and when it resets
         self.checked_at: float | None = None
         self.status = "unknown"
 
@@ -190,6 +328,8 @@ class ClaudeChatProvider(AIProvider):
             return Health.NOT_CONFIGURED
         if self.logged_in is False or self.last_error_kind == "auth":
             return Health.AUTH_ERROR
+        if self.last_error_kind == "quota" and self.limited_until and time.time() >= self.limited_until:
+            self.last_error = self.last_error_kind = self.limited_until = None     # the limit has reset
         if self.last_error_kind == "quota":
             return Health.RATE_LIMITED
         return Health.CONNECTED if self.status == "ready" else Health.DEGRADED
@@ -242,11 +382,31 @@ class ClaudeChatProvider(AIProvider):
     def describe(self) -> dict:
         return {"provider": "claude", "configured": self.configured(), "key_settable": False, "status": self.status,
                 "auth": "Вход Claude Code на этом компьютере (подписка Claude)", "logged_in": self.logged_in,
-                "last_error": self.last_error, "checked_at": self.checked_at,
+                "last_error": self.last_error, "checked_at": self.checked_at, "limited_until": self.limited_until,
+                "fallback_models": [m for m in self._fallbacks(self.config.claude_chat_model).split(",") if m],
                 "models": [{"id": self.config.claude_chat_model, "role": "беседа"},
                            {"id": self.voice_model(), "role": "ответы голосом"},
                            {"id": self.config.claude_fast_model, "role": "разбор команд"}],
                 "session": {"running": bool(self.proc and self.proc.returncode is None), "turns": self.session_turns}}
+
+    def _fallbacks(self, main: str) -> str:
+        """`--fallback-model`: the CLI answers with these, in order, when `main` is overloaded or unavailable, and tries
+        the main model again on the next question. The configured models other than `main` (the voice model may be
+        switched in mid-session, so it stays in the list)."""
+        if not getattr(self.config, "claude_fallback", True):
+            return ""
+        models = [self.config.claude_voice_model, self.config.claude_chat_model, self.config.claude_fast_model]
+        return ",".join(m for m in dict.fromkeys(models) if m and m != main)
+
+    def _failure(self, raw: str) -> ProviderFailure:
+        """A failed answer → ProviderFailure with plain words (`.speech` for the voice); the CLI's own text goes to the
+        journal only."""
+        t = trouble(raw)
+        self.last_error, self.last_error_kind, self.last_error_raw = t.text, t.kind, str(raw)[:300]
+        self.limited_until = t.until if t.kind == "quota" else None
+        e = ProviderFailure(t.kind, t.text)
+        e.speech, e.raw = t.speech, str(raw)[:300]
+        return e
 
     # ---------------------------------------------------------------- the long-lived conversation process
     def _tools(self) -> list[dict]:
@@ -281,6 +441,8 @@ class ClaudeChatProvider(AIProvider):
                 "--include-partial-messages", "--no-session-persistence", "--restricted", "--disable-slash-commands",
                 "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", "WebSearch,WebFetch",
                 "--allowedTools", *allowed, "--model", self.model, "--append-system-prompt", CHAT_SYSTEM]
+        if self._fallbacks(self.model):
+            argv[argv.index("--model"):argv.index("--model")] = ["--fallback-model", self._fallbacks(self.model)]
         if mcfg:
             argv[argv.index("--strict-mcp-config") + 1:argv.index("--strict-mcp-config") + 1] = ["--mcp-config", str(mcfg)]
         # A computer_task (a whole site/app) waits for the user's «да» and then runs Claude Code: allow up to an hour.
@@ -316,6 +478,15 @@ class ClaudeChatProvider(AIProvider):
                 continue
             if turn is None or turn.proc is not proc:
                 continue          # output of an old (restarted) process never touches the current question
+            turn.heard = time.monotonic()
+            if t == "system" and ev.get("subtype") in ("api_retry", "model_fallback"):
+                if ev.get("subtype") == "api_retry":     # Claude waits retry_delay_ms, then asks the API again
+                    turn.quiet_until = time.monotonic() + float(ev.get("retry_delay_ms") or 0) / 1000 + 60
+                else:
+                    turn.model = ev.get("fallback_model") or turn.model
+                if turn.on_status:
+                    turn.on_status(ev)
+                continue
             if t == "stream_event":
                 d = (ev.get("event") or {}).get("delta") or {}
                 if d.get("type") == "text_delta" and d.get("text"):
@@ -330,7 +501,7 @@ class ClaudeChatProvider(AIProvider):
                         name = str(c.get("name", "")).replace("mcp__jarvis__", "")
                         turn.tools.append(name)
                         if turn.on_tool:
-                            turn.on_tool(name)
+                            turn.on_tool(name, c.get("input") or {})
                         if turn.text and not turn.text.endswith(("\n", " ")):
                             turn.text += " "          # narration before a tool call, then the answer
             elif t == "result":
@@ -339,7 +510,7 @@ class ClaudeChatProvider(AIProvider):
         # process ended: only ITS question fails (measured race: an old process's end failed a new question in 13 ms)
         turn = self.turn
         if turn and turn.proc is proc and not turn.done.is_set():
-            turn.result = {"is_error": True, "result": "Claude Code остановился"}
+            turn.result = {"is_error": True, "result": STOPPED}
             turn.done.set()
 
     async def _stop(self) -> None:
@@ -361,7 +532,7 @@ class ClaudeChatProvider(AIProvider):
         await self._stop()
 
     async def _send(self, text: str, on_delta=None, on_tool=None, timeout: float | None = None, model: str | None = None,
-                    execute=None) -> _Turn:
+                    execute=None, on_status=None) -> _Turn:
         """One question at a time. On cancel («стоп»), the lock is handed to a cleanup task that releases it only when
         Claude has confirmed the interruption — so the next question never mixes with the old answer."""
         await self.lock.acquire()
@@ -373,23 +544,45 @@ class ClaudeChatProvider(AIProvider):
             await self._start()
             if model and model != self.active_model:
                 await self._set_model(model)          # voice ↔ text: same conversation, other model
-            turn = self.turn = _Turn(on_delta, on_tool, self.proc)
+            turn = self.turn = _Turn(on_delta, on_tool, self.proc, on_status)
             msg = {"type": "user", "message": {"role": "user", "content": text}}
             self.proc.stdin.write((json.dumps(msg, ensure_ascii=False) + "\n").encode())
             await self.proc.stdin.drain()
             self.session_turns += 1
             try:
-                await asyncio.wait_for(turn.done.wait(), timeout)
+                stalled = await self._wait(turn, timeout)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 handed_off = True
                 self._interrupt(turn)
                 raise
+            if stalled:
+                # A hung process would not confirm an interrupt either: end it, the next question starts a fresh one.
+                await self._stop()
+                turn.result = {"is_error": True, "result": STALLED}
             return turn
         finally:
             if not handed_off:
                 self.turn = None
                 self.current_execute = None
                 self.lock.release()
+
+    async def _wait(self, turn: _Turn, timeout: float | None) -> bool:
+        """Wait for the answer as long as it takes; True if the process went silent — no output for STALL_S while no
+        JARVIS tool runs for it and Claude announced no API retry."""
+        end = None if timeout is None else time.monotonic() + timeout
+        while not turn.done.is_set():
+            tick = self.TICK_S if end is None else max(0.0, min(self.TICK_S, end - time.monotonic()))
+            try:
+                await asyncio.wait_for(turn.done.wait(), tick)
+                break
+            except asyncio.TimeoutError:
+                pass
+            t = time.monotonic()
+            if end is not None and t >= end:
+                raise asyncio.TimeoutError
+            if self.inflight == 0 and t - turn.heard > self.STALL_S and t > turn.quiet_until:
+                return True
+        return False
 
     def _interrupt(self, turn: _Turn) -> None:
         proc = self.proc
@@ -415,7 +608,10 @@ class ClaudeChatProvider(AIProvider):
     # ---------------------------------------------------------------- conversation with JARVIS tools
     async def run_tool_loop(self, system: str, history: list[dict], user_text: str, tools, execute, on_delta=None,
                             max_rounds: int = 6, estop=lambda: False, checkpoint=None, thinking=None,
-                            role: str = "main", conversation: str | None = None) -> GenResult:
+                            role: str = "main", conversation: str | None = None, progress=None) -> GenResult:
+        """One answer of the conversation. `progress(text, kind, info)` hears what Claude is doing in plain words:
+        kind «tool» (a search, a page, a JARVIS action), «retry» (the API is overloaded, Claude asks again), «fallback»
+        (the answer comes from the fallback model)."""
         if (conversation != self.conversation and self.conversation is not None) or self.session_turns >= self.MAX_TURNS:
             async with self.lock:
                 await self._stop()                     # a new conversation starts with a clean context
@@ -437,33 +633,49 @@ class ClaudeChatProvider(AIProvider):
         if thinking:
             thinking(True)
 
-        def on_tool(name):
+        titles = {t.spec.id: t.spec.title for t in self.registry.model_tools()} if self.registry else {}
+
+        def on_tool(name, args=None):
             if thinking:
                 thinking(True)
+            if progress:
+                progress(progress_line(name, args, titles), "tool", {"tool": name})
+
+        def on_status(ev):
+            if not progress:
+                return
+            if ev.get("subtype") == "api_retry":
+                n, of = ev.get("attempt") or 1, ev.get("max_retries") or 0
+                progress("Claude отвечает с задержкой — повторяю запрос" + (f" ({n} из {of})" if of else ""), "retry",
+                         {"attempt": n, "status": ev.get("error_status")})
+            else:
+                progress("Основная модель перегружена — отвечает запасная", "fallback", {"model": ev.get("fallback_model")})
         try:
             try:
-                turn = await self._send(text, on_delta, on_tool, model=want, execute=execute, timeout=turn_limit)
+                turn = await self._send(text, on_delta, on_tool, model=want, execute=execute, timeout=turn_limit,
+                                        on_status=on_status)
             except asyncio.TimeoutError:
                 raise ProviderFailure("network", f"Claude не ответил за {turn_limit / 60:.0f} мин — ответ прерван") from None
             res = turn.result or {}
-            if res.get("result") == "Claude Code остановился" and not turn.text and not turn.tools:
-                # The process died before answering (crash, killed, update): start a fresh one and ask once more.
+            if res.get("result") in (STOPPED, STALLED) and not turn.text and not turn.tools:
+                # The process died or hung before answering (crash, killed, update): a fresh one, asked once more.
                 await self._stop()
-                turn = await self._send(text, on_delta, on_tool, model=want, execute=execute, timeout=turn_limit)
+                turn = await self._send(text, on_delta, on_tool, model=want, execute=execute, timeout=turn_limit,
+                                        on_status=on_status)
         finally:
             if thinking:
                 thinking(False)
         res = turn.result or {}
         if res.get("is_error") or res.get("subtype") not in (None, "success"):
             msg = str(res.get("result") or res.get("subtype") or "ошибка")[:300]
-            self.last_error, self.last_error_kind = "Claude: " + msg, classify(msg)
-            if self.last_error_kind == "auth" or "остановился" in msg:
+            e = self._failure(msg)
+            if e.kind == "auth" or msg.startswith((STOPPED, STALLED)):
                 await self._stop()
-            raise ProviderFailure(self.last_error_kind, "Claude: " + msg)
-        self.status, self.last_error, self.last_error_kind = "ready", None, None
+            raise e
+        self.status, self.last_error, self.last_error_kind, self.limited_until = "ready", None, None, None
         usage = res.get("usage") or {}
         final = turn.text.strip() or str(res.get("result") or "").strip()
-        return GenResult(final, "claude", self.active_model, [], usage_of(usage),
+        return GenResult(final, "claude", turn.model or self.active_model, [], usage_of(usage),
                          res.get("turn_cost_usd"), turn.first_ms, (time.perf_counter() - t0) * 1000,
                          {"rounds": len(turn.tools), "tools_used": turn.tools})
 
@@ -477,7 +689,13 @@ class ClaudeChatProvider(AIProvider):
         self.turn_calls = getattr(self, "turn_calls", 0) + 1
         if self.config.max_tool_rounds > 0 and self.turn_calls > self.config.max_tool_rounds:
             return {"status": "denied", "error": "Достигнут лимит шагов для одного запроса — остановись и ответь"}
-        return await ex(name, args)
+        self.inflight += 1               # a tool may run for an hour (a Claude Code job, the person's «да»): not a stall
+        try:
+            return await ex(name, args)
+        finally:
+            self.inflight -= 1
+            if self.turn:
+                self.turn.heard = time.monotonic()
 
     # ---------------------------------------------------------------- one-off steps
     async def generate(self, req: StepRequest, on_delta=None, on_progress=None) -> GenResult:
@@ -500,6 +718,8 @@ class ClaudeChatProvider(AIProvider):
                     "--no-session-persistence", "--restricted", "--strict-mcp-config", "--disable-slash-commands",
                     "--permission-mode", "dontAsk", "--tools", ",".join(tools), "--model", model,
                     "--append-system-prompt", req.system or STEP_SYSTEM]
+            if self._fallbacks(model):
+                argv[argv.index("--model"):argv.index("--model")] = ["--fallback-model", self._fallbacks(model)]
             if tools:
                 argv[argv.index("--model"):argv.index("--model")] = ["--allowedTools", *tools]
             return await self._oneshot(argv, tmp, on_delta, on_progress, timeout=limit(self.config.claude_timeout_s))
@@ -550,9 +770,7 @@ class ClaudeChatProvider(AIProvider):
                 raise ProviderFailure("network", f"Claude не уложился в {timeout:.0f} с") from None
             raise
         if result is None or result.get("is_error"):
-            msg = str((result or {}).get("result") or err or "нет ответа")[:300]
-            self.last_error, self.last_error_kind = "Claude: " + msg, classify(msg)
-            raise ProviderFailure(self.last_error_kind, "Claude: " + msg)
+            raise self._failure(str((result or {}).get("result") or err or "нет ответа")[:300])
         final = (str(result.get("result") or "") or text).strip()
         sources, seen = [], set()
         for u in URL_RE.findall(final):
@@ -571,6 +789,9 @@ class ClaudeChatProvider(AIProvider):
         argv = ["claude", "-p", user, "--output-format", "json", "--no-session-persistence", "--restricted",
                 "--strict-mcp-config", "--disable-slash-commands", "--tools", "", "--model", self.config.claude_fast_model,
                 "--json-schema", json.dumps(schema, ensure_ascii=False), "--append-system-prompt", system]
+        if self._fallbacks(self.config.claude_fast_model):
+            argv[argv.index("--model"):argv.index("--model")] = ["--fallback-model",
+                                                                self._fallbacks(self.config.claude_fast_model)]
         with tempfile.TemporaryDirectory(prefix="jarvis-claude-") as tmp:
             proc = await asyncio.create_subprocess_exec(*argv, cwd=tmp, env=_clean_env(), stdin=asyncio.subprocess.DEVNULL,
                                                         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
@@ -591,7 +812,7 @@ class ClaudeChatProvider(AIProvider):
         except ValueError:
             raise ProviderFailure("invalid", "Claude вернул неразборчивый ответ") from None
         if d.get("is_error"):
-            raise ProviderFailure(classify(str(d.get("result"))), "Claude: " + str(d.get("result"))[:200])
+            raise self._failure(str(d.get("result"))[:300])
         data = d.get("structured_output")
         if not isinstance(data, dict):
             raise ProviderFailure("invalid", "Claude не вернул структуру")

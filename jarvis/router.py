@@ -182,8 +182,26 @@ def route(text: str, ctx: dict | None = None) -> Route | None:
         if s:
             r2 = _route(s, ctx)
             if r2 and r2.kind in ("tool", "search_open", "reply", "answer", "ui"):
-                return r2                    # a quick command said in living speech
+                r = r2                       # a quick command said in living speech
+    if r and r.kind in ("tool", "search_open", "answer", "ui") and more_to_do(norm(text)):
+        return None      # the quick command is only part of the request: Claude does all of it, with the same tools
     return r
+
+
+# «…, и запиши это в заметку», «… а потом открой …»: a second action after the first clause (seen live 2026-10-25:
+# «узнай, сколько места на диске, и запиши это в заметку» answered the disk part and silently dropped the note).
+# Not «найди и открой файл» — one action said with two verbs.
+NEXT_VERBS = (r"запиши|сохрани|отправь|пришли|скинь|перешли|напиши|создай|сделай|открой|покажи|найди|добавь|скопируй|"
+              r"положи|поставь|включи|выключи|удали|переведи|опиши|объясни|сравни|напомни|прочитай|прочти|закрой|запусти|"
+              r"скачай|вставь|проанализируй|посчитай|узнай|проверь|перемести|переименуй|загрузи|распечатай|установи|"
+              r"почисти|очисти|подготовь|составь")
+NEXT_ACTION = re.compile(r"\s(?:и|а|потом|затем|после этого)(?:\s(?:потом|затем|еще|также|тоже|сразу|после))?\s"
+                         r"(?:мне\s|это\s|его\s|ее\s|их\s|туда\s)*(?:" + NEXT_VERBS + r")\b")
+
+
+def more_to_do(t: str) -> bool:
+    m = NEXT_ACTION.search(t)
+    return bool(m) and len(t[:m.start()].split()) >= 2
 
 
 # Programs people close by name («закрой телеграм»): the spoken name → what process_end looks for.

@@ -435,3 +435,24 @@ Tests: `uv run pytest -q` → 597 passed, 6 skipped (19 in `tests/test_hub.py`, 
 | «Возможности» workspace, 8 sections, 0 console errors | VERIFIED LOCAL | headless screenshots against the dev core |
 | Telegram/WhatsApp/Slack/Discord/Signal through OpenClaw | IMPLEMENTED UNVERIFIED | needs the person's own bot tokens / QR |
 | Hooks installed into the person's own Claude Code accounts | NOT DONE YET | waits for «Подключить» in «Возможности → На компьютере» |
+
+## Claude Code as JARVIS's agent: routing, reliability, plain words (2026-10-25, ADR-009)
+Tests: `uv run pytest -q` → 612 passed, 6 skipped (28 in `tests/test_claude_agent.py`); `node --test tests/ui/unit/` →
+42 passed. Live: dev core (own JARVIS_HOME, port 8805, real Claude), the voice = Supertonic F1 WAVs played as the
+companion's microphone (`tests/ui/voice-mic.mjs`), window events logged over the WebSocket.
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Voice → STT → Claude → spoken answer | VERIFIED LIVE | «объясни в двух предложениях, почему небо голубое»: STT 0.52 s, first words 2.2 s, answer 2.8 s, 3 sentences spoken |
+| Conversation context across turns | VERIFIED LIVE | «а почему тогда закат красный?» answered from the previous answer, first words 1.1 s |
+| Research by voice: fast search, then Claude with sources | VERIFIED LIVE | «найди в интернете, в каком году построили Эйфелеву башню»: web_search 1.45 s + Claude 1.56 s, [n] sources |
+| Multi-step request with JARVIS tools + approval by voice | VERIFIED LIVE | «узнай, сколько места на диске, и запиши это в заметку» → disk_usage → create_note → «Разрешить?» aloud → «Джарвис, да» → note with the real figures → «Записал…» |
+| A quick command never drops the rest of a compound request | VERIFIED LIVE + MOCK | before: only disk_usage, note silently dropped (live); after: whole request to Claude; test_a_second_action_sends…, test_claude_does_both_parts… |
+| Interruption by voice | VERIFIED LIVE | «расскажи подробно историю интернета» … «Джарвис, стоп» → speech.stop in the same second |
+| Fallback model when the chosen one is unavailable | VERIFIED LIVE | main model = claude-sonnet-0-0 → answer from claude-haiku-5-5, progress «Основная модель перегружена — отвечает запасная» |
+| CLI failures in plain words, on screen and by voice | VERIFIED LIVE (model unavailable) + MOCK (limits, sign-in, overload, network, hang) | live: «Выбранная модель Claude (claude-sonnet-0-0) сейчас недоступна…»; the real journal's «You've hit your session limit · resets 4am» → «Лимит Claude исчерпан — снова заработает в 4:00» / «…вернётся в 4 утра» |
+| Limit remembered until it resets, then cleared | VERIFIED MOCK | test_limit_is_remembered_until_it_resets |
+| What Claude is doing = the task's progress line, never raw tool calls | VERIFIED LIVE + MOCK | live: «Место на диске», «Создать заметку»; test_progress_lines_never_show_raw_tool_calls |
+| API retries announced (screen; voice once) | VERIFIED MOCK | test_cli_events_reach_progress… (an overload cannot be caused on purpose) |
+| A hung CLI process is ended, a long tool call / API back-off is not | VERIFIED MOCK | test_a_silent_process_is_ended…, test_a_long_jarvis_tool_or_an_api_retry_is_not_a_stall |
+| «Ответь одним словом: …» is a question, not a draft | VERIFIED LIVE + MOCK | before: «Голубой.» + a line about a draft; after: «Зелёная.» |

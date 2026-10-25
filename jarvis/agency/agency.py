@@ -122,6 +122,7 @@ class StepOut:
     step_ref: str | None = None
     verification: dict | None = None
     display: str = ""          # what the person reads if no AI writes the answer (the found pages, with links)
+    speech: str = ""           # a failed answer in one short spoken sentence (a Claude limit, no sign-in, overload…)
 
 
 class Agency:
@@ -575,18 +576,28 @@ class Agency:
             if r:
                 r.thinking = v
                 director._touch()
+
+        def progress(text, kind, info):
+            # What Claude is doing, in plain words: the task's progress line (window, companion), never raw tool calls.
+            director.bus.publish("step.progress", {"step_id": sid, "message": text, "fraction": None}, tid)
+            if kind == "retry" and voice and director.speech and info.get("attempt") == 3:
+                from ..voice.speech import SLOW_BY_LANG
+                director.speech.ack(tid, SLOW_BY_LANG)     # ~10 s of API retries in silence: say why, once
         state = jarvis_state_line(director)
         t0 = time.perf_counter()
         try:
             res = await p.run_tool_loop(system, hist, state + (instruction or s.instruction), self.registry.model_tools(), execute,
                                         on_delta, self.config.max_tool_rounds, lambda: director.policy.estop,
                                         lambda c, n, m: director._checkpoint(tid, c, n, m), thinking,
-                                        role="voice" if voice else "main", conversation=cid)
+                                        role="voice" if voice else "main", conversation=cid, progress=progress)
         except ProviderFailure as e:
             self.mgr.record(p.id, p.model_for(Cap.GENERAL), tid, sid, "general", None, None,
                             (time.perf_counter() - t0) * 1000, False, e.kind)
             director.tasks.update_step(sid, state="failed", error=str(e), finished_at=now())
-            return StepOut(False, provider=p.id, error=str(e), failure_kind=e.kind, step_ref=sid)
+            if getattr(e, "raw", None):
+                self.audit.write("ai.failed", task_id=tid, provider=p.id, failure=e.kind, error=e.raw)
+            return StepOut(False, provider=p.id, error=str(e), failure_kind=e.kind, step_ref=sid,
+                           speech=getattr(e, "speech", ""))
         except asyncio.CancelledError:
             director.tasks.update_step(sid, state="cancelled", error="Остановлено", finished_at=now())   # honest state
             raise
@@ -648,8 +659,11 @@ class Agency:
         problems = [s for s in d.steps if s.status in ("failed", "blocked")]
         for s in problems:
             o = outs.get(s.id)
-            parts.append(f"⚠ Шаг «{ACTION_RU.get(s.action, s.action)}» не выполнен: "
-                         f"{(o.error if o and o.error else s.reason)}")
+            why = o.error if o and o.error else s.reason
+            if o and o.speech and len(d.steps) == 1:
+                parts.append(f"⚠ {why}")          # the one answer could not be given: why, in plain words
+            else:
+                parts.append(f"⚠ Шаг «{ACTION_RU.get(s.action, s.action)}» не выполнен: {why}")
         if any(s.status == "done" and "быстрый поиск не удался" in s.reason for s in d.steps):
             parts.append("_Быстрый поиск сейчас недоступен — искал Claude (WebSearch), поэтому дольше._")
         sends = [s for s in d.steps if s.action == "send_message"]
@@ -684,6 +698,9 @@ class Agency:
         text = "\n\n".join(p for p in parts if p).strip() or "Не удалось выполнить задачу."
         failed = bool(final) and (not main or not main.ok) and not done
         meta = self._meta(d, done, outs)
+        said = next((outs[s.id].speech for s in problems if outs.get(s.id) and outs[s.id].speech), "")
+        if failed and said:
+            meta["speech"] = said                 # «Лимит Claude закончился, он вернётся в 4 утра…», not a generic line
         extra = director.orders_panel(orders.get("panel")) if orders else {}
         if orders and (orders.get("proposal") or orders.get("question") or extra):
             p = orders.get("proposal") or {}

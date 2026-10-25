@@ -19,6 +19,11 @@ from .tts import ACKS_BY_LANG, clean_for_speech, phrase
 HARD = re.compile(r"[.!?…;:](?=\s)|\n+")
 SOFT = re.compile(r",(?=\s)")
 PLAY_TAIL_S = 0.6        # after a piece ends: the browser's output latency and the room's echo
+# Claude keeps retrying an overloaded API (its answer has not started): said once, so the silence has a reason.
+SLOW_BY_LANG = {"ru": "Claude отвечает с задержкой, жду.", "en": "Claude is slow to answer, one moment.",
+                "uk": "Claude відповідає із затримкою, чекаю.", "de": "Claude antwortet langsam, einen Moment.",
+                "es": "Claude tarda en responder, un momento.", "fr": "Claude met du temps à répondre, un instant.",
+                "it": "Claude risponde lentamente, un attimo.", "pt": "O Claude está demorando, um momento."}
 IDLE_YIELD_S = 2.0       # a stream waiting this long for more text (a tool runs, approval) lets another task speak
 
 
@@ -344,10 +349,11 @@ class SpeechManager:
             self.streams[task_id] = s
         return s
 
-    def ack(self, task_id: str) -> None:
+    def ack(self, task_id: str, table: dict | None = None) -> None:
+        """A short phrase while the answer has not started yet («Секунду.»; `table` = other phrases by language)."""
         s = self.streams.get(task_id)
         if s and not s.got_delta and not s.spoken:
-            s.say(phrase(ACKS_BY_LANG, s.lang))
+            s.say(phrase(table or ACKS_BY_LANG, s.lang))
 
     def speak_now(self, task_id: str, text: str, turn_id: str | None = None) -> None:
         """Speak a phrase now and keep the stream open (the final answer is spoken after it)."""
@@ -382,9 +388,10 @@ class SpeechManager:
             s.feed(ev.get("text", ""))
         elif kind == "message" and ev["message"]["role"] == "assistant":
             m = ev["message"]
+            meta = m.get("meta") or {}
             self.mark(s.turn_id, "answer_done")
-            text = (m.get("meta") or {}).get("speech") or m["text"]       # a short spoken version, when given
-            if (m.get("meta") or {}).get("error_kind") or text.startswith("⚠"):
+            text = meta.get("speech") or m["text"]       # a short spoken version, when given (a failure's plain reason too)
+            if (meta.get("error_kind") or text.startswith("⚠")) and not meta.get("speech"):
                 text = "Не удалось получить ответ. Попробуйте ещё раз чуть позже." if not s.got_delta else None
             # Long text answers keep their formatting on screen; speech gets the start plus a hint.
             s.finish(text)

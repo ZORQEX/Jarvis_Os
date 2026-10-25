@@ -92,6 +92,12 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
 - Several tasks in one request: `router.split_tasks` (sequence words only: «первое / далее / потом / во-вторых», «1) 2)»;
   never inside quotes or a message body) → `Director._submit_batch` runs them one after another. «Стоп» / Esc / barge-in
   stop only the answer being heard (`SpeechManager.playlog` knows what plays when); other tasks keep running.
+- Claude Code agent (ADR-009): a local route is taken only for the whole request — `router.more_to_do` sends «…, и
+  запиши это в заметку» to Claude (same tools, all parts). `providers/claude_chat`: `trouble()` = the CLI's errors in
+  plain words (limit + reset time, sign-in, model, overload, network, hang; the raw text only in audit `ai.failed`),
+  `--fallback-model` on every `claude -p` (`claude_fallback`), CLI events → the task's `step.progress`
+  (`progress_line`, never raw arguments), hang watchdog `STALL_S` (no output while no JARVIS tool runs and no API retry
+  was announced). Tests `tests/test_claude_agent.py`: fake CLI processes have pid 0 — stub `_stop`, never os.killpg it.
 - Speech: one task speaks at a time (`take_floor`), never while the person talks (`voice.active` → `hold_until`).
   Echo: `_strip_echo` drops what JARVIS's voice said during the phrase (both windows; they are separate browsers, so
   neither's echo cancellation hears the other). A cut-off phrase is done as is after 4 s of quiet (`FRAGMENT_WAIT_S`).
