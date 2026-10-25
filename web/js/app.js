@@ -21,6 +21,8 @@ import * as commWs from "./workspaces/communication.js";
 import * as filesWs from "./workspaces/files.js";
 import * as settingsWs from "./workspaces/settings.js";
 import * as ordersWs from "./workspaces/orders.js";
+import * as abilitiesWs from "./workspaces/abilities.js";
+import { createCodingAsk } from "./ui/coding-ask.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -52,10 +54,14 @@ const link = new Link({
     const was = S.connected;
     S.connected = ok;
     if (!ok && was) toast("Нет связи с ядром JARVIS — переподключаюсь…", "warn");
-    if (ok) { loadComms(); link.request("ui.view", { view: S.view }).catch(() => {}); }
+    if (ok) {
+      loadComms(); link.request("ui.view", { view: S.view }).catch(() => {});
+      link.request("coding.state").then((d) => codingAsk(d.requests || [])).catch(() => {});   // a request already waiting
+    }
     bus.emit("link");
   },
 });
+const codingAsk = createCodingAsk(link, toast);     // Claude Code / Codex permission cards (opt-in)
 const agent = new AgentStream(link);
 const desktop = new DesktopAdapter(link);
 
@@ -213,6 +219,14 @@ function onEvent(ev) {
     case "ui.navigate":
       nav(ev.view);
       break;
+    case "hub.backends": case "hub.catalog": case "hub.event": case "hub.connect":   // «Возможности» (OpenClaw, Hermes)
+      if (ev.kind === "hub.connect") viewFor("abilities");
+      views.abilities?.onEvent(ev);
+      break;
+    case "coding.agents":                   // Claude Code / Codex sessions; their permission requests get a card
+      codingAsk(ev.requests || []);
+      views.abilities?.onEvent(ev);
+      break;
     case "fashion.turn":                    // a request about orders, answered by the orders assistant
       if (ev.show && S.view !== "orders") nav("orders");
       viewFor("orders")?.turn(ev);
@@ -280,6 +294,7 @@ const settings = settingsWs.create({ ...ctx, onChange: () => { bus.emit("core");
   onDevToggle: () => { turnCache.clear(); $("#thread").innerHTML = ""; } });
 views.settings = settings;
 const FACTORY = { home: homeWs.create, tasks: tasksWs.create, browser: browserWs.create, files: filesWs.create, orders: ordersWs.create,
+  abilities: abilitiesWs.create,
   telegram: (c) => commWs.create(c, "telegram"), whatsapp: (c) => commWs.create(c, "whatsapp"), mail: (c) => commWs.create(c, "mail") };
 
 function viewFor(id) {
@@ -840,7 +855,7 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.ctrlKey && !e.shiftKey && !e.altKey) {
     if (k === "Comma") { e.preventDefault(); nav("settings"); return; }
-    const m = /^Digit([1-9])$/.exec(k);
+    const m = /^Digit([0-9])$/.exec(k);
     const w = m && WORKSPACES.find((x) => x.hotkey === m[1]);
     if (w) { e.preventDefault(); nav(w.id); return; }
   }

@@ -48,6 +48,14 @@ export const WORKSPACES = [
       { id: "orders.docs", label: "Excel и PDF для каждого клиента — только его позиции", needs: "core" },
       { id: "orders.voice", label: "Голосом через JARVIS: «Джарвис, поставь IDS 35 процентов»", needs: "core" },
     ] },
+  { id: "abilities", title: "Возможности", icon: "bolt", hotkey: "0", context: "OpenClaw, Hermes, навыки и агенты", module: "abilities",
+    tools: [
+      { id: "hub.find", label: "Найти, что умеет JARVIS и его агенты (каталог навыков, плагинов, каналов)", needs: "core" },
+      { id: "hub.specialist", label: "Поручить долгую работу Hermes — рискованные шаги с подтверждением", needs: "core" },
+      { id: "hub.skills", label: "Навыки ClawHub: проверка, установка, обновление с откатом", needs: "core" },
+      { id: "hub.channels", label: "Каналы через OpenClaw: Telegram-бот, WhatsApp, Slack, Discord, Signal", needs: "core" },
+      { id: "coding.agents", label: "Claude Code и Codex на компьютере: что делают, разрешения из окна", needs: "core" },
+    ] },
 ];
 
 /** Reachable from the palette and links, not shown in the sidebar list. */

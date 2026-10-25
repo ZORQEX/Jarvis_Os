@@ -476,3 +476,21 @@ button.conn:hover { background: var(--surface-2); }
 #approvalsList .sub { flex-wrap: wrap; }
 .side .task .req { background: none; padding: 0; color: inherit; cursor: pointer; }
 .side .task .req:hover { color: var(--text); text-decoration: underline; text-decoration-color: var(--line-2); }
+
+/* ---------------------------------------------------------------- «Возможности» + coding agents' permission cards */
+.view-abilities .seg-tabs { flex-wrap: wrap; border-radius: var(--r); }
+.view-abilities .home-ask input { height: 34px; font-size: 14px; }
+.view-abilities .row .r { display: flex; gap: 4px; align-items: center; }
+.view-abilities .row .r .btn { height: 26px; font-size: 12.5px; padding: 0 10px; }
+.view-abilities code { font-size: 12px; }
+.coding-asks { position: fixed; top: 16px; right: 24px; z-index: var(--z-toast); display: flex; flex-direction: column; gap: 8px; width: min(440px, calc(100vw - 32px)); }
+.coding-ask { background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--elev); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; animation: rise var(--t) var(--ease); }
+.coding-ask .ca-h { display: flex; gap: 8px; align-items: center; }
+.coding-ask .ca-h svg { width: 16px; height: 16px; color: var(--warn); }
+.coding-ask .ca-risk { margin-left: auto; font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); }
+.coding-ask .ca-risk[data-risk="high"] { background: var(--warn-soft); color: var(--warn); }
+.coding-ask .ca-line { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.coding-ask .ca-in { margin: 0; max-height: 140px; overflow: auto; font: 12px/1.45 var(--mono); background: var(--bg-2); border-radius: var(--r-sm); padding: 6px 8px; white-space: pre-wrap; }
+.coding-ask .ca-actions { display: flex; gap: 6px; align-items: center; }
+.coding-ask .ca-left { flex: 1; font-size: 12px; }
+.view-abilities .row .n svg { width: 16px; height: 16px; color: var(--text-3); }
