@@ -102,6 +102,8 @@ class Director:
         self.dictation = None        # dictation.Dictation: speech typed into the person's window
         self.view = ""               # the workspace the JARVIS window shows (reported by the window)
         self.hub = None              # CommsHub
+        self.capabilities = None     # «Возможности»: OpenClaw, Hermes, the capability catalog (hub/__init__.Hub)
+        self.coding = None           # Claude Code / Codex sessions on this computer (hub/coding.CodingAgents)
         self.rt: dict[str, Runtime] = {}
         self.speech_owner: dict[str, str] = {}   # task id → the window that plays its speech (default: the main one)
         self._last_finish: tuple[float, str] | None = None
@@ -227,6 +229,10 @@ class Director:
         ctx = self.ctx(cid)
         if self.home is not None and self.home.configured():
             ctx = {**ctx, "home": True}
+        if self.capabilities is not None and self.capabilities.enabled():
+            ctx = {**ctx, "agents": True}          # OpenClaw / Hermes phrases (jarvis/hub)
+        if self.coding is not None:
+            ctx = {**ctx, "coding": True}          # «что делают агенты?» (Claude Code / Codex hooks)
         route = rt.route(text, ctx)
         if route is None:
             route = self._skill_route(text)
@@ -811,6 +817,12 @@ class Director:
         if running:
             await asyncio.wait([self.rt[t].task for t in running if t in self.rt], timeout=3)
         still = [t for t in running if t in self.rt and not self.rt[t].task.done()]
+        caps = getattr(self, "capabilities", None)
+        if caps is not None:                 # OpenClaw / Hermes runs stop too (their next model turn is refused anyway)
+            try:
+                await asyncio.wait_for(caps.backends.abort_runs(), 5)
+            except Exception:   # noqa: BLE001 — the stop itself must never fail
+                pass
         self.audit.write("estop.engaged", cancelled=running, approvals_closed=denied, not_stopped=still)
         self.bus.publish("estop", {"active": True, "cancelled": len(running), "approvals_closed": denied})
         self._touch()

@@ -34,7 +34,9 @@ def _ui_build() -> str:
 
 UI_BUILD = _ui_build()
 COOKIE = "jarvis_session"
-UI_TOOLS = {"open_path", "open_url"}
+UI_TOOLS = {"open_path", "open_url",
+            # «Возможности» panel buttons: the same tools (and approval cards) as a spoken request
+            "skill_install", "skill_manage", "service_disconnect", "skill_share", "agents_stop", "agents_resume"}
 KEY_PROVIDERS: dict[str, str] = {}      # no API keys: the AI is Claude through the local Claude Code sign-in
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: data:; "
        "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; "
@@ -76,6 +78,9 @@ class Server:
         # still goes through the Gateway (policy, the user's approval, verification, audit).
         self.mcp_secret = pysecrets.token_urlsafe(32)
         r.add_post("/mcp/call", self.mcp_call)
+        r.add_post("/mcp/research", self.mcp_research)            # OpenClaw / Hermes: JARVIS's fast search only
+        r.add_get("/llm/v1/models", self.llm_models)              # Hermes's model: JARVIS's Claude (hub/llm.py)
+        r.add_post("/llm/v1/chat/completions", self.llm_chat)
         self.app.on_startup.append(self.on_startup)
         self.app.on_shutdown.append(self.on_shutdown)
         self.app.on_cleanup.append(self.on_cleanup)
@@ -119,6 +124,21 @@ class Server:
             if req.method != "POST" or not hmac.compare_digest(req.headers.get("X-JARVIS-MCP", ""), self.mcp_secret):
                 return web.json_response({"error": "unauthorized"}, status=401)
             return await handler(req)
+        if req.path == "/mcp/research" or req.path.startswith("/llm/"):
+            # The agents' own keys (never the window's cookie or the bearer API): one for search, one for the model.
+            caps = getattr(self.core.director, "capabilities", None)
+            if caps is None:
+                return web.json_response({"error": "unauthorized"}, status=401)
+            if req.path == "/mcp/research":
+                ok = req.method == "POST" and hmac.compare_digest(req.headers.get("X-JARVIS-MCP", ""), caps.research_secret)
+            else:
+                from .hub.backends import key as hub_key
+                want = hub_key(caps.store, "llm") or ""
+                got = req.headers.get("Authorization", "")
+                ok = bool(want) and got.startswith("Bearer ") and hmac.compare_digest(got[7:], want)
+            if not ok:
+                return web.json_response({"error": {"message": "unauthorized", "type": "auth"}}, status=401)
+            return await handler(req)
         if req.path in ("/", "/overlay") and req.query.get("t"):
             if hmac.compare_digest(req.query["t"], self.token):
                 resp = web.Response(status=302, headers={"Location": req.path, "Cache-Control": "no-store"})
@@ -155,6 +175,16 @@ class Server:
             await self.core.phone.start()        # only when a bot token is stored
         if self.core.proactive:
             self.core.proactive.start()
+        caps = getattr(self.core.director, "capabilities", None)
+        if caps is not None:
+            spawn(caps.start(), "hub-start")              # OpenClaw + Hermes (when installed) and the catalog
+        coding = getattr(self.core.director, "coding", None)
+        if coding is not None:
+            coding.windows = lambda: len(self.sockets)
+            try:
+                await coding.start()                         # the hook relay's socket (Claude Code / Codex)
+            except OSError as e:
+                self.core.audit.write("coding.socket_failed", error=str(e)[:200])
 
     async def _prewarm_speech(self):
         try:
@@ -202,6 +232,11 @@ class Server:
             await self.core.phone.stop()
         if self.core.proactive:
             await self.core.proactive.stop()
+        caps = getattr(self.core.director, "capabilities", None)
+        if caps is not None:
+            await caps.stop()                                # its OpenClaw and Hermes children stop with the core
+        if getattr(self.core.director, "coding", None) is not None:
+            await self.core.director.coding.stop()
         m = getattr(self.core.director, "meetings", None)
         if m and m.active:                      # JARVIS stops mid-meeting: the audio stays in its folder, never lost
             folder = m.active["folder"]
@@ -530,6 +565,44 @@ class Server:
     async def health(self, req):
         return web.json_response({"ok": True, "app": "jarvis-workos"})
 
+    async def mcp_research(self, req):
+        """OpenClaw / Hermes asking JARVIS's fast search (jarvis/mcp_bridge.py with the agents' bridge file)."""
+        try:
+            body = await req.json()
+        except ValueError:
+            return web.json_response({"error": "bad json"}, status=400)
+        args = body.get("arguments") if isinstance(body.get("arguments"), dict) else {}
+        self.core.audit.write("hub.research_call", tool=str(body.get("name", ""))[:40])
+        res = await self.core.director.capabilities.research_call(str(body.get("name", ""))[:64], args)
+        return web.json_response({"result": res})
+
+    async def llm_models(self, req):
+        from .hub.llm import MODELS
+        return web.json_response({"object": "list", "data": [
+            {"id": m, "object": "model", "owned_by": "anthropic (Claude Code)", "context_length": 200000}
+            for m in MODELS]})
+
+    async def llm_chat(self, req):
+        """Hermes's model turn → one `claude -p` run (hub/llm.py). chat-completions shape, stream or not."""
+        from .hub.llm import ClaudeModel, LLMError
+        try:
+            body = await req.json()
+        except ValueError:
+            return web.json_response({"error": {"message": "bad json", "type": "invalid_request_error"}}, status=400)
+        llm = self.core.director.capabilities.llm
+        try:
+            resp = await llm.complete(body if isinstance(body, dict) else {})
+        except LLMError as e:
+            return web.json_response({"error": {"message": str(e), "type": "server_error"}}, status=e.status)
+        if not body.get("stream"):
+            return web.json_response(resp)
+        out = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"})
+        await out.prepare(req)
+        for chunk in ClaudeModel.chunks(resp, bool((body.get("stream_options") or {}).get("include_usage"))):
+            await out.write(chunk.encode())
+        await out.write_eof()
+        return out
+
     async def overlay_page(self, req):
         return web.FileResponse(WEB / "overlay.html", headers={
             "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -671,6 +744,35 @@ class Server:
 
     async def _comms(self, typ, data):
         return await _comms_action(self, typ, data)
+
+    async def _coding(self, typ, data):
+        """Coding agents: the window shows a permission card (ack), the person clicks (decide), hooks on/off."""
+        from .hub import coding as cm
+        c = self.core.director.coding
+        if typ == "coding.state":
+            return {**c.public(), **c.settings()}
+        if typ == "coding.ack":
+            return {"ok": c.ack(str(data.get("id", "")))}
+        if typ == "coding.decide":
+            out = c.decide(str(data.get("id", "")), bool(data.get("allow")))
+            self.core.audit.write("coding.decided", decision=out["decision"])
+            return out
+        if typ == "coding.settings":
+            res = c.settings(data.get("answer") if "answer" in data else None, data.get("wait_s"))
+            if any(h["events"] for h in res["hooks"].values()):     # re-register: PermissionRequest on/off, its wait
+                await asyncio.to_thread(cm.install_hooks, c.answer_permissions, c.wait_s)
+                res["hooks"] = cm.hooks_status()
+            self.core.audit.write("coding.settings", answer=res["answer_permissions"], wait_s=res["wait_s"])
+            return res
+        if typ == "coding.hooks":
+            if data.get("on"):
+                done = await asyncio.to_thread(cm.install_hooks, c.answer_permissions, c.wait_s)
+            else:
+                done = await asyncio.to_thread(cm.uninstall_hooks)
+            self.core.audit.write("coding.hooks_" + ("installed" if data.get("on") else "removed"),
+                                  targets=[x["target"] for x in done if x.get("changed")])
+            return {"done": done, **c.settings()}
+        raise ValueError(f"Неизвестный запрос: {typ}")
 
     async def _handle(self, ws, data: dict):
         rid = data.get("req_id")
@@ -944,6 +1046,10 @@ class Server:
                     await p.health_check()
                 self._publish_providers()
                 res = {"providers": d.providers.describe()}
+            elif str(typ).startswith("hub.") and getattr(d, "capabilities", None):   # «Возможности» panel (window)
+                res = await d.capabilities.op({**data, "action": str(typ)[4:]})
+            elif str(typ).startswith("coding.") and getattr(d, "coding", None):       # coding agents (window clicks)
+                res = await self._coding(typ, data)
             elif str(typ).startswith("comms.") and self.core.comms:
                 res = await self._comms(typ, data)
             else:
@@ -958,7 +1064,7 @@ class Server:
                 pass
 
 
-QUIET_UI = {"voice.active", "ui.view", "fashion.state"}
+QUIET_UI = {"voice.active", "ui.view", "fashion.state", "hub.snapshot", "coding.state", "coding.ack"}
 TURN_HOLD = 0.15     # Smart Turn this sure the person is not done: wait for the rest (the int8 model is jumpy near 0.5)
 TURN_VETO = 0.30     # …and below this no early answer after a short pause  # sent at every sound the always-on companion takes for speech: not worth an audit line
 FRAGMENT_TTL_S = 15.0

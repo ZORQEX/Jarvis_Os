@@ -143,6 +143,24 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     from .proactive import Proactive, Watch
     proactive = Proactive(db, bus, audit, director)          # battery, disk, memory, services, internet, watches
     registry.tools["watch"] = Watch(db)
+    # «Возможности»: OpenClaw, Hermes, ClawHub skills and one catalog of everything (from jarvis-os; ADR-008)
+    from .hub import Hub
+    from .hub.llm import ClaudeModel
+    from .hub.tools import CapabilityFind, tools as hub_tools
+    caps = Hub(config, paths, db, bus, audit, comms.store, gateway, tasks)
+    caps.llm = ClaudeModel(config, audit)          # Hermes thinks with JARVIS's Claude (/llm/v1)
+    caps.llm.blocked = lambda: policy.estop or caps.backends.lockdown
+    caps.notify = lambda kind, title, body="": proactive.say(kind, title, body)
+    caps.apps = lambda: own_connections(director, phone)
+    caps.director = director
+    for t in (hub_tools(caps) if caps.enabled() else [CapabilityFind(caps)]):
+        registry.tools[t.spec.id] = t
+    director.capabilities = caps
+    from .hub.coding import CodingAgents, CodingStatus   # Claude Code / Codex sessions on this computer (Coucou idea)
+    director.coding = CodingAgents(db, bus, audit) if config.coding_agents_enabled else None
+    if director.coding:
+        director.coding.notify = lambda kind, title, body="": proactive.say(kind, title, body)
+        registry.tools["coding_agents"] = CodingStatus(director.coding)
     from .history import ActionHistory
     director.history = ActionHistory(db, bus)       # lasting actions only (sites, code, files, programs, notes)
     director.github = github
@@ -152,6 +170,39 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     audit.write("core.start", recovered_tasks=len(recovered))
     return Core(paths, config, db, bus, audit, tasks, policy, approvals, registry, gateway, claude, scheduler,
                 director, recovered, comms, phone, proactive)
+
+
+def own_connections(director, phone) -> list[dict]:
+    """JARVIS's own connections, for the capability catalog («Возможности»): what is connected right now."""
+    out = []
+    hub = getattr(director, "hub", None)
+    if hub is not None:
+        words = {"telegram": "Telegram: ваш аккаунт — сообщения, контакты, отправка с подтверждением.",
+                 "whatsapp": "WhatsApp: ваш аккаунт — сообщения и отправка с подтверждением.",
+                 "email": "Почта: письма — чтение, ответы, отправка с подтверждением."}
+        for cid, p in hub.providers.items():
+            st = p.status()
+            out.append({"id": cid, "title": p.title, "description": words.get(cid, p.title),
+                        "connected": st.state == "connected", "requirement": st.requirement,
+                        "aliases": [cid, p.title, {"telegram": "телеграм", "whatsapp": "вотсап", "email": "почта mail gmail"}
+                                    .get(cid, "")]})
+    if phone is not None:
+        ph = phone.state()
+        out.append({"id": "phone", "title": "JARVIS в телефоне", "description": "Telegram-бот: задачи JARVIS с телефона.",
+                    "connected": bool(ph.get("configured") and ph.get("paired")), "requirement": "токен бота и сопряжение",
+                    "aliases": ["phone", "телефон", "бот"]})
+    home = getattr(director, "home", None)
+    if home is not None:
+        out.append({"id": "home", "title": "Умный дом", "description": "Home Assistant: свет, устройства, замки.",
+                    "connected": bool(home.configured()), "requirement": "адрес и токен Home Assistant",
+                    "aliases": ["home assistant", "умный дом", "свет"]})
+    if getattr(director, "fashion", None) is not None:
+        out.append({"id": "orders", "title": "Заказы", "description": "Фабрики, клиенты, наценки, предоплаты, документы.",
+                    "connected": True, "aliases": ["orders", "заказы", "фабрика"]})
+    if getattr(director, "research", None) is not None:
+        out.append({"id": "search", "title": "Быстрый поиск", "description": "Локальный SearXNG: поиск в интернете.",
+                    "connected": True, "aliases": ["search", "поиск", "web"]})
+    return out
 
 
 def build_comms(paths, config, db, bus, audit, registry, policy, ai, director):

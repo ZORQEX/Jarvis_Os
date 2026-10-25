@@ -114,6 +114,31 @@ class Config:
     research_enabled: bool = True
     searxng_port: int = 8796
     searxng_url: str = ""
+    # OpenClaw and Hermes Agent (from morph-rq/jarvis-os; jarvis/hub, ADR-008): installed by scripts/install-agents.sh,
+    # started with the core as its children on loopback, each with a key JARVIS keeps in the keyring. Both think with
+    # Claude through the user's own Claude Code sign-in: OpenClaw runs the `claude` program itself (claude-cli/…),
+    # Hermes asks JARVIS's endpoint /llm/v1, which answers with `claude -p` (ADR-005: no API keys, no other models).
+    agents_dir: str = ""                    # "" = <data>/agents (scripts/install-agents.sh)
+    openclaw_enabled: bool = True
+    openclaw_port: int = 18789
+    openclaw_model: str = "claude-cli/claude-sonnet-5-5"
+    openclaw_state_dir: str = ""            # "" = OpenClaw's own ~/.openclaw (a dev/test home gets its own)
+    clawhub_url: str = ""                   # "" = https://clawhub.ai (read only; installs go through OpenClaw)
+    hermes_enabled: bool = True
+    hermes_port: int = 18642
+    hermes_home: str = ""                   # "" = Hermes's own ~/.hermes (a dev/test home gets its own)
+    hermes_model: str = "claude-sonnet-5-5"
+    # What Hermes may use when JARVIS hands it work: no terminal, processes, code execution, cron or browser.
+    hermes_toolsets: list[str] = field(default_factory=lambda: ["file", "skills", "todo", "memory", "session_search"])
+    hermes_timeout_s: float = 900.0
+    hub_share_research: bool = True         # OpenClaw and Hermes search through JARVIS's fast search (MCP, read only)
+    hub_sync_hours: float = 12.0            # ClawHub: what is new (read only)
+    hub_update_check_hours: float = 24.0
+    hub_auto_update_skills: str = "trusted"  # off | trusted (only trusted, clean, nothing new asked for)
+    hub_trusted: list[str] = field(default_factory=list)
+    # Coding agents on this computer (Claude Code, Codex) report what they do through their hooks; their permission
+    # requests can be answered in JARVIS's window (jarvis/hub/coding.py, idea from Coucou). Silence = their own prompt.
+    coding_agents_enabled: bool = True
     # Spoken/typed app names -> argv. Only these can be launched.
     apps: dict[str, list[str]] = field(default_factory=dict)
 

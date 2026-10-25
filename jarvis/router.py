@@ -195,6 +195,28 @@ CLOSE_APPS = {"телеграм": "telegram", "telegram": "telegram", "брау�
 _ON, _OFF = r"\b(?:включи|зажги|вруби)\b", r"\b(?:выключи|отключи|погаси|убери|выруби)\b"
 
 
+def _hub_route(t: str, raw: str, ctx: dict) -> Route | None:
+    """«Возможности» (jarvis/hub): the coding agents on this computer, Hermes, stopping the agents — only when that part
+    is on (ctx["coding"], ctx["agents"])."""
+    if ctx.get("coding") and re.fullmatch(
+            r"(?:что|чем) (?:сейчас )?(?:делают|делает|заняты?|занята) (?:мои )?(?:агенты|клод\w*|claude(?: code)?|кодекс\w*|codex)"
+            r"(?: сейчас)?|(?:статус|состояние) (?:агентов|клод\w*|claude(?: code)?|кодекс\w*)|"
+            r"(?:клод|claude)(?: code)? (?:закончил|готов|ещ[её] работает|работает)", t):
+        return Route("tool", "coding_agents", {}, why="События Claude Code / Codex на этом компьютере")
+    if not ctx.get("agents"):
+        return None
+    if re.match(r"(?:поручи|попроси|передай|отдай|дай задание|пусть) (?:гермес\w*|hermes)\b", t):
+        m = re.search(r"(?:гермес\w*|hermes)[\s,:—-]+(.+)$", raw, re.I | re.S)
+        task = (m.group(1) if m else "").strip(" .")
+        if len(task) >= 3:
+            return Route("tool", "specialist", {"task": task}, why="Поручение Hermes")
+    if re.fullmatch(r"(?:останови|стоп|выключи|прерви|прекрати) (?:всех |работу )?агент\w*", t):
+        return Route("tool", "agents_stop", {}, why="Остановка OpenClaw и Hermes")
+    if re.fullmatch(r"(?:возобнови|включи обратно|продолжи)(?: работу)? агент\w*|агенты,? продолжайте", t):
+        return Route("tool", "agents_resume", {}, why="Агенты снова принимают поручения")
+    return None
+
+
 def _caps_route(t: str, raw: str = "") -> Route | None:
     """Everyday computer commands without the AI: weather, briefing, what slows the computer, disk space and
     cleanup, health check, brightness and the keyboard backlight, theme / wallpaper / do-not-disturb / night light,
@@ -463,7 +485,7 @@ def _route(text: str, ctx: dict | None = None) -> Route | None:
         return Route("reply", reply="tasks", why="Статус задач")
 
     # --- the computer and the desk (tools/machine.py, desk.py, daily.py — ported from jarvis-os) ---------------
-    r = _caps_route(t, raw)
+    r = _hub_route(t, raw, ctx) or _caps_route(t, raw)    # «что делают агенты» before the calendar's «что … делаю»
     if r:
         return r
     if ctx.get("home"):          # Home Assistant connected: «включи свет на кухне» without the AI (tools/home.py)
@@ -676,10 +698,11 @@ UI_VIEWS = (
     ("files", r"файл\w*"),
     ("settings", r"настройк\w*"),
     ("comms", r"сообщени\w*|очеред\w* сообщений"),
+    ("abilities", r"возможност\w*|навык\w*|агент\w*"),
 )
 UI_TITLES = {"home": "Главная", "chat": "Беседа", "tasks": "Задачи", "history": "История действий",
              "browser": "Браузер", "telegram": "Telegram", "whatsapp": "WhatsApp", "mail": "Почта", "files": "Файлы",
-             "settings": "Настройки", "comms": "Сообщения"}
+             "settings": "Настройки", "comms": "Сообщения", "abilities": "Возможности"}
 _UI_NOUN = r"(?:раздел|вкладк[уа]|экран|страниц[уа]|рабочее пространство|пространство)"
 
 
@@ -690,7 +713,7 @@ def ui_view(t: str) -> str | None:
     m = re.fullmatch(r"(?:перейди|вернись|переключись|покажи|открой|go to)(?: мне)?(?: (?:на|в|во|к))? "
                      + _UI_NOUN + r" (.+)", t) \
         or re.fullmatch(r"(?:перейди|вернись)(?: (?:на|в|во|к))? (.+)", t) \
-        or re.fullmatch(r"покажи (задачи|историю действий|настройки)", t)
+        or re.fullmatch(r"(?:покажи|открой) (задачи|историю действий|настройки|возможности)", t)
     if not m:
         return None
     name = m.group(1).strip()

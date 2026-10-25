@@ -1,0 +1,9 @@
+{
+  "name": "jarvis-openclaw-runtime",
+  "private": true,
+  "description": "OpenClaw for Jarvis: installed by omarchy/install.sh --agents with `npm ci --ignore-scripts` from package-lock.json (every package pinned by integrity hash).",
+  "license": "MIT",
+  "dependencies": {
+    "openclaw": "2026.10.6"
+  }
+}

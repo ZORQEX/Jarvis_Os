@@ -126,6 +126,28 @@ MIGRATIONS: list[str] = [
         condition TEXT NOT NULL, label TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL,
         fired_at REAL, last_value TEXT);
     """,
+    # 12 — «Возможности» (jarvis/hub, from jarvis-os): capability telemetry, ClawHub discovery, skill updates
+    """
+    CREATE TABLE capability_stats(
+        id TEXT PRIMARY KEY, ok INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
+        ms REAL NOT NULL DEFAULT 0, last_used REAL, last_error TEXT);
+    CREATE TABLE catalog_items(
+        slug TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT, summary TEXT, owner TEXT, version TEXT,
+        published REAL, updated REAL, first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+        baseline INTEGER NOT NULL DEFAULT 0, changelog TEXT, verdict TEXT, downloads INTEGER);
+    CREATE TABLE catalog_events(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, kind TEXT NOT NULL, slug TEXT NOT NULL,
+        version TEXT, detail TEXT);
+    CREATE TABLE update_history(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, component TEXT NOT NULL, kind TEXT NOT NULL,
+        from_version TEXT, to_version TEXT, status TEXT NOT NULL, auto INTEGER NOT NULL DEFAULT 0, detail TEXT);
+    CREATE TABLE update_available(
+        component TEXT PRIMARY KEY, kind TEXT NOT NULL, current TEXT, latest TEXT, changelog TEXT, verdict TEXT,
+        new_requirements TEXT, needs_approval INTEGER NOT NULL, reasons TEXT, checked REAL NOT NULL);
+    CREATE TABLE update_quarantine(
+        component TEXT NOT NULL, version TEXT NOT NULL, reason TEXT, ts REAL NOT NULL,
+        PRIMARY KEY(component, version));
+    """,
 ]
 
 

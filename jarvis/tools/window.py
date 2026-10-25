@@ -11,7 +11,8 @@ from .base import Risk, Tool, ToolInputError, ToolResult, ToolSpec, Verification
 
 VIEWS = {"home": "Главная", "chat": "Беседа", "tasks": "Задачи", "history": "История действий", "browser": "Браузер",
          "telegram": "Telegram", "whatsapp": "WhatsApp", "mail": "Почта", "files": "Файлы", "orders": "Заказы",
-         "settings": "Настройки", "comms": "Сообщения: очередь и правила"}
+         "settings": "Настройки", "comms": "Сообщения: очередь и правила",
+         "abilities": "Возможности: OpenClaw, Hermes, навыки, агенты на компьютере"}
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -32,7 +33,9 @@ class WindowShow(Tool):
                          "instead of telling the user where to click: telegram / whatsapp / mail = connect that service "
                          "or see messages sent through JARVIS; tasks = task center; files; browser; settings; home; chat; "
                          "history; comms = message queue, rules, address book; orders = «Заказы» (fashion orders, factories, "
-                         "customers, documents)."),
+                         "customers, documents); abilities = «Возможности» (OpenClaw and Hermes, their skills, ClawHub, channels "
+                         "connected through OpenClaw, automations, updates, and the Claude Code / Codex sessions on this "
+                         "computer)."),
             params={"type": "object", "required": ["view"], "properties": {
                 "view": {"type": "string", "enum": sorted(VIEWS)},
                 "connect": {"type": "boolean", "description": "telegram / whatsapp / mail: also start connecting the "
