@@ -172,17 +172,23 @@ def open_overlay(cfg: Config, paths: Paths) -> bool:
     rules = f"[float; pin; size {ORB} {ORB}; move {x} {y}; noborder; noshadow; rounding {ORB // 2}]"
     prev = subprocess.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True).stdout
     subprocess.run(["hyprctl", "dispatch", "exec", f"{rules} {' '.join(_q(a) for a in env_prefix + argv)}"], capture_output=True)
-    # Do not steal the keyboard from what the person was doing (the no-initial-focus rule is not honoured here).
     try:
         addr = json.loads(prev or "{}").get("address")
-        if addr:
-            for _ in range(30):
-                time.sleep(0.2)
-                if _overlay_open(cfg.port):
-                    subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"], capture_output=True)
-                    break
     except ValueError:
-        pass
+        addr = None
+    from .overlay import prop_cmds, title_for
+    for _ in range(30):
+        time.sleep(0.2)
+        win = next((c for c in _hypr_clients() if str(c.get("title", "")) == title_for(cfg.port)), None)
+        if win:
+            # No animation, border or shadow from the start (dragging it must not trail behind the cursor).
+            subprocess.run(["hyprctl", "--batch", " ; ".join(prop_cmds(win["address"]))],
+                           capture_output=True, check=False)
+            # Do not steal the keyboard from what the person was doing (the no-initial-focus rule is not honoured).
+            if addr:
+                subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"],
+                               capture_output=True, check=False)
+            break
     return True
 
 

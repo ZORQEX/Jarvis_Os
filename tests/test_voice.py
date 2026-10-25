@@ -361,20 +361,34 @@ async def test_voice_uses_local_recognition_even_fully_offline(core, monkeypatch
     assert core.director.messages(core.director.conversation_id())[-1]["text"].endswith("4.")
 
 
-async def test_slow_answer_gets_a_spoken_hold_phrase(core, speech):
-    from jarvis.voice.tts import ACKS
+async def test_slow_answer_says_it_is_thinking(core, speech, monkeypatch):
+    from jarvis.agency import agency as ag
+    from jarvis.voice.tts import THINKING
+    monkeypatch.setattr(ag, "THINK_SAY_S", 0.4)
     g = ScriptedClaude(core.config, [["Ответ."]])
     orig = g.run_tool_loop
 
     async def slow(*a, **k):
-        await asyncio.sleep(4.2)          # the hold phrase comes after 3.5 s of silence
+        await asyncio.sleep(1.2)                   # «Секунду, думаю.» comes after THINK_SAY_S of silence
         return await orig(*a, **k)
     g.run_tool_loop = slow
     install(core, claude=g)
     tid = await core.director.submit("Что такое API?", "voice")
     await wait_done(core, tid, timeout=8)
     await wait_for(lambda: len(speech.engine.calls) >= 2)
-    assert speech.engine.calls[0] in ACKS and speech.engine.calls[1].startswith("Ответ")
+    assert speech.engine.calls[0] in THINKING and speech.engine.calls[1].startswith("Ответ")
+
+
+async def test_quick_answer_gets_no_thinking_phrase(core, speech, monkeypatch):
+    from jarvis.agency import agency as ag
+    from jarvis.voice.tts import THINKING
+    monkeypatch.setattr(ag, "THINK_SAY_S", 0.4)
+    install(core, claude=ScriptedClaude(core.config, [["Ответ."]]))
+    tid = await core.director.submit("Что такое API?", "voice")
+    await wait_done(core, tid)
+    await wait_for(lambda: speech.engine.calls)
+    await asyncio.sleep(0.8)                       # past THINK_SAY_S: the timer found the answer already started
+    assert speech.engine.calls[0].startswith("Ответ") and not any(c in THINKING for c in speech.engine.calls)
 
 
 FAKE_WORKER = r'''

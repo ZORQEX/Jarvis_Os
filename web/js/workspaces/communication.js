@@ -180,6 +180,5 @@ export function create(ctx, wsId) {
       }
     },
     hide() { clearTimeout(st.poll); while (offs.length) offs.pop()(); },
-    context() { const p = selected(); return p ? p.name : ""; },
   };
 }

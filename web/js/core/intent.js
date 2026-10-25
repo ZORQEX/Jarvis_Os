@@ -10,9 +10,8 @@ const norm = (s) => String(s || "").trim()
   .toLowerCase().replace(/ё/g, "е").replace(/[«»"“”!?.,;]+/g, " ").replace(/\s+/g, " ").trim();
 
 export const UI_VIEWS = [
-  ["home", /^(главн\S*|домашн\S*( экран\S*)?|home)$/],
-  ["chat", /^(бесед\S*|чат\S*)$/],
-  ["tasks", /^(задач\S*|центр задач)$/],
+  ["chat", /^(бесед\S*|чат\S*|главн\S*|домашн\S*( экран\S*)?|home)$/],   // no «Главная» any more: the chat is the first screen
+  ["errors", /^(ошибк\S*|проблем\S*|журнал\S* ошибок)$/],
   ["history", /^истори\S*( действий)?$/],
   ["browser", /^браузер\S*$/],
   ["telegram", /^(телеграм\S*|телег[аеиу]|telegram)$/],
@@ -21,16 +20,17 @@ export const UI_VIEWS = [
   ["files", /^файл\S*$/],
   ["settings", /^настройк\S*$/],
   ["comms", /^(сообщени\S*|очеред\S* сообщений)$/],
+  ["abilities", /^(возможност\S*|навык\S*|агент\S*)$/],
 ];
 const NOUN = "(?:раздел|вкладк[уа]|экран|страниц[уа]|рабочее пространство|пространство)";
 const WITH_NOUN = new RegExp(`^(?:перейди|вернись|переключись|покажи|открой|go to)(?: мне)?(?: (?:на|в|во|к))? ${NOUN} (.+)$`);
 const GO = /^(?:перейди|вернись)(?: (?:на|в|во|к))? (.+)$/;
-const SHOW = /^покажи (задачи|историю действий|настройки)$/;
+const SHOW = /^(?:покажи|открой) (ошибки|историю действий|настройки|возможности)$/;
 
 /** Text → workspace id, or null. Never a bare «открой X» (that opens the application X). */
 export function uiView(text) {
   const t = norm(text);
-  if (/^(домой|на главную|вернись (домой|на главную)|go home)$/.test(t)) return "home";
+  if (/^(домой|на главную|вернись (домой|на главную)|go home)$/.test(t)) return "chat";
   const m = t.match(WITH_NOUN) || t.match(GO) || t.match(SHOW);
   if (!m) return null;
   const name = m[1].trim();

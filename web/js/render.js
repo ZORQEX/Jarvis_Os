@@ -106,6 +106,9 @@ export const STATE_RU = {
 const STEP_RU = { planned: "в плане", running: "выполняю", verifying: "проверяю", succeeded: "готово", failed: "ошибка",
   invalid: "неверные данные", denied: "не выполнено", cancelled: "отменено", awaiting_approval: "ждёт решения",
   interrupted: "прервано", resumed: "продолжено" };
+const PLAN_MARK = { done: "✓", active: "●", waiting: "!", failed: "✕", skipped: "–", pending: "○" };
+/** A task's plan (core/tasks-model planRows) as rows: the companion in the window and the desktop companion. */
+export const planList = (rows) => rows.map((r) => `<div class="plan-row" data-mark="${r.mark}"><span class="m">${PLAN_MARK[r.mark]}</span><span title="${esc(r.label)}">${esc(r.label)}</span></div>`).join("");
 const VERIF_RU = { verified: "проверено", unverified: "не подтверждено", failed: "проверка не прошла" };
 
 export const fmtBytes = (n) => {

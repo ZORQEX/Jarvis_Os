@@ -38,14 +38,19 @@ ACKS_BY_LANG = {"ru": ["Секунду.", "Сейчас.", "Делаю."], "en":
                 "uk": ["Секунду.", "Зараз."], "de": ["Einen Moment."], "es": ["Un momento."], "fr": ["Un instant."],
                 "it": ["Un attimo."], "pt": ["Um momento."]}
 ACKS = ACKS_BY_LANG["ru"]
+# While the answer is being thought out (the AI has not started it yet): JARVIS says that it is thinking.
+THINKING_BY_LANG = {"ru": ["Секунду, думаю.", "Думаю.", "Сейчас подумаю."], "en": ["Let me think.", "Thinking."],
+                    "uk": ["Секунду, думаю.", "Думаю."], "de": ["Ich denke nach."], "es": ["Déjame pensar."],
+                    "fr": ["Je réfléchis."], "it": ["Ci penso."], "pt": ["Deixa eu pensar."]}
+THINKING = THINKING_BY_LANG["ru"]
 NOT_HEARD_BY_LANG = {"ru": "Не расслышал. Повтори, пожалуйста.", "en": "Sorry, I didn't catch that.",
                      "uk": "Не розчув. Повтори, будь ласка.", "de": "Das habe ich nicht verstanden.",
                      "es": "No te he entendido.", "fr": "Je n'ai pas compris.", "it": "Non ho capito.",
                      "pt": "Não entendi."}
 NOT_HEARD = NOT_HEARD_BY_LANG["ru"]
 FAILED = "Не удалось получить ответ. Попробуйте ещё раз чуть позже."
-CANNED = ACKS + [NOT_HEARD, FAILED]
-CANNED_EN = ACKS_BY_LANG["en"] + [NOT_HEARD_BY_LANG["en"]]
+CANNED = ACKS + THINKING + [NOT_HEARD, FAILED]
+CANNED_EN = ACKS_BY_LANG["en"] + THINKING_BY_LANG["en"] + [NOT_HEARD_BY_LANG["en"]]
 
 
 def phrase(table: dict, lang: str) -> str:

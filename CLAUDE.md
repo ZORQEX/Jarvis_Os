@@ -8,7 +8,11 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
 - `web/` no-build UI (ES modules, `css/app.css` tokens + `css/workos.css` shell). Strict CSP: no inline scripts.
   `js/app.js` shell + chat · `js/core/` pure logic (unit-tested in Node) · `js/ui/` companion dock, palette, toasts ·
   `js/workspaces/` registry + one module per workspace · `js/adapters/` AgentStream, DesktopAdapter, channels.
-  Design decisions: `docs/architecture/ADR-006-workos-frontend.md`.
+  Design decisions: `docs/architecture/ADR-006-workos-frontend.md`. Since 2026-10-25 (user's request) there is no «Главная»,
+  no task center and no right activity panel: the chat is the first screen (Ctrl+1), a task's detail is its turn in the
+  chat (`openTask` scrolls there), «Ошибки» (`workspaces/errors.js`, Ctrl+9) is the one list of problems from
+  `improve.collect_issues` with «Исправить», «История действий» is a palette-only view (`workspaces/history.js`).
+  Don't show the same thing twice (section titles live in each section's header; no breadcrumb).
 - `config/omarchy/` opt-in Waybar/Hyprland snippets; applied only by `scripts/omarchy-integrate.sh apply`.
 - `tests/` pytest (core, server, comms, voice, AI loop with scripted provider); `tests/ui/` playwright-core driver.
   The «Флора» demo project was removed on 2026-10-24 at the user's request (git history has it).
@@ -27,7 +31,11 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
 - Real app: `jarvis` (core on 127.0.0.1:8791, window app id `chrome-localhost__-Default`, title ends with JARVIS).
 - Desktop companion: `jarvis overlay` (own Chromium profile, pinned Hyprland window titled «JARVIS · компаньон»;
   a dev core on another port uses «… :<port>», so it never moves the real one). Moves/resizes go through
-  `jarvis/overlay.py` (Hyprland socket). Wake listening drops unaddressed speech before any turn or log.
+  `jarvis/overlay.py` (Hyprland socket): the window gets `no_anim`, `border_size 0`, `no_shadow` (Hyprland 0.56 names;
+  the user's «bounce» window animation made dragging trail and wobble) and size+move+rounding go in one `[[BATCH]]`.
+  The page draws at most once a frame and writes the DOM only on change. Wake listening drops unaddressed speech
+  before any turn or log. Thinking: three dots on the face (THINKING/PLANNING) and, for voice requests whose answer
+  has not started after `agency.THINK_SAY_S` (2.5 s), «Секунду, думаю.» (`tts.THINKING_BY_LANG`, pre-synthesized).
 - Skills: `jarvis/skills.py`, folder `~/.local/share/jarvis-skills` (config `skills_dir`); limits are 0 = none.
   A manifest's `say` phrases run the skill straight from the director (no AI); `open_result` opens the output file.
 - Voice: STT worker = GigaAM, then Parakeet only for phrases that are not Russian or came back empty (`voice/lexicon.py`;
@@ -40,8 +48,8 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   barge-in = `voice.barge` (stops speech only, never the work). `tests/ui/voice-mic.mjs` feeds a WAV as the mic.
 - Self-improvement (`jarvis/improve.py`): `collect_issues` ranks problems from JARVIS's own records (repeats, failures,
   slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,
-  then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Settings →
-  «Самоулучшение». Tests use a temporary repo (monkeypatch `REPO`/`WORK`) — never the real one.
+  then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Window:
+  «Ошибки» (the list with «Исправить»). Tests use a temporary repo (monkeypatch `REPO`/`WORK`) — never the real one.
 - «Заказы» (`jarvis/fashion.py`): the core starts the module (127.0.0.1:`fashion_port` 8797, data <data>/fashion),
   the window frames its pages (CSP frame-src that origin only, `workspaces/orders.js`: its sections are tabs in JARVIS's
   header). Inside the frame (Sec-Fetch-Dest: iframe) the module drops its own chrome and takes JARVIS's colours

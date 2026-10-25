@@ -75,7 +75,7 @@ export function create(ctx) {
           <input type="checkbox" data-keep ${st.data.backends?.keep_openclaw ? "checked" : ""}> Держать запущенным (нужно для каналов и своих автоматизаций)</label>` : "";
       body = `<div class="muted" style="font-size:12.5px">${esc(what)}</div>
         <div class="muted" style="font-size:12.5px">Запускается сам, когда нужен (10–25 с), и засыпает после ${esc(String(st.data.backends?.idle_min ?? 20))} мин без дела — так он не держит ~1,5 ГБ памяти. Навыки остаются в каталоге.</div>
-        <div class="tc-ctl"><button class="btn" data-wake="${name}">${ICON.play} Запустить сейчас</button></div>${keep}`;
+        <div class="btn-row"><button class="btn" data-wake="${name}">${ICON.play} Запустить сейчас</button></div>${keep}`;
     } else if (!a.installed) {
       body = `<p class="muted">Не установлен. Установка (без root, всё закреплено по версиям): <code>${esc(st.data.install_command || "scripts/install-agents.sh")}</code></p>`;
     } else {
@@ -83,7 +83,7 @@ export function create(ctx) {
         <div class="muted" style="font-size:12.5px">Версия ${esc(a.version || "?")} · модель ${esc(model)}${a.restarts ? ` · перезапусков: ${a.restarts}` : ""}${a.active_runs ? ` · сейчас работает: ${a.active_runs}` : ""}${esc(llm)}</div>
         ${a.error && !a.healthy ? `<div class="muted" style="color:var(--warn);font-size:12.5px">${esc(a.error)}</div>` : ""}
         ${a.setup_error ? `<div class="muted" style="color:var(--warn);font-size:12.5px">Настройки: ${esc(a.setup_error)}</div>` : ""}
-        <div class="tc-ctl"><button class="btn ghost" data-restart="${name}">${ICON.refresh} Перезапустить</button></div>
+        <div class="btn-row"><button class="btn ghost" data-restart="${name}">${ICON.refresh} Перезапустить</button></div>
         ${name === "openclaw" && st.data.backends?.openclaw?.enabled ? `<label class="toggle" style="display:flex;gap:8px;align-items:center;font-size:13px">
           <input type="checkbox" data-keep ${st.data.backends?.keep_openclaw ? "checked" : ""}> Держать запущенным (иначе засыпает после ${esc(String(st.data.backends?.idle_min ?? 20))} мин без дела)</label>` : ""}`;
     }
@@ -97,12 +97,12 @@ export function create(ctx) {
     const lock = d.backends?.lockdown;
     const runs = d.runs || [];
     const found = st.found;
-    return `<div class="home-grid"><div class="home-col">${agentCard("openclaw")}${agentCard("hermes")}</div>
-      <div class="home-col">
+    return `<div class="ws-grid"><div class="ws-col">${agentCard("openclaw")}${agentCard("hermes")}</div>
+      <div class="ws-col">
         <section class="blk"><div class="blk-h">Каталог</div>
           <div class="muted" style="font-size:13px">Всего ${s.total || 0}, готовы ${s.usable || 0}${s.duplicates ? `, повторов скрыто: ${s.duplicates}` : ""}.
             JARVIS: ${count("jarvis") + count("app")} · OpenClaw: ${count("openclaw")} · Hermes: ${count("hermes")} · общих: ${count("shared")}.</div>
-          <form class="home-ask" id="abFind" autocomplete="off" style="padding:4px 4px 4px 14px">
+          <form class="ask-box" id="abFind" autocomplete="off" style="padding:4px 4px 4px 14px">
             <input id="abQ" placeholder="Что нужно уметь? Например: «github issues» или «погода»" aria-label="Найти возможность">
             <button class="icon-btn go" aria-label="Найти">${ICON.search}</button></form>
           ${found ? findResults(found) : ""}
@@ -110,7 +110,7 @@ export function create(ctx) {
         <section class="blk"><div class="blk-h">Сейчас работают агенты</div>
           ${runs.length ? runs.map((r) => `<div class="act-row"><span>${esc(r.agent === "hermes" ? "Hermes" : "OpenClaw")}: ${esc(r.title || "")}</span>
             <span class="w">${esc(ago(r.started))}</span></div>`).join("") : `<div class="muted" style="font-size:13px">Ничего не выполняется.</div>`}
-          <div class="tc-ctl">${lock
+          <div class="btn-row">${lock
             ? `<span class="chip warn">Агенты остановлены</span><button class="btn" data-resume>Возобновить</button>`
             : `<button class="btn danger" data-stopall>${ICON.stop} Остановить агентов</button>`}</div>
         </section>
@@ -122,7 +122,7 @@ export function create(ctx) {
     const say = { use: "Подходит", connect: "Подойдёт после подключения", enable: "Есть, но не готов", search: "Установленного подходящего нет" }[p.action];
     return `<div class="muted" style="font-size:12.5px">${esc(say || "")}${p.ms != null ? ` · ${p.ms} мс` : ""}</div>
       <div class="rows">${rows.map((c) => capRow(c)).join("")}</div>
-      ${p.action === "search" ? `<div class="tc-ctl"><button class="btn ghost" data-goto="discover">Искать в ClawHub</button></div>` : ""}`;
+      ${p.action === "search" ? `<div class="btn-row"><button class="btn ghost" data-goto="discover">Искать в ClawHub</button></div>` : ""}`;
   }
 
   function capRow(c, actions = "") {
@@ -162,7 +162,7 @@ export function create(ctx) {
     const info = d.channels_info || {};
     const chans = (d.channels || []);
     const card = st.connect && info[st.connect] ? connectCard(st.connect, info[st.connect]) : "";
-    return `<div class="home-grid"><div class="home-col">
+    return `<div class="ws-grid"><div class="ws-col">
         <section class="blk"><div class="blk-h">Каналы через OpenClaw</div>
           ${Object.entries(info).map(([k, v]) => {
             const c = chans.find((x) => x.name === k && x.id.startsWith("openclaw:channel:"));
@@ -172,7 +172,7 @@ export function create(ctx) {
           }).join("")}
           <p class="muted" style="font-size:12.5px">Ваши собственные Telegram, WhatsApp и почта подключаются в их разделах — JARVIS не подключает один и тот же аккаунт или бота дважды.</p>
         </section>${card}</div>
-      <div class="home-col"><section class="blk"><div class="blk-h">Подключения JARVIS</div>
+      <div class="ws-col"><section class="blk"><div class="blk-h">Подключения JARVIS</div>
         ${(d.apps || []).map((a) => `<div class="act-row"><span>${esc(a.title)}</span><span class="w">${a.auth === "connected" ? "подключено" : "не подключено"}</span></div>`).join("")}
       </section></div></div>`;
   }
@@ -181,10 +181,10 @@ export function create(ctx) {
     if (v.flow === "token") {
       return `<section class="blk" id="abConnect"><div class="blk-h">Подключить ${esc(v.label)}</div>
         <p style="margin:0;font-size:13.5px">Нужен ${esc(v.needs)}.</p>
-        <form id="abToken" class="home-ask" autocomplete="off" style="padding:4px 4px 4px 14px">
+        <form id="abToken" class="ask-box" autocomplete="off" style="padding:4px 4px 4px 14px">
           <input id="abTokenIn" type="password" placeholder="123456789:AA…" aria-label="Токен бота" autocomplete="off">
           <button class="btn primary" ${st.busy ? "disabled" : ""}>Подключить</button></form>
-        <div class="tc-ctl"><button class="btn ghost" data-open-url="https://t.me/BotFather">Открыть @BotFather</button></div>
+        <div class="btn-row"><button class="btn ghost" data-open-url="https://t.me/BotFather">Открыть @BotFather</button></div>
         <p class="muted" style="font-size:12px">Токен хранится в связке ключей и передаётся OpenClaw только при запуске — в файлы и журналы он не попадает.</p></section>`;
     }
     return `<section class="blk" id="abConnect"><div class="blk-h">Подключить ${esc(v.label)}</div>
@@ -200,10 +200,10 @@ export function create(ctx) {
         <div class="muted" style="font-size:13px">${esc(rv.ref)} · версия ${esc(rv.version)} · автор ${esc(rv.owner || "неизвестен")}</div>
         <div style="font-size:13.5px">${esc(rv.summary || "")}</div>
         <div class="muted" style="font-size:12.5px">Нужно: ${esc((rv.requirements || []).join(", ") || "ничего дополнительно")}${rv.warnings?.length ? ` · предупреждения: ${esc(rv.warnings.join("; "))}` : ""}</div>
-        <div class="tc-ctl">${rv.scan === "clean" ? `<button class="btn primary" data-install="${esc(rv.ref)}" data-version="${esc(rv.version)}">Установить…</button>`
+        <div class="btn-row">${rv.scan === "clean" ? `<button class="btn primary" data-install="${esc(rv.ref)}" data-version="${esc(rv.version)}">Установить…</button>`
           : `<span class="chip warn">Не «clean» — JARVIS не установит</span>`}<button class="btn ghost" data-unreview>Закрыть</button></div></section>` : "";
     const meta = d.clawhub || {};
-    return `<form class="home-ask" id="abHub" autocomplete="off" style="padding:4px 4px 4px 14px">
+    return `<form class="ask-box" id="abHub" autocomplete="off" style="padding:4px 4px 4px 14px">
         <input id="abHubQ" placeholder="Поиск навыков в ClawHub (по-английски: «pdf», «notion», «trello»)" aria-label="Поиск в ClawHub">
         <button class="icon-btn go" aria-label="Искать">${ICON.search}</button></form>
       ${review}
@@ -236,7 +236,7 @@ export function create(ctx) {
 
   function updates() {
     const ups = st.data.updates || [], hist = st.data.update_history || [];
-    return `<div class="tc-ctl"><button class="btn" data-check>${ICON.refresh} Проверить обновления</button></div>
+    return `<div class="btn-row"><button class="btn" data-check>${ICON.refresh} Проверить обновления</button></div>
       <section class="card"><div class="card-head"><strong>Доступно</strong></div><div class="rows">${ups.length ? ups.map((u) => `<div class="row"><span class="n">${u.needs_approval ? "!" : "✓"}</span>
         <span class="t"><div>${esc(u.component)} ${esc(u.current)} → ${esc(u.latest)}</div><div class="p">${esc((u.reasons || []).join("; ") || "без новых требований")}${u.changelog ? " · " + esc(u.changelog.slice(0, 160)) : ""}</div></span>
         <span class="r"><button class="btn ghost" data-manage="update" data-id="${esc(u.component)}">Обновить</button>
@@ -256,7 +256,7 @@ export function create(ctx) {
     const names = { claude: "Claude Code", codex: "Codex" };
     const label = (k) => (names[k.split(":")[0]] || k) + (k.includes(":") ? ` (аккаунт ${k.split(":")[1]})` : "");
     const sessions = c.sessions || [];
-    return `<div class="home-grid"><div class="home-col">
+    return `<div class="ws-grid"><div class="ws-col">
       <section class="blk"><div class="blk-h">Сессии сейчас</div>
         ${sessions.length ? sessions.map((s) => `<div class="mini-task"><div class="top"><span class="pill ${s.state === "waiting" || s.state === "permission" ? "waiting" : ""}">${esc(CODING_RU[s.state] || s.state)}</span>
           <span class="req">${esc(s.label)}${s.project ? " · " + esc(s.project) : ""}</span><span class="muted" style="font-size:12px">${esc(ago(s.updated))}</span></div>
@@ -265,9 +265,9 @@ export function create(ctx) {
           ${s.prompt && s.state !== "done" ? `<div class="muted" style="font-size:12px">Задача: ${esc(s.prompt)}</div>` : ""}</div>`).join("")
           : `<div class="muted" style="font-size:13px">${any ? "Ни одна сессия пока не сообщала о работе." : "Агенты ещё не подключены к JARVIS."}</div>`}
       </section></div>
-      <div class="home-col"><section class="blk"><div class="blk-h">Подключение</div>
+      <div class="ws-col"><section class="blk"><div class="blk-h">Подключение</div>
         ${hooks.map(([k, h]) => `<div class="act-row"><span>${esc(label(k))}</span><span class="w">${h.events?.length ? "сообщает JARVIS" : h.readable ? "не подключён" : "файл настроек не читается"}</span></div>`).join("")}
-        <div class="tc-ctl">${any ? `<button class="btn ghost" data-hooks="off">Отключить</button><button class="btn ghost" data-hooks="on">Обновить подключение</button>`
+        <div class="btn-row">${any ? `<button class="btn ghost" data-hooks="off">Отключить</button><button class="btn ghost" data-hooks="on">Обновить подключение</button>`
           : `<button class="btn primary" data-hooks="on">Подключить агентов к JARVIS</button>`}</div>
         <p class="muted" style="font-size:12.5px">JARVIS добавляет в настройки агентов (с резервной копией) короткую команду, которая сообщает ему, что они делают. Если JARVIS не запущен, она сразу завершается и ничего не меняет.</p>
         <label class="toggle" style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="checkbox" id="abAnswer" ${c.answer_permissions ? "checked" : ""}>

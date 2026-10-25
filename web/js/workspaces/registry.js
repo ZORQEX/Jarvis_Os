@@ -18,37 +18,32 @@ const channelTools = (ch, title, extra = []) => [
 
 /** @type {Workspace[]} */
 export const WORKSPACES = [
-  { id: "home", title: "Главная", icon: "home", hotkey: "1", context: "Командный центр",
-    tools: [{ id: "jarvis.ask", label: "Спросить или поручить", needs: "core" }] },
-  { id: "chat", title: "Беседа", icon: "chat", hotkey: "2", context: "Разговор с JARVIS",
+  { id: "chat", title: "Беседа", icon: "chat", hotkey: "1", context: "Разговор с JARVIS",
     tools: [{ id: "jarvis.chat", label: "Беседа с потоковыми ответами", needs: "core" }] },
-  { id: "tasks", title: "Задачи", icon: "tasks", hotkey: "3", context: "Центр задач",
-    tools: [{ id: "task.cancel", label: "Остановить", needs: "core" }, { id: "task.pause", label: "Пауза / продолжить", needs: "core" },
-      { id: "task.retry", label: "Повторить", needs: "core" }] },
-  { id: "browser", title: "Браузер", icon: "globe", hotkey: "4", context: "Сайты и поиск", module: "browser",
+  { id: "browser", title: "Браузер", icon: "globe", hotkey: "2", context: "Сайты и поиск", module: "browser",
     tools: [
       { id: "browser.open", label: "Открыть ссылку в вашем браузере", needs: "core" },
       { id: "browser.search", label: "Искать в интернете", needs: "core" },
       { id: "browser.agent", label: "Поручить работу с сайтом (отдельный браузер без ваших входов)", needs: "core" },
       { id: "browser.navigate", label: "Назад, вперёд, обновить в окне браузера", missing: "Окно вашего браузера JARVIS не управляет — нужен адаптер" },
     ] },
-  { id: "telegram", title: "Telegram", icon: "telegram", hotkey: "5", context: "Telegram", channel: "telegram", module: "communication",
+  { id: "telegram", title: "Telegram", icon: "telegram", hotkey: "3", context: "Telegram", channel: "telegram", module: "communication",
     tools: channelTools("telegram", "Telegram", [{ id: "telegram.open", label: "Открыть приложение Telegram", needs: "core" }]) },
-  { id: "whatsapp", title: "WhatsApp", icon: "whatsapp", hotkey: "6", context: "WhatsApp", channel: "whatsapp", module: "communication",
+  { id: "whatsapp", title: "WhatsApp", icon: "whatsapp", hotkey: "4", context: "WhatsApp", channel: "whatsapp", module: "communication",
     tools: channelTools("whatsapp", "WhatsApp") },
-  { id: "mail", title: "Почта", icon: "mail", hotkey: "7", context: "Почта", channel: "email", module: "communication",
+  { id: "mail", title: "Почта", icon: "mail", hotkey: "5", context: "Почта", channel: "email", module: "communication",
     tools: channelTools("email", "почты", [{ id: "email.gmail", label: "Gmail API (только чтение)", missing: "Запланировано: нужен OAuth-клиент Google" }]) },
-  { id: "files", title: "Файлы", icon: "folder", hotkey: "8", context: "Файлы", module: "files",
+  { id: "files", title: "Файлы", icon: "folder", hotkey: "6", context: "Файлы", module: "files",
     tools: [{ id: "files.list", label: "Просмотр папок", needs: "core" }, { id: "files.search", label: "Поиск файлов", needs: "core" },
       { id: "files.open", label: "Открыть в приложении", needs: "core" }, { id: "files.ask", label: "Спросить JARVIS о файле", needs: "core" }] },
-  { id: "orders", title: "Заказы", icon: "box", hotkey: "9", context: "Заказы: фабрики, клиенты, предоплаты", module: "orders",
+  { id: "orders", title: "Заказы", icon: "box", hotkey: "7", context: "Заказы: фабрики, клиенты, предоплаты", module: "orders",
     tools: [
       { id: "orders.import", label: "Загрузить файл фабрики (Excel / PDF) — сохраняется после «Подтвердить»", needs: "core" },
       { id: "orders.markup", label: "Наценки клиентов, предоплаты фабрике и клиентам, ваш взнос", needs: "core" },
       { id: "orders.docs", label: "Excel и PDF для каждого клиента — только его позиции", needs: "core" },
       { id: "orders.voice", label: "Голосом через JARVIS: «Джарвис, поставь IDS 35 процентов»", needs: "core" },
     ] },
-  { id: "abilities", title: "Возможности", icon: "bolt", hotkey: "0", context: "OpenClaw, Hermes, навыки и агенты", module: "abilities",
+  { id: "abilities", title: "Возможности", icon: "bolt", hotkey: "8", context: "OpenClaw, Hermes, навыки и агенты", module: "abilities",
     tools: [
       { id: "hub.find", label: "Найти, что умеет JARVIS и его агенты (каталог навыков, плагинов, каналов)", needs: "core" },
       { id: "hub.specialist", label: "Поручить долгую работу Hermes — рискованные шаги с подтверждением", needs: "core" },
@@ -56,13 +51,16 @@ export const WORKSPACES = [
       { id: "hub.channels", label: "Каналы через OpenClaw: Telegram-бот, WhatsApp, Slack, Discord, Signal", needs: "core" },
       { id: "coding.agents", label: "Claude Code и Codex на компьютере: что делают, разрешения из окна", needs: "core" },
     ] },
+  // What went wrong, kept for fixing later (JARVIS's own records); «Исправить» = self-improvement after your «да».
+  { id: "errors", title: "Ошибки", icon: "alert", hotkey: "9", context: "Что пошло не так — список для исправления", module: "errors",
+    tools: [] },
 ];
 
 /** Reachable from the palette and links, not shown in the sidebar list. */
 export const EXTRA = [
   { id: "settings", title: "Настройки", icon: "settings", context: "Настройки", tools: [] },
   { id: "comms", title: "Сообщения", icon: "send", context: "Очередь сообщений, правила, контакты", tools: [] },
-  { id: "history", title: "История действий", icon: "history", context: "История действий", tools: [], alias: "tasks" },
+  { id: "history", title: "История действий", icon: "history", context: "Что JARVIS изменил на компьютере", tools: [] },
 ];
 
 export const ALL = [...WORKSPACES, ...EXTRA];

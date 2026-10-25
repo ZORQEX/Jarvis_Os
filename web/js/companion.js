@@ -12,7 +12,6 @@ const SVG = (id) => `
   <circle class="glow" cx="60" cy="60" r="40"/>
   <circle class="halo" cx="60" cy="60" r="52"/>
   <circle class="ring" cx="60" cy="60" r="47"/>
-  <g class="orbit"><circle cx="60" cy="9" r="3.2"/></g>
   <g class="body">
     <path class="shell" style="fill:url(#cbody-${id})" d="M60 18c25 0 40 15 40 40 0 27-16 44-40 44S20 85 20 58c0-25 15-40 40-40z"/>
     <path class="face" d="M60 34c17 0 27 9 27 24 0 16-10 27-27 27S33 74 33 58c0-15 10-24 27-24z"/>
@@ -22,6 +21,7 @@ const SVG = (id) => `
       <rect class="eye r" x="66" y="50" width="9" height="15" rx="4.5"/>
       <path class="happy" d="M44.5 60q5-6 10 0M65.5 60q5-6 10 0"/>
     </g>
+    <g class="think"><circle cx="50" cy="75" r="3.6"/><circle cx="60" cy="75" r="3.6"/><circle cx="70" cy="75" r="3.6"/></g>
     <rect class="lid" x="38" y="44" width="44" height="24" rx="6"/>
   </g>
   <g class="badge"><circle cx="94" cy="26" r="9"/>
@@ -54,10 +54,11 @@ const current = { state: "OFFLINE", muted: false };
 export function setState(state, { muted } = {}) {
   current.state = state;
   if (muted !== undefined) current.muted = muted;
+  const m = current.muted ? "1" : "0";
   for (const i of instances) {
     if (!i.el.isConnected) { instances.delete(i); continue; }
     if (i.el.dataset.state !== state) i.el.dataset.state = state;
-    i.el.dataset.muted = current.muted ? "1" : "0";
+    if (i.el.dataset.muted !== m) i.el.dataset.muted = m;
   }
 }
 

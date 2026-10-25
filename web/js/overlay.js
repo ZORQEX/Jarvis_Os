@@ -4,13 +4,15 @@
 import { Link } from "./net.js";
 import * as companion from "./companion.js";
 import { Voice } from "./voice.js";
-import { deriveAgent, flashFor, PHASES } from "./core/agent-state.js";
+import { deriveAgent, flashFor, PHASES, FLASH_MS } from "./core/agent-state.js";
 import { planRows, isUserTask, isWorking } from "./core/tasks-model.js";
-import { ICON, esc, md } from "./render.js";
+import { ICON, esc, md, planList } from "./render.js";
 
 const $ = (s) => document.querySelector(s);
 const ORB = 64, CARD = { w: 360, h: 470 };
-const MARK = { done: "✓", active: "●", waiting: "!", failed: "✕", skipped: "–", pending: "○" };
+/** DOM writes only when the value changed: the companion redraws on every event (each streamed word). */
+const put = (el, k, v) => { if (el[k] !== v) el[k] = v; };
+const html = (el, v) => { if (el._html !== v) { el._html = v; el.innerHTML = v; } };
 const S = { connected: false, core: { state: "OFFLINE" }, tasks: {}, approvals: {}, streaming: {}, progress: {}, flash: null,
   messages: [], lastReply: null, voice: null, wake: false, expanded: false, autoOpened: false, own: new Set(), lastAttn: null };
 
@@ -76,7 +78,10 @@ function onEvent(ev) {
       const t = ev.task, prev = S.tasks[t.id];
       if (t.route === "ui_read") return;
       S.tasks[t.id] = t;
-      if ((!prev || isWorking(prev)) && !isWorking(t)) { const f = flashFor(t, Date.now()); if (f) { S.flash = f; setTimeout(render, 2700); } }
+      if ((!prev || isWorking(prev)) && !isWorking(t)) {
+        const f = flashFor(t, Date.now());
+        if (f) { S.flash = f; setTimeout(() => { if (S.flash === f) { S.flash = null; render(); } }, FLASH_MS + 50); }
+      }
       break;
     }
     case "step.updated": {
@@ -119,23 +124,27 @@ function onEvent(ev) {
 }
 
 // ---------------------------------------------------------------- open / close (the core resizes the window)
+// Open: the card is drawn first, then the window grows; close: the window shrinks first, then the orb is drawn. At
+// 64 px the card's corner is the same small face, so no frame shows a stretched orb or an empty window. The core
+// resizes, moves and rounds the window in one step and Hyprland does not animate it (jarvis/overlay.py).
 async function expand(reason = "user") {
   if (S.expanded) { if (reason === "user") S.autoOpened = false; return; }
   S.autoOpened = reason !== "user";
-  // Grow the window first (no flash of a cut card); opened in a normal tab there is no window to grow — open anyway.
-  try { await link.request("overlay.size", CARD); } catch { }
   S.expanded = true;
   $("#ov").dataset.expanded = "1";
-  render();
+  draw();
+  try { await link.request("overlay.size", CARD); } catch { }   // a normal tab has no window to grow: open anyway
   if (reason === "user" || reason === "wake") setTimeout(() => $("#ovInput").focus(), 50);
   scheduleCollapse();
 }
 async function collapse() {
   if (!S.expanded) return;
   S.expanded = false; S.autoOpened = false;
-  $("#ov").dataset.expanded = "0";
-  render();
+  clearTimeout(collapseTimer);
   try { await link.request("overlay.size", { w: ORB, h: ORB }); } catch { }
+  if (S.expanded) return;                                        // opened again meanwhile
+  $("#ov").dataset.expanded = "0";
+  draw();
 }
 let collapseTimer = 0, hover = false;
 function scheduleCollapse() {
@@ -253,8 +262,7 @@ function body(a) {
   }
   const t = a.taskId ? S.tasks[a.taskId] : null;
   if (a.busy && t) {
-    const rows = planRows(t).slice(-5);
-    return `${rows.map((r) => `<div class="plan-row" data-mark="${r.mark}"><span class="m">${MARK[r.mark]}</span><span>${esc(r.label)}</span></div>`).join("")}
+    return `${planList(planRows(t).slice(-5))}
       ${a.canStop ? `<div class="row-btns"><button class="btn danger" data-o="stop">${ICON.stop} Остановить</button></div>` : ""}`;
   }
   const r = S.lastReply;
@@ -266,26 +274,39 @@ function body(a) {
     Перетащите меня в любое место экрана.</div>`;
 }
 
-let lastSig = "";
+// Events come in bursts (every streamed word, every step): draw once per frame. The timeout covers a window the
+// compositor does not paint at the moment (no animation frames), so a decision still opens the card.
+let queued = false;
 function render() {
+  if (queued) return;
+  queued = true;
+  const run = () => { if (queued) { queued = false; draw(); } };
+  requestAnimationFrame(run);
+  setTimeout(run, 150);
+}
+
+let lastSig = "";
+function draw() {
+  queued = false;
   const a = state();
   const pending = Object.values(S.approvals).filter((x) => x.status === "pending").length;
   // A decision or an error needs the person: open the card (once per event).
   const attn = a.mode === "WAITING_CONFIRMATION" ? "a:" + a.approvalId : a.mode === "ERROR" ? "e:" + a.taskId : null;
   if (attn && attn !== S.lastAttn) { S.lastAttn = attn; if (!S.expanded) expand("attention"); }
   companion.setState(a.mode, { muted: false });
-  const ov = $("#ov");
-  ov.dataset.mode = a.mode;
-  $("#ovMic").hidden = !voice.listening;
-  $("#ovBadge").hidden = !(pending && !S.expanded);
-  $("#ovBadge").textContent = pending;
-  $("#ovOrb").setAttribute("aria-label", `JARVIS: ${a.label}`);
-  $("#ovOrb").title = `JARVIS · ${a.label}${a.detail ? " — " + a.detail : ""}\nНажмите — открыть, перетащите — переместить`;
-  $("#ovWake").innerHTML = S.wake ? ICON.mic : ICON.micOff;
-  $("#ovWake").setAttribute("aria-pressed", String(S.wake));
-  $("#ovWake").title = S.wake ? "Слушаю «Джарвис» — выключить микрофон" : "Слушать «Джарвис» (микрофон, распознавание на этом компьютере)";
-  $("#ovTalk").hidden = S.wake;
-  $("#ovTalk").classList.toggle("recording", voice.recording);
+  const ov = $("#ov"), orb = $("#ovOrb"), wake = $("#ovWake");
+  if (ov.dataset.mode !== a.mode) ov.dataset.mode = a.mode;
+  put($("#ovMic"), "hidden", !voice.listening);
+  put($("#ovBadge"), "hidden", !(pending && !S.expanded));
+  put($("#ovBadge"), "textContent", String(pending));
+  // The orb has no room for words: its tooltip and the screen reader say what JARVIS is doing («Думаю…»).
+  put(orb, "title", `JARVIS · ${a.label}${a.detail ? " — " + a.detail : ""}\nНажмите — открыть, перетащите — переместить`);
+  if (orb.getAttribute("aria-label") !== `JARVIS: ${a.label}`) orb.setAttribute("aria-label", `JARVIS: ${a.label}`);
+  html(wake, S.wake ? ICON.mic : ICON.micOff);
+  if (wake.getAttribute("aria-pressed") !== String(S.wake)) wake.setAttribute("aria-pressed", String(S.wake));
+  put(wake, "title", S.wake ? "Слушаю «Джарвис» — выключить микрофон" : "Слушать «Джарвис» (микрофон, распознавание на этом компьютере)");
+  put($("#ovTalk"), "hidden", S.wake);
+  if ($("#ovTalk").classList.contains("recording") !== voice.recording) $("#ovTalk").classList.toggle("recording", voice.recording);
   if (!S.expanded) return;
   const sig = JSON.stringify([a, S.lastReply?.at, S.wake, S.error, a.taskId && planRows(S.tasks[a.taskId] || { steps: [] })]);
   if (sig === lastSig) return;
@@ -297,10 +318,9 @@ function render() {
   S.error = "";
   const ph = $("#ovPhases"), idx = PHASES.findIndex(([k]) => k === a.phase);
   ph.hidden = idx < 0 || a.mode === "SPEAKING";
-  if (!ph.hidden) ph.innerHTML = PHASES.map(([k, l], i) => `<span class="${i < idx ? "done" : i === idx ? "on" : ""}">${l}</span>`).join("<i></i>");
-  $("#ovMainBody").innerHTML = body(a);
+  if (!ph.hidden) html(ph, PHASES.map(([k, l], i) => `<span class="${i < idx ? "done" : i === idx ? "on" : ""}">${l}</span>`).join("<i></i>"));
+  html($("#ovMainBody"), body(a));
   renderGo();
   scheduleCollapse();
 }
-setInterval(() => { if (S.flash) render(); }, 800);
-window.__overlay = { S, link, voice, expand, collapse };   // for automated checks
+window.__overlay = { S, link, voice, expand, collapse, draw };   // for automated checks

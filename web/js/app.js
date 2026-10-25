@@ -1,11 +1,11 @@
 // JARVIS WorkOS — the window shell. One WebSocket to the local core; one state object; a topic bus so each part
-// redraws only for what it shows. Layout: sidebar (workspaces) · top bar (real status) · workspace · activity panel,
-// plus the global companion, the command palette and notifications above everything.
+// redraws only for what it shows. Layout: sidebar (workspaces) · top bar (real status) · workspace, plus the global
+// companion, the command palette and notifications above everything.
 import { Link } from "./net.js";
 import { Voice } from "./voice.js";
-import { esc, md, ICON, STATE_RU, stepRow, resultCard, approvalCard, toolTitle, fmtMs, fmtWhen, decisionCard, orderCard } from "./render.js";
+import { esc, md, ICON, STATE_RU, stepRow, resultCard, approvalCard, fmtMs, fmtWhen, decisionCard, orderCard } from "./render.js";
 import { createBus, frameBatch, prefs } from "./core/store.js";
-import { flashFor } from "./core/agent-state.js";
+import { flashFor, PHASES } from "./core/agent-state.js";
 import { classify } from "./core/intent.js";
 import { isUserTask, isWorking, canRetry } from "./core/tasks-model.js";
 import { WORKSPACES, ALL, byId, navBadge, connectionOf } from "./workspaces/registry.js";
@@ -14,29 +14,32 @@ import { DesktopAdapter } from "./adapters/desktop.js";
 import { createNotifier } from "./ui/notify.js";
 import { createCompanionDock } from "./ui/companion-dock.js";
 import { createPalette } from "./ui/palette.js";
-import * as homeWs from "./workspaces/home.js";
-import * as tasksWs from "./workspaces/tasks.js";
 import * as browserWs from "./workspaces/browser.js";
 import * as commWs from "./workspaces/communication.js";
 import * as filesWs from "./workspaces/files.js";
 import * as settingsWs from "./workspaces/settings.js";
 import * as ordersWs from "./workspaces/orders.js";
 import * as abilitiesWs from "./workspaces/abilities.js";
+import * as errorsWs from "./workspaces/errors.js";
+import * as historyWs from "./workspaces/history.js";
 import { createCodingAsk } from "./ui/coding-ask.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+/** Write markup only when it changed: the top bar redraws on every event (each streamed word). */
+const setHtml = (el, html) => { if (el._html !== html) { el._html = html; el.innerHTML = html; } };
 
 const S = {
   connected: false, convId: null, messages: [], tasks: {}, approvals: {}, core: { state: "OFFLINE" },
   provider: null, reminders: [], streaming: {}, progress: {}, tools: [], grants: [],
-  view: "home", voice: null, firstSnapshot: true, providers: [], dev: localStorage.getItem("jarvis.dev") === "1",
+  view: "chat", voice: null, firstSnapshot: true, providers: [], dev: localStorage.getItem("jarvis.dev") === "1",
   comms: {},              // messenger providers by channel (comms.state / comms.providers)
   flash: null,            // last finished task's reaction (SUCCESS / ERROR / CANCELLED)
   lastReply: null,        // {text, taskId, at} — newest assistant message, for the companion
   attachments: [],        // file paths attached to the next chat message
   lastVoiceAt: 0,
-  askedHere: new Set(),   // tasks asked from outside the chat (companion, Home, a workspace): their answer pops up there
+  askedHere: new Set(),   // tasks asked from outside the chat (companion, a workspace): their answer pops up there
+  newErrors: 0,           // tasks that failed since «Ошибки» was last opened (a dot in the sidebar)
 };
 
 // ------------------------------------------------------------------ boot
@@ -195,7 +198,7 @@ function onEvent(ev) {
     case "meeting.state":
       S.core.meeting = ev.meeting;
       toast(ev.meeting ? `🔴 Записываю встречу «${ev.meeting.title}»` : "Запись встречи остановлена", ev.meeting ? "warn" : "", { ttl: 6000 });
-      renderPrivacy();
+      bus.emit("core");
       break;
     case "notice": toast(`🔔 ${ev.title}${ev.body ? ". " + ev.body : ""}`, ev.urgent ? "warn" : "", { ttl: ev.urgent ? 20000 : 10000 }); break;
     case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : "ok"); break;
@@ -260,8 +263,9 @@ function onEvent(ev) {
 function taskFinished(t) {
   const f = flashFor(t, Date.now());
   if (f) { S.flash = f; setTimeout(() => bus.emit("core"), 2700); }
-  if (t.state === "failed" && isUserTask(t) && S.view !== "chat" && t.route !== "ui") {
-    toast(`Не получилось: ${t.request.slice(0, 60)}`, "err", { action: { label: "Подробнее", run: () => openTask(t.id) } });
+  if (t.state === "failed" && isUserTask(t) && t.route !== "ui") {
+    if (S.view !== "errors") { S.newErrors++; renderSidebar(); }
+    if (S.view !== "chat") toast(`Не получилось: ${t.request.slice(0, 60)}`, "err", { action: { label: "Подробнее", run: () => openTask(t.id) } });
   }
 }
 
@@ -285,16 +289,15 @@ const views = {};
 const ctx = {
   S, bus, link, agent, desktop, voice, toast, nav: (id, p) => nav(id, p),
   submit: (text, o) => submit(text, o), openTask: (id) => openTask(id), openApproval: (id) => openApproval(id),
-  attachFile: (p) => attachFile(p), findTask: (id) => S.tasks[id] || views.tasks?.findTask?.(id) || null,
+  attachFile: (p) => attachFile(p), findTask: (id) => S.tasks[id] || null,
   connected: () => S.connected, providers: () => S.comms, setProviders: (l) => setProviders(l),
   env: () => ({ connected: S.connected, providers: S.comms }), currentView: () => S.view,
-  agentState: () => dock.agent || { label: "…" },
 };
-const settings = settingsWs.create({ ...ctx, onChange: () => { bus.emit("core"); bus.emit("voice"); renderPrivacy(); },
+const settings = settingsWs.create({ ...ctx, onChange: () => { bus.emit("core"); bus.emit("voice"); },
   onDevToggle: () => { turnCache.clear(); $("#thread").innerHTML = ""; } });
 views.settings = settings;
-const FACTORY = { home: homeWs.create, tasks: tasksWs.create, browser: browserWs.create, files: filesWs.create, orders: ordersWs.create,
-  abilities: abilitiesWs.create,
+const FACTORY = { browser: browserWs.create, files: filesWs.create, orders: ordersWs.create, abilities: abilitiesWs.create,
+  errors: errorsWs.create, history: historyWs.create,
   telegram: (c) => commWs.create(c, "telegram"), whatsapp: (c) => commWs.create(c, "whatsapp"), mail: (c) => commWs.create(c, "mail") };
 
 function viewFor(id) {
@@ -308,7 +311,6 @@ function viewFor(id) {
 }
 
 function nav(id, params = {}) {
-  if (id === "history") { id = "tasks"; params = { ...params, tab: "history" }; }
   const def = byId(id);
   if (!def) return;
   const prev = S.view;
@@ -321,21 +323,37 @@ function nav(id, params = {}) {
   prefs.set("ws", id);
   const v = viewFor(id);
   if (sections[id]) sections[id].hidden = false;
-  if (id === "chat") { renderThread(); scrollToEnd(false); setTimeout(() => input.focus(), 0); }
+  if (id === "errors" && S.newErrors) { S.newErrors = 0; renderSidebar(); }
+  if (id === "chat") { renderThread(); scrollToEnd(false); setTimeout(focusComposer, 0); }
   else if (id === "comms") renderComms();
   else v?.show?.(params);
   $$("[data-nav]", $("#sidebar")).forEach((b) => b.setAttribute("aria-selected", String(b.dataset.nav === id)));
-  renderCrumb();
   bus.emit("workspace", id);
   if (S.connected) link.request("ui.view", { view: id }).catch(() => {});   // «Заказы» open → order phrases go there
 }
 
-function openTask(id) { nav("tasks", { task: id }); }
+/** The chat's field gets the keyboard — unless the person already moved it (keys are handled before this timer:
+ *  Ctrl+K right after opening the chat used to lose its letters to the chat field). */
+function focusComposer() {
+  const a = document.activeElement;
+  if (S.view === "chat" && !palette.isOpen && (!a || a === document.body || a.closest("#sidebar, .cdock, .toasts"))) input.focus();
+}
+
+/** A task lives in the chat: its request, steps, cards and answer. Show that turn. */
+function openTask(id) {
+  nav("chat");
+  requestAnimationFrame(() => {
+    const turn = document.querySelector(`.turn[data-key="${CSS.escape(id)}"]`);
+    if (!turn) return;
+    turn.scrollIntoView({ block: "center", behavior: "smooth" });
+    turn.classList.remove("flash"); void turn.offsetWidth; turn.classList.add("flash");
+  });
+}
 function openApproval(id) {
   nav("chat");
   requestAnimationFrame(() => {
     const card = document.querySelector(`[data-approval="${CSS.escape(id)}"]`);
-    if (!card) { if (!app.classList.contains("side-open") && innerWidth <= 1080) toggleSide(); return; }
+    if (!card) return;
     card.scrollIntoView({ block: "center", behavior: "smooth" });
     const d = card.querySelector("details.revise");
     if (d) d.open = true;
@@ -369,9 +387,8 @@ const renderSidebar = frameBatch(() => {
     dot.hidden = !badge;
     if (badge) { dot.className = `sb-badge ${badge}`; b.dataset.tip = `${w.title} · ${connectionOf(S.comms[w.channel]).label.toLowerCase()}${w.hotkey ? "  ·  Ctrl+" + w.hotkey : ""}`; }
   }
-  const active = Object.values(S.tasks).filter((t) => isUserTask(t) && isWorking(t)).length;
-  const c = $('#nav [data-nav="tasks"] .sb-count');
-  if (c) { c.hidden = !active; c.textContent = active; }
+  const c = $('#nav [data-nav="errors"] .sb-count');
+  if (c) { c.hidden = !S.newErrors; c.textContent = S.newErrors; }
 });
 function setSidebarWide(wide) {
   app.classList.toggle("sb-wide", wide);
@@ -395,10 +412,9 @@ function renderStatus() {
   document.title = STATUS_TITLE[a.mode] || "JARVIS";
   const voiceFlow = ["recording", "transcribing"].includes(S.voice) || (Date.now() - S.lastVoiceAt < 60000 && a.busy);
   const ph = $("#phases");
-  const order = ["listening", "transcribing", "understanding", "executing"];
-  const idx = order.indexOf(a.phase);
+  const idx = PHASES.findIndex(([k]) => k === a.phase);
   ph.hidden = !(voiceFlow && idx >= 0 && a.mode !== "SPEAKING");
-  if (!ph.hidden) ph.innerHTML = [["Слушаю"], ["Распознаю"], ["Понимаю"], ["Выполняю"]].map(([l], i) => `<span class="${i < idx ? "done" : i === idx ? "on" : ""}">${l}</span>`).join("<i></i>");
+  if (!ph.hidden) setHtml(ph, PHASES.map(([, l], i) => `<span class="${i < idx ? "done" : i === idx ? "on" : ""}">${l}</span>`).join("<i></i>"));
   renderChips();
 }
 
@@ -407,6 +423,9 @@ function renderChips() {
   if (S.core.estop) chips.push(`<button class="chip err" data-act="estop_clear">${ICON.stop} Остановлено · снять</button>`);
   const pend = Object.values(S.approvals).filter((x) => x.status === "pending").length;
   if (pend) chips.push(`<button class="chip attn" data-act="show-approvals">${ICON.shield} Нужно решение${pend > 1 ? ` · ${pend}` : ""}</button>`);
+  // Reminders (they had a list in the removed activity panel): the next one, all of them in the tooltip.
+  const rem = S.reminders.filter((r) => r.status === "scheduled").sort((a, b) => a.due_at - b.due_at);
+  if (rem.length) chips.push(`<span class="chip" title="${esc(rem.map((r) => `${fmtWhen(r.due_at)} — ${r.text}`).join("\n"))}">${ICON.clock} ${fmtWhen(rem[0].due_at)}${rem.length > 1 ? ` · ${rem.length}` : ""}</span>`);
   if (voice.listening) chips.push(`<button class="chip live" data-act="conv">${ICON.mic} ${voice.conversation ? "Разговор: микрофон включён" : "Слушаю одну фразу"}</button>`);
   if (S.providers.length && S.connected) {
     const up = S.providers.filter((p) => p.health === "CONNECTED");
@@ -416,23 +435,10 @@ function renderChips() {
     const full = names.length ? `ИИ: ${names.join(" · ")}` : "ИИ не подключён";
     chips.push(`<button class="chip ${cls}" data-nav="settings" title="AI-агентство — ${esc(full)}">${ICON.spark} <span class="long">${esc(full)}</span><span class="short">${names.length ? "ИИ" : "ИИ нет"}</span></button>`);
   }
-  // Privacy shows up here only when it restricts something; the normal mode is in the activity panel.
+  // Privacy shows up here only when it restricts something; the normal mode is in Settings.
   const prof = { PRIVATE_LOCAL: "Приватно: спрашивать", STRICT_OFFLINE: "Строго офлайн" }[S.core.privacy];
   if (prof && S.connected) chips.push(`<button class="chip warn" data-nav="settings">${ICON.lock} ${prof}</button>`);
-  $("#chips").innerHTML = chips.join("");
-}
-
-function renderCrumb() {
-  const def = byId(S.view);
-  if (!def) return;
-  const v = views[S.view];
-  const detail = v?.context?.() || "";
-  let pill = "";
-  if (def.channel) {
-    const c = connectionOf(S.comms[def.channel]);
-    pill = `<span class="cpill ${{ connected: "ok", connecting: "warn", error: "err" }[c.state] || ""}">${esc(c.label)}</span>`;
-  }
-  $("#crumb").innerHTML = `<b>${esc(def.title)}</b>${pill}<span class="ctx">${esc(detail || (def.context !== def.title ? def.context : ""))}</span>`;
+  setHtml($("#chips"), chips.join(""));
 }
 
 // ------------------------------------------------------------------ chat thread
@@ -540,8 +546,7 @@ function turnHtml(t, task, approvals) {
   if (task && active && task.route !== "ui") {
     body.push(`<div class="turn-ctl"><button class="btn ghost" data-task-act="cancel" data-task="${esc(task.id)}">${ICON.stop} Остановить</button></div>`);
   } else if (task && canRetry(task) && t.user) {
-    body.push(`<div class="turn-ctl"><button class="btn ghost" data-retry="${esc(task.id)}">${ICON.retry} Повторить</button>
-      <button class="btn ghost" data-open-task="${esc(task.id)}">Подробнее</button></div>`);
+    body.push(`<div class="turn-ctl"><button class="btn ghost" data-retry="${esc(task.id)}">${ICON.retry} Повторить</button></div>`);
   }
   const meta = metaLine(t, task);
   if (meta) body.push(meta);
@@ -600,55 +605,6 @@ function scrollToEnd(smooth = true) {
   requestAnimationFrame(() => scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? "smooth" : "auto" }));
 }
 
-// ------------------------------------------------------------------ activity panel
-function renderSide() {
-  const pend = Object.values(S.approvals).filter((a) => a.status === "pending").sort((a, b) => a.created_at - b.created_at);
-  $("#approvalsSection").hidden = !pend.length;
-  $("#approvalsList").innerHTML = pend.map((a) => `<div class="task" style="border-color:color-mix(in srgb, var(--warn) 40%, transparent)">
-      <div class="top">${ICON.shield}<span class="req" title="${esc(a.summary?.action || "")}">${esc(a.summary?.action || a.summary?.title || toolTitle(a.tool_id))}</span></div>
-      <div class="sub" style="gap:6px"><button class="btn warn" data-approve="${esc(a.id)}" style="height:26px;font-size:12.5px;padding:0 10px">${a.tool_id === "message_send" ? "Отправить" : "Разрешить"}</button>
-        <button class="btn ghost" data-deny="${esc(a.id)}" style="height:26px;font-size:12.5px;padding:0 10px">Отклонить</button>
-        <button class="btn ghost" data-open-approval="${esc(a.id)}" style="height:26px;font-size:12.5px;padding:0 8px">Подробнее</button></div></div>`).join("");
-  const active = Object.values(S.tasks).filter((t) => isUserTask(t) && !["completed", "failed", "cancelled"].includes(t.state))
-    .sort((a, b) => a.created_at - b.created_at);
-  $("#activeTasks").innerHTML = active.length ? active.map(taskCard).join("")
-    : `<div class="empty-note">Нет активных задач</div>`;
-  const rem = S.reminders.filter((r) => r.status === "scheduled");
-  $("#remindersSection").hidden = !rem.length;
-  $("#reminders").innerHTML = rem.map((r) => `<div class="task"><div class="top">${r.command ? ICON.spark : ICON.clock}
-      <span class="req">${esc(r.text)}</span><span class="pill">${fmtWhen(r.due_at)}</span></div></div>`).join("");
-  renderPrivacy();
-}
-
-function taskCard(t) {
-  const running = t.steps.find((s) => ["running", "verifying"].includes(s.state));
-  const canPause = ["running", "planning"].includes(t.state);
-  const canResume = t.state === "paused";
-  const sub = t.state === "blocked" ? "прервана перезапуском"
-    : running ? `${toolTitle(running.tool_id)} · ${S.progress[running.id] || "выполняю"}`
-    : t.state === "waiting_for_approval" ? "нужно ваше решение" : "";
-  return `<div class="task"><div class="top">
-      <button class="req" data-open-task="${esc(t.id)}" title="${esc(t.request)}" style="text-align:left">${esc(t.request)}</button>
-      <span class="ctl">
-        ${canPause ? `<button class="icon-btn" data-task-act="pause" data-task="${esc(t.id)}" aria-label="Пауза" title="Пауза">${ICON.pause}</button>` : ""}
-        ${canResume ? `<button class="icon-btn" data-task-act="resume" data-task="${esc(t.id)}" aria-label="Продолжить" title="Продолжить">${ICON.play}</button>` : ""}
-        <button class="icon-btn" data-task-act="cancel" data-task="${esc(t.id)}" aria-label="Отменить" title="Отменить">${ICON.x}</button>
-      </span></div>
-      <div class="sub"><span class="pill ${esc(t.state)}">${esc(STATE_RU[t.state] || t.state)}</span><span>${esc(sub)}</span></div></div>`;
-}
-
-function renderPrivacy() {
-  const meet = S.core.meeting;
-  const mic = meet ? `<b class="on">запись встречи · ${meet.minutes} мин</b>` : voice.listening ? `<b class="on">${voice.conversation ? "включён (разговор)" : "включён"}</b>` : voice.muted ? "<b>выключен</b>" : `<b>не используется</b>`;
-  const cloud = { AUTHORIZED_CLOUD: "по запросу", PRIVATE_LOCAL: "только с согласия", STRICT_OFFLINE: "выключено" }[S.core.privacy] || "—";
-  $("#privacy").innerHTML = `
-    <div class="line">${voice.muted ? ICON.micOff : ICON.mic} Микрофон ${mic}</div>
-    <div class="line">${ICON.cloud} Отправка в Claude <b>${cloud}</b></div>
-    <div class="line">${ICON.image} Камера <b>не используется</b></div>
-    <div class="line">${ICON.shield} Подтверждения <b class="ok">включены</b></div>
-    <button class="btn ghost" data-act="toggle-mute" style="align-self:flex-start;margin-top:2px">${voice.muted ? ICON.mic + " Включить микрофон" : ICON.micOff + " Выключить микрофон"}</button>`;
-}
-
 // ------------------------------------------------------------------ composer
 const input = $("#input");
 function stoppable() {
@@ -675,9 +631,9 @@ function renderComposer() {
     : S.voice === "transcribing" ? "Распознаю речь…"
     : S.voice === "speaking" ? "JARVIS говорит — начните говорить, чтобы перебить, или <span class=\"kbd\">Esc</span>"
     : voice.conversation ? "Разговор: просто говорите. Пауза — конец фразы. Скажите «стоп», чтобы перебить."
-    : stop ? `<span><span class="kbd">Esc</span> остановить</span><span><span class="kbd">Enter</span> отправить</span><span><span class="kbd">Ctrl K</span> команды</span>`
-    : `<span><span class="kbd">Enter</span> отправить</span><span><span class="kbd">Ctrl Space</span> фраза</span><span><span class="kbd">Ctrl K</span> команды</span><span><span class="kbd">Ctrl J</span> JARVIS</span>`;
-  $("#composerHint").innerHTML = hint;
+    : stop ? `<span><span class="kbd">Esc</span> остановить</span><span><span class="kbd">Enter</span> отправить</span>`
+    : `<span><span class="kbd">Enter</span> отправить</span><span><span class="kbd">Ctrl Space</span> фраза</span><span><span class="kbd">Ctrl J</span> JARVIS</span>`;
+  setHtml($("#composerHint"), hint);
 }
 
 function autosize() { input.style.height = "auto"; input.style.height = Math.min(180, input.scrollHeight) + "px"; }
@@ -784,10 +740,8 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.retry) { const task = ctx.findTask(t.dataset.retry); if (task) submit(task.request, { source: "text" }); return; }
   if (t.dataset.openTask) return openTask(t.dataset.openTask);
   if (t.dataset.openApproval) return openApproval(t.dataset.openApproval);
-  if (t.id === "sbBrand") return nav("home");
   if (t.id === "sbToggle") { setSidebarWide(!app.classList.contains("sb-wide")); return; }
   if (t.id === "estopBtn") return estop();
-  if (t.id === "sideToggle") return toggleSide();
   if (t.id === "paletteBtn") return palette.open();
   if (t.id === "status") return dock.toggle();
   if (t.dataset.open) return desktop.openPath(t.dataset.open).catch((er) => toast(er.message, "err"));
@@ -847,7 +801,6 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (attachPop) { attachPop.remove(); attachPop = null; return; }
     if (voice.recording || voice.audio) { voice.stopAll(); return; }
-    if (app.classList.contains("side-open")) { toggleSide(); return; }
     if (dock.state.expanded && !dock.state.pinned) { dock.toggle(); return; }
     // Esc stops the running task — from an empty composer or with nothing focused, never while typing.
     const a = document.activeElement;
@@ -866,18 +819,12 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-function toggleSide() {
-  if (innerWidth <= 1080) app.classList.toggle("side-open");
-  else { app.classList.toggle("side-hidden"); prefs.set("side", app.classList.contains("side-hidden") ? "hidden" : "shown"); }
-}
-
 // ------------------------------------------------------------------ companion & palette
 const dock = createCompanionDock({
   ...ctx,
   agentInput: () => ({ connected: S.connected, core: S.core, voice: S.voice, micOpen: voice.listening, muted: voice.muted,
     tasks: Object.values(S.tasks), approvals: Object.values(S.approvals), streaming: S.streaming, progress: S.progress,
     flash: S.flash, now: Date.now() }),
-  context: () => ({ title: byId(S.view)?.title || "", detail: views[S.view]?.context?.() || "" }),
   lastReply: () => S.lastReply,
   onLayout: (docked) => { app.dataset.cdock = docked ? "1" : "0"; },
 });
@@ -906,7 +853,6 @@ function commands() {
     { id: "cd-show", title: dock.state.hidden ? "Показать JARVIS" : "Скрыть JARVIS до следующего события", group: "Компаньон", icon: dock.state.hidden ? "spark" : "eyeOff", keywords: "компаньон companion", run: () => (dock.state.hidden ? dock.show() : dock.hide()) },
     { id: "cd-dock", title: "Вернуть JARVIS на место", sub: "В верхний левый угол", group: "Компаньон", icon: "dock", keywords: "компаньон позиция сбросить", run: () => dock.redock() },
     { id: "cd-pin", title: dock.state.pinned ? "Открепить JARVIS" : "Закрепить JARVIS открытым", group: "Компаньон", icon: "pin", keywords: "компаньон pin", run: () => dock.togglePin() },
-    { id: "side", title: "Панель активности", group: "Интерфейс", icon: "sidebar", keywords: "активность задачи приватность", run: () => toggleSide() },
     { id: "sb", title: app.classList.contains("sb-wide") ? "Скрыть подписи меню" : "Показать подписи меню", group: "Интерфейс", icon: "sidebar", keywords: "sidebar боковая панель", run: () => setSidebarWide(!app.classList.contains("sb-wide")) },
     ...[["", "Тема как в системе"], ["dark", "Тёмная тема"], ["light", "Светлая тема"]].map(([v, title]) => ({ id: "theme:" + v, title, group: "Интерфейс", icon: "image", keywords: "тема theme оформление",
       run: () => { if (v) { document.documentElement.dataset.theme = v; localStorage.setItem("jarvis.theme", v); } else { delete document.documentElement.dataset.theme; localStorage.removeItem("jarvis.theme"); } } })),
@@ -918,14 +864,13 @@ function commands() {
 const palette = createPalette({ commands, toast, ask: (q) => submit(q, { source: "text", stay: S.view !== "chat" }) });
 
 // ------------------------------------------------------------------ wiring
-const shell = frameBatch(() => { dock.render(); renderStatus(); renderComposer(); renderSide(); renderSidebar(); renderCrumb(); });
+const shell = frameBatch(() => { dock.render(); renderStatus(); renderComposer(); renderSidebar(); });
 bus.on(["link", "core", "tasks", "approvals", "voice", "stream", "messages", "providers", "reminders", "workspace"], shell);
 bus.on(["tasks", "approvals", "messages"], frameBatch(renderThread));
 
 buildSidebar();
 setSidebarWide(prefs.get("sidebar", innerWidth >= 1560 ? "wide" : "narrow") === "wide");
-if (prefs.get("side", "shown") === "hidden" && innerWidth > 1080) app.classList.add("side-hidden");
-const start = prefs.get("ws", "home");
-nav(byId(start) && start !== "history" ? start : "home");
+const start = prefs.get("ws", "chat");
+nav(byId(start) && start !== "history" ? start : "chat");
 shell();
-window.__jarvis = { S, link, voice, bus, dock, palette, nav, render: () => { turnCache.clear(); renderThread(); } };   // for automated UI tests
+window.__jarvis = { S, link, voice, bus, dock, palette, nav, openTask, render: () => { turnCache.clear(); renderThread(); } };   // for automated UI tests

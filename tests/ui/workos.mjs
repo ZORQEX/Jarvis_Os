@@ -35,13 +35,16 @@ await page.reload();
 await page.waitForFunction(() => window.__jarvis?.S.connected === true, null, { timeout: 10000 });
 const readyMs = Date.now() - t0;
 
-await check("app starts on Home", async () => {
-  assert(await view() === "home", "view is " + await view());
-  assert(await visible('[data-ws="home"] .home-ask'), "home ask box missing");
+await check("app starts on the chat; no Home, Tasks or activity panel", async () => {
+  assert(await view() === "chat", "view is " + await view());
+  assert(await visible("#input"), "chat input missing");
+  assert(await J(() => !document.getElementById("side") && !document.getElementById("crumb") && !document.getElementById("sbBrand")),
+    "removed parts are still in the page");
+  assert(await J(() => !document.querySelector('#nav [data-nav="home"], #nav [data-nav="tasks"]')), "Home/Tasks still in the sidebar");
   await page.waitForFunction(() => document.querySelector("#status").dataset.state === "IDLE", null, { timeout: 4000 });
   return { status: await J(() => document.querySelector("#status .status-label").textContent) };
 });
-await shot("01-home");
+await shot("01-chat");
 
 await check("sidebar: every workspace opens", async () => {
   const ids = await J(() => [...document.querySelectorAll("#nav [data-nav]")].map((b) => b.dataset.nav));
@@ -59,7 +62,7 @@ await check("sidebar: every workspace opens", async () => {
 });
 
 await check("companion: global, docked by default", async () => {
-  await page.click('#nav [data-nav="home"]');
+  await page.click('#nav [data-nav="chat"]');
   const s = await cdState();
   assert(s.docked === "1" && !s.hidden, JSON.stringify(s));
   const slot = await J(() => { const r = document.getElementById("dockSlot").getBoundingClientRect(); return [r.left, r.top]; });
@@ -87,7 +90,7 @@ await check("companion: drag, clamp, persist, survive navigation", async () => {
   await page.mouse.move(b.x - 200, b.y - 150, { steps: 6 }); await page.mouse.move(700, 450, { steps: 6 }); await page.mouse.up();
   await page.waitForTimeout(200);
   const mid = await page.locator("#cdOrb").boundingBox();
-  for (const id of ["tasks", "telegram", "files", "chat", "home"]) { await page.click(`#nav [data-nav="${id}"]`); await waitView(id); }
+  for (const id of ["errors", "telegram", "files", "chat"]) { await page.click(`#nav [data-nav="${id}"]`); await waitView(id); }
   assert(await J(() => document.getElementById("cdock").__marker === 42), "companion element was re-created on navigation");
   const after = await page.locator("#cdOrb").boundingBox();
   assert(Math.abs(after.x - mid.x) < 2 && Math.abs(after.y - mid.y) < 2, "moved during navigation");
@@ -180,7 +183,6 @@ await check("confirmation: companion asks, approve runs the real tool", async ()
   assert(s.expanded === "1", "companion did not open for the decision");
   assert(await visible('[data-cd="approve"]'), "no approve button");
   assert(await J(() => document.querySelector("#status").dataset.state === "WAITING_CONFIRMATION"), "top bar not waiting");
-  assert(await J(() => !document.getElementById("approvalsSection").hidden), "side panel has no decision");
   await page.waitForTimeout(400);
   await shot("06-confirmation");
   await page.click('[data-cd="approve"]');
@@ -189,33 +191,40 @@ await check("confirmation: companion asks, approve runs the real tool", async ()
   return { tid, modeAfter: mode };
 });
 
-await check("cancel: a waiting task is stopped from the Task Center", async () => {
+await check("cancel: «Подробнее» shows the task's turn in the chat, «Остановить» there stops it", async () => {
   const tid = await J(async () => (await window.__jarvis.link.request("submit", { text: "запиши заметку: эту отменить", source: "text" })).task_id);
   await page.waitForFunction((t) => window.__jarvis.S.tasks[t]?.state === "waiting_for_approval", tid, { timeout: 6000 });
-  await J((t) => window.__jarvis.nav("tasks", { task: t }), tid);
-  await page.waitForSelector('#tcDetail [data-t="cancel"]', { timeout: 6000 });
-  await shot("07-task-center-waiting");
-  await page.click('#tcDetail [data-t="cancel"]');
+  await page.click('#nav [data-nav="files"]');
+  await J((t) => window.__jarvis.openTask(t), tid);
+  await waitView("chat");
+  const btn = `.turn[data-key="${tid}"] [data-task-act="cancel"]`;
+  await page.waitForSelector(btn, { timeout: 6000 });
+  assert(await J((t) => document.querySelector(`.turn[data-key="${t}"]`).classList.contains("flash"), tid), "the turn is not highlighted");
+  await shot("07-task-turn-waiting");
+  await page.click(btn);
   await page.waitForFunction((t) => window.__jarvis.S.tasks[t]?.state === "cancelled", tid, { timeout: 6000 });
-  await page.waitForTimeout(500);
-  const tl = await J(() => [...document.querySelectorAll("#tcDetail .tl-ev")].map((e) => e.dataset.kind));
-  assert(tl.includes("task.created") && tl.includes("confirmation.required") && tl.includes("task.cancelled"), "timeline " + tl);
-  await shot("08-task-center-cancelled");
-  return { timeline: tl };
+  return { tid };
 });
 
-await check("task center: completed task has plan and timeline", async () => {
-  await page.click('[data-filter="all"]');
-  const n = await J(() => document.querySelectorAll("#tcList .tc-card").length);
-  assert(n >= 3, "tasks listed: " + n);
-  await page.locator("#tcList .tc-card", { hasText: "проверка WorkOS" }).first().click();
-  await page.waitForTimeout(400);
-  const marks = await J(() => [...document.querySelectorAll("#tcDetail .plan-row")].map((r) => r.dataset.mark));
-  const tl = await J(() => [...document.querySelectorAll("#tcDetail .tl-ev")].map((e) => e.dataset.kind));
-  assert(marks.includes("done"), "plan " + marks);
-  assert(tl.includes("confirmation.decided") && tl.includes("tool.completed") && tl.includes("task.completed"), "timeline " + tl);
-  await shot("09-task-center-done");
-  return { marks, timeline: tl };
+await check("errors: a failure marks «Ошибки», the list opens with «Исправить»", async () => {
+  await page.click('#nav [data-nav="files"]');
+  await J(() => {                                             // the UI reacts to the core's task events: feed one failure
+    const now = Date.now() / 1000;
+    window.__jarvis.link.onEvent({ kind: "task.updated", task_id: "t_uifail", task: { id: "t_uifail", request: "проверка ошибок", state: "failed",
+      route: "tool", steps: [], created_at: now - 1, finished_at: now, error: "проверка" } });
+  });
+  await page.waitForFunction(() => !document.querySelector('#nav [data-nav="errors"] .sb-count').hidden, null, { timeout: 3000 });
+  const count = await J(() => document.querySelector('#nav [data-nav="errors"] .sb-count').textContent);
+  await page.click('#nav [data-nav="errors"]');
+  await waitView("errors");
+  await page.waitForSelector('[data-ws="errors"] .err-list, [data-ws="errors"] .empty-state', { timeout: 6000 });
+  assert(await J(() => document.querySelector('#nav [data-nav="errors"] .sb-count').hidden), "the count did not clear on opening");
+  const rows = await J(() => document.querySelectorAll('[data-ws="errors"] .err-row').length);
+  const fix = await J(() => document.querySelectorAll('[data-ws="errors"] [data-fix]').length);
+  assert(rows === fix, "a problem without «Исправить»");
+  assert(!/Неизвестный запрос/.test(await J(() => document.querySelector('[data-ws="errors"]').textContent)), "errors request failed");
+  await shot("09-errors");
+  return { count, rows };
 });
 
 await check("companion: ask from another workspace, answer pops up there", async () => {
@@ -247,7 +256,7 @@ await check("Esc stops the waiting task (after closing the card)", async () => {
 });
 
 await check("palette: Ctrl+K finds and runs commands", async () => {
-  await page.click('#nav [data-nav="home"]');
+  await page.click('#nav [data-nav="chat"]');
   await page.keyboard.press("Control+k");
   assert(await visible(".palette .pal"), "palette not open");
   await page.keyboard.type("файл");
@@ -266,9 +275,9 @@ await check("palette: Ctrl+K finds and runs commands", async () => {
 await check("navigation: typed command (window) and core route (voice path)", async () => {
   await page.click('#nav [data-nav="chat"]');
   const before = await J(() => window.__jarvis.S.messages.length);
-  await page.fill("#input", "перейди в задачи");
+  await page.fill("#input", "перейди в ошибки");
   await page.keyboard.press("Enter");
-  await waitView("tasks");
+  await waitView("errors");
   assert(await J(() => window.__jarvis.S.messages.length) === before, "typed navigation reached the core");
   await J(() => window.__jarvis.link.request("submit", { text: "Джарвис, перейди в браузер", source: "text" }));   // core router path
   await waitView("browser");
@@ -331,12 +340,12 @@ await check("settings (moved module) work: privacy, theme", async () => {
   await page.click(`[data-privacy="${before}"]`);
   await page.click('[data-theme-set="light"]');
   assert(await J(() => document.documentElement.dataset.theme === "light"), "theme not applied");
-  await J(() => window.__jarvis.nav("home"));
+  await J(() => window.__jarvis.nav("chat"));
   await page.waitForTimeout(300);
-  await shot("14-light-home");
-  await J(() => window.__jarvis.nav("tasks"));
+  await shot("14-light-chat");
+  await J(() => window.__jarvis.nav("errors"));
   await page.waitForTimeout(300);
-  await shot("15-light-tasks");
+  await shot("15-light-errors");
   await J(() => window.__jarvis.nav("settings"));
   await page.click('[data-theme-set=""]');
 });
@@ -365,14 +374,37 @@ await check("desktop companion page: card, ask, confirmation", async () => {
   await page.waitForFunction((t) => window.__jarvis.S.tasks[t]?.state === "completed", tid, { timeout: 8000 });
   const st = await ov.evaluate(() => window.__overlay.link.request("overlay.state"));
   assert(st.enabled === true, "overlay state " + JSON.stringify(st));
+  // Thinking shows on the face (three dots), and once the «Готово» reaction ends the page is quiet: no timer redraws.
+  const think = await ov.evaluate(async () => {
+    const { link } = window.__overlay, now = Date.now() / 1000;
+    link.onEvent({ kind: "task.created", task_id: "t_think", task: { id: "t_think", request: "подумай", state: "running", route: "ai", steps: [], created_at: now } });
+    link.onEvent({ kind: "core.state", state: "THINKING", working: "" });
+    await new Promise((r) => setTimeout(r, 250));
+    const svg = document.querySelector("#ovFace .companion");
+    const out = { state: svg.dataset.state, dots: getComputedStyle(svg.querySelector(".think")).opacity };
+    link.onEvent({ kind: "task.updated", task_id: "t_think", task: { id: "t_think", request: "подумай", state: "completed", route: "ai", steps: [], created_at: now, finished_at: now } });
+    link.onEvent({ kind: "core.state", state: "IDLE", working: "" });
+    await new Promise((r) => setTimeout(r, 3200));                 // the reaction ends by itself
+    out.after = svg.dataset.state;
+    let n = 0;
+    const mo = new MutationObserver((l) => { n += l.filter((m) => !(m.target.classList?.contains("eye"))).length; });
+    mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+    await new Promise((r) => setTimeout(r, 2500));
+    mo.disconnect();
+    out.idleMutations = n;
+    return out;
+  });
+  assert(think.state === "THINKING" && think.dots === "1", "thinking not shown: " + JSON.stringify(think));
+  assert(think.after === "IDLE" && think.idleMutations === 0, "not quiet after the reaction: " + JSON.stringify(think));
   await ov.close();
+  return think;
 });
 
 await check("layout: no overflow or overlap at 1280×720, 1440×900, 1920×1080", async () => {
   const report = {};
   for (const [w, h] of [[1280, 720], [1440, 900], [1920, 1080]]) {
     await page.setViewportSize({ width: w, height: h });
-    for (const id of ["home", "chat", "tasks", "browser", "telegram", "files", "settings"]) {
+    for (const id of ["chat", "errors", "browser", "telegram", "files", "settings"]) {
       await J((x) => window.__jarvis.nav(x), id);
       await page.waitForTimeout(220);
       const r = await J(() => {
@@ -384,13 +416,12 @@ await check("layout: no overflow or overlap at 1280×720, 1440×900, 1920×1080"
         const clipped = [...document.querySelectorAll(".topbar > *")].filter((e) => e.getBoundingClientRect().right > innerWidth + 1).map((e) => e.className);
         const label = document.querySelector("#status .status-label");
         const statusCut = label.scrollWidth > label.clientWidth + 1;
-        const crumb = document.getElementById("crumb");
-        const wrapped = crumb.scrollHeight > 26 || document.querySelector(".topbar").scrollHeight > 56;
+        const wrapped = document.querySelector(".topbar").scrollHeight > 56;
         const chipsCut = [...document.querySelectorAll("#chips .chip")].some((c) => c.getBoundingClientRect().right > document.getElementById("paletteBtn").getBoundingClientRect().left + 1);
         return { over, secOver, inView, clipped, statusCut, wrapped, chipsCut };
       });
       if (r.over || r.secOver || !r.inView || r.clipped.length || r.statusCut || r.wrapped || r.chipsCut) report[`${w}x${h}:${id}`] = r;
-      if (["home", "chat", "tasks", "telegram"].includes(id)) await shot(`20-${w}x${h}-${id}`);
+      if (["chat", "errors", "telegram"].includes(id)) await shot(`20-${w}x${h}-${id}`);
     }
   }
   assert(!Object.keys(report).length, JSON.stringify(report));
@@ -418,7 +449,7 @@ await check("performance: long chat renders fast", async () => {
 
 if (process.env.LIVE === "1") {
   await check("LIVE: Claude answer streams into the companion and chat", async () => {
-    await J(() => window.__jarvis.nav("home"));
+    await J(() => window.__jarvis.nav("files"));
     const states = [];
     await J(() => { window.__modes = []; const d = document.getElementById("cdock"); new MutationObserver(() => window.__modes.push(d.dataset.mode)).observe(d, { attributes: true, attributeFilter: ["data-mode"] }); });
     const tid = await J(async () => (await window.__jarvis.link.request("submit", { text: "Ответь одним коротким предложением: что такое API?", source: "text" })).task_id);

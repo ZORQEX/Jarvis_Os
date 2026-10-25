@@ -65,7 +65,10 @@ class Engine:
         return b"RIFF" + bytes(100)
 
 
-async def test_english_question_gets_english_hold_phrase_and_voice(core):
+async def test_english_question_gets_english_thinking_phrase_and_voice(core, monkeypatch):
+    from jarvis.agency import agency as ag
+    from jarvis.voice.tts import THINKING_BY_LANG
+    monkeypatch.setattr(ag, "THINK_SAY_S", 0.4)
     eng = Engine()
     sp = SpeechManager(core.db, core.bus, eng)
     core.director.speech = sp
@@ -73,14 +76,14 @@ async def test_english_question_gets_english_hold_phrase_and_voice(core):
     orig = g.run_tool_loop
 
     async def slow(*a, **k):
-        await asyncio.sleep(3.8)
+        await asyncio.sleep(1.2)
         return await orig(*a, **k)
     g.run_tool_loop = slow
     install(core, claude=g)
     tid = await core.director.submit("Jarvis, what's the weather like today?", "voice")
     await wait_done(core, tid, timeout=8)
     await wait_for(lambda: len(eng.calls) >= 2)
-    assert eng.calls[0][0] == "en" and eng.calls[0][1] in ("One moment.", "On it.")
+    assert eng.calls[0][0] == "en" and eng.calls[0][1] in THINKING_BY_LANG["en"]
     assert eng.calls[1] == ("en", "It is sunny today.")
     assert sp.lang == "en"
 

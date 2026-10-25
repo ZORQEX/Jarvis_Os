@@ -31,16 +31,16 @@ Tests: `uv run pytest -q` → 289 passed, 6 skipped; `node --test tests/ui/unit/
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| Shell: sidebar with 9 workspaces, top bar with real status, activity panel, workspace persisted | VERIFIED LOCAL | workos.mjs «sidebar», «persistence» |
+| Shell: sidebar with 9 workspaces (chat first; no Home, task center or activity panel since 2026-10-25), top bar with real status, workspace persisted | VERIFIED LOCAL | workos.mjs «app starts on the chat», «sidebar», «persistence» |
 | Global companion: one instance, survives navigation, docked top-left by default | VERIFIED LOCAL | workos.mjs (element identity kept across 5 workspaces) |
 | Companion drag: clamped to window, snaps to edges, position restored after reload and resize, re-docks near its slot | VERIFIED LOCAL | workos.mjs «drag, clamp, persist» |
 | Companion expand / pin / hide until next event / Ctrl+J restore; folds on outside click | VERIFIED LOCAL | workos.mjs |
 | Companion state machine (IDLE, LISTENING, THINKING, PLANNING, EXECUTING, WAITING_CONFIRMATION, SPEAKING, SUCCESS, ERROR, CANCELLED, PAUSED, OFFLINE, STANDBY) from real state only | VERIFIED LOCAL | unit tests (agent-state); LIVE run: THINKING → EXECUTING → SUCCESS |
 | Chat: local command result card; stop on a running turn; retry on failed/cancelled | VERIFIED LOCAL | workos.mjs «chat», screenshots |
 | Streaming: assistant.delta rendered incrementally; companion shows «Claude отвечает…» | VERIFIED LIVE / LOCAL | LIVE run (2,5 s answer); renderer check with core events |
-| Confirmation: companion card «Разрешить / Изменить / Отклонить», side panel list, top bar; approve runs the real tool | VERIFIED LOCAL | workos.mjs «confirmation» (note written, verified) |
-| Cancel: Task Center button and Esc stop a task; timeline records it | VERIFIED LOCAL | workos.mjs «cancel», «Esc stops» |
-| Task Center: active/all/problems, plan ✓●○, execution timeline from persisted step and approval times | VERIFIED LOCAL | workos.mjs, unit tests (timeline) |
+| Confirmation: companion card «Разрешить / Изменить / Отклонить», card in the chat, top bar; approve runs the real tool | VERIFIED LOCAL | workos.mjs «confirmation» (note written, verified) |
+| Cancel: «Подробнее» jumps to the task's turn in the chat, «Остановить» there and Esc stop a task | VERIFIED LOCAL | workos.mjs «cancel», «Esc stops» |
+| «Ошибки»: one list of problems (failed tasks by error, repeats, slow voice answers…) with «Исправить»; a new failure marks the sidebar item | VERIFIED LOCAL | workos.mjs «errors»; screenshot with a copy of the real records (dev core) |
 | Command palette (Ctrl+K): workspaces, global commands, recent tasks, «Спросить JARVIS» fallback | VERIFIED LOCAL | workos.mjs «palette» |
 | Window-level commands handled instantly (navigation); voice navigation through the core router (no AI) | VERIFIED LOCAL | workos.mjs «navigation», test_workspaces.py |
 | Files: roots, browse, search, text/PDF preview through the gateway without chat noise; «Спросить JARVIS» attaches the path | VERIFIED LOCAL | workos.mjs «files», test_workspaces.py |
@@ -65,7 +65,7 @@ desktop launchers were replaced by loggers (nothing opened on the screen).
 | «Что нужно, чтоб ты увидел страницу WhatsApp?» → window_show whatsapp + QR started, one step asked | VERIFIED LIVE | live run 4.6 s; before: a how-to answer with no action |
 | «Как подключить Telegram?» → Telegram section + my.telegram.org/apps opened | VERIFIED LIVE | live run (open_url logged) |
 | «Как подключить почту?» → Mail section + Google app-passwords page opened | VERIFIED LIVE | live run (open_url logged) |
-| «Где посмотреть мои задачи?» → Task Center shown | VERIFIED LIVE | live run |
+| «Где посмотреть мои задачи?» → Task Center shown | REPLACED 2026-10-25 | no task center; «покажи задачи» = what is running (router reply) |
 | Weather → answered from web search with Russian «Источники:» | VERIFIED LIVE | live run 13 s |
 
 ## Desktop companion, wake word, skills, no limits (2026-10-23)
@@ -456,3 +456,17 @@ companion's microphone (`tests/ui/voice-mic.mjs`), window events logged over the
 | API retries announced (screen; voice once) | VERIFIED MOCK | test_cli_events_reach_progress… (an overload cannot be caused on purpose) |
 | A hung CLI process is ended, a long tool call / API back-off is not | VERIFIED MOCK | test_a_silent_process_is_ended…, test_a_long_jarvis_tool_or_an_api_retry_is_not_a_stall |
 | «Ответь одним словом: …» is a question, not a draft | VERIFIED LIVE + MOCK | before: «Голубой.» + a line about a draft; after: «Зелёная.» |
+
+## Window cleanup and the companion (2026-10-25, user's request)
+Tests: `uv run pytest -q`, `node --test tests/ui/unit/`, `node tests/ui/workos.mjs` against a dev core (21/21, 0 console errors).
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| «Главная», «Задачи» and the right panel («Сейчас», privacy, reminders, decisions) removed; nothing shown twice (breadcrumb, Settings → «Самоулучшение», companion «Контекст») | VERIFIED LOCAL | workos.mjs «app starts on the chat»; screenshots |
+| Reminders still visible: a top-bar chip with the next one (all in its tooltip) | IMPLEMENTED UNVERIFIED | no scheduled reminder in the dev run |
+| Desktop companion: no Hyprland animation/border/shadow; resize+move+rounding atomic | VERIFIED LIVE | real window: `getprop no_anim` true, `border_size` 0, `no_shadow` true; `[[BATCH]]` answers ok×3 |
+| Desktop companion idle after a finished task: no redraws (was every 0.8 s forever) | VERIFIED LOCAL | before: 118 DOM changes / 8 s; after: 0 / 2.5 s (workos.mjs «desktop companion») |
+| Thinking shown on the face (three dots) | VERIFIED LOCAL | workos.mjs «desktop companion»: THINKING, dots opacity 1 |
+| «Секунду, думаю.» when a spoken answer has not started after 2.5 s; none for quick answers | VERIFIED MOCK | test_slow_answer_says_it_is_thinking, test_quick_answer_gets_no_thinking_phrase |
+| Glow blur → gradient | REJECTED | measured 0.6 % vs 0.5–0.6 % of a core while listening at 64 px: no gain, look kept |
+

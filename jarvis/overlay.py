@@ -1,7 +1,11 @@
 """Desktop companion: a tiny pinned Hyprland window (Chromium --app on /overlay) that floats above every workspace and
 every application. A web page cannot move or resize its own window on Wayland, so the core does it through Hyprland's
 IPC socket: dragging follows the cursor (cursorpos → movewindowpixel), expanding grows the window away from the
-nearest screen edge, and the place is remembered. Coordinates are Hyprland's logical pixels."""
+nearest screen edge, and the place is remembered. Coordinates are Hyprland's logical pixels.
+
+The window gets no Hyprland animation, border or shadow (WINDOW_PROPS): with the desktop's window animation (Omarchy:
+a 0.5 s «bounce») every drag step and every open/close was animated, so the companion trailed behind the cursor and
+wobbled. Size, place and rounding change in one batched request, so no frame shows a half-done change."""
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +17,8 @@ from pathlib import Path
 OVERLAY_TITLE = "JARVIS · компаньон"
 ORB = 64                      # collapsed: a round window
 MARGIN = 12
+# Hyprland ≥ 0.53 property names; the launcher's old exec-rule names (noborder, noshadow) are ignored there.
+WINDOW_PROPS = (("no_anim", 1), ("border_size", 0), ("no_shadow", 1))
 
 
 def socket_path() -> Path | None:
@@ -39,6 +45,15 @@ async def hypr(cmd: str) -> str:
 
 async def hypr_json(cmd: str):
     return json.loads(await hypr("j/" + cmd) or "null")
+
+
+async def hypr_batch(cmds: list[str]) -> str:
+    """Several commands in one request: Hyprland applies them together (no frame in between)."""
+    return await hypr("[[BATCH]]" + ";".join(cmds))
+
+
+def prop_cmds(addr: str) -> list[str]:
+    return [f"dispatch setprop address:{addr} {k} {v}" for k, v in WINDOW_PROPS]
 
 
 def logical(m: dict) -> dict:
@@ -85,10 +100,17 @@ class Overlay:
         self.title = title_for(port)
         self.drag: dict | None = None
         self._follow_task: asyncio.Task | None = None
+        self._prepared: str | None = None        # the window address that already has WINDOW_PROPS
 
     async def window(self) -> dict | None:
         for c in await hypr_json("clients") or []:
             if str(c.get("title", "")) == self.title:
+                if c.get("address") and c["address"] != self._prepared:
+                    try:
+                        await hypr_batch(prop_cmds(c["address"]))
+                        self._prepared = c["address"]
+                    except (OSError, RuntimeError):
+                        pass
                 return c
         return None
 
@@ -158,9 +180,9 @@ class Overlay:
         area = await self.area_at(rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2)
         x, y = grow(rect, w, h, area)
         addr = win["address"]
-        await hypr(f"dispatch resizewindowpixel exact {w} {h},address:{addr}")
-        await hypr(f"dispatch movewindowpixel exact {x} {y},address:{addr}")
-        await hypr(f"dispatch setprop address:{addr} rounding {w // 2 if w <= ORB + 8 else 18}")
+        await hypr_batch([f"dispatch resizewindowpixel exact {w} {h},address:{addr}",
+                          f"dispatch movewindowpixel exact {x} {y},address:{addr}",
+                          f"dispatch setprop address:{addr} rounding {w // 2 if w <= ORB + 8 else 18}"])
         if w <= ORB + 8:
             self._save(x, y)                              # remember where the orb sits
         return {"x": x, "y": y, "w": w, "h": h}

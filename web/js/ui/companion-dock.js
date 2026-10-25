@@ -7,16 +7,15 @@ import { deriveAgent, PHASES } from "../core/agent-state.js";
 import { clamp, snap, toAnchor, fromAnchor, nearDock, readStored } from "../core/geometry.js";
 import { planRows, isUserTask } from "../core/tasks-model.js";
 import { prefs } from "../core/store.js";
-import { ICON, esc, md } from "../render.js";
+import { ICON, esc, md, planList } from "../render.js";
 
 const ORB_FLOAT = 52;
 const CARD_W = 340, CARD_H_EST = 380;
 const AUTO_COLLAPSE_MS = 7000;
-const MARK = { done: "✓", active: "●", waiting: "!", failed: "✕", skipped: "–", pending: "○" };
 
 /**
  * @param {object} ctx
- *  S, bus, agent, voice, nav(id), toast, submit(text,{stay}), agentInput(): object, context(): {title, detail},
+ *  S, bus, agent, voice, nav(id), toast, submit(text,{stay}), agentInput(): object,
  *  openApproval(id), openTask(id), lastReply(): {text, taskId, at}|null, onLayout(docked)
  */
 export function createCompanionDock(ctx) {
@@ -39,7 +38,6 @@ export function createCompanionDock(ctx) {
       <div class="cd-detail"></div>
       <div class="cd-phases phases" hidden></div>
       <div class="cd-body"></div>
-      <div class="cd-ctx"></div>
       <form class="cd-ask" autocomplete="off">
         <input type="text" aria-label="Спросить JARVIS" placeholder="Спросить JARVIS…  Ctrl+J">
         <button type="button" class="icon-btn mic" data-cd="mic" aria-label="Сказать фразу" title="Сказать фразу (Ctrl+Space)">${ICON.mic}</button>
@@ -231,7 +229,7 @@ export function createCompanionDock(ctx) {
     if (a.mode === "WAITING_CONFIRMATION") {
       const ap = S.approvals[a.approvalId];
       const quote = a.quote ? `<div class="cd-quote">${esc(a.quote)}</div>` : "";
-      const more = a.count > 1 ? `<div class="faint" style="font-size:12px">Ещё ждут решения: ${a.count - 1} — в панели «Активность».</div>` : "";
+      const more = a.count > 1 ? `<div class="faint" style="font-size:12px">Ещё ждут решения: ${a.count - 1} — карточки в беседе.</div>` : "";
       return `${quote}<div class="cd-actions">
         <button class="btn warn" data-cd="approve" data-id="${esc(a.approvalId)}">${ICON.check} ${a.send ? "Отправить" : "Разрешить"}</button>
         ${ap?.tool_id === "message_send" || (ap?.summary?.editable || []).length ? `<button class="btn" data-cd="edit" data-id="${esc(a.approvalId)}">Изменить</button>` : ""}
@@ -241,7 +239,7 @@ export function createCompanionDock(ctx) {
     const task = a.taskId ? S.tasks[a.taskId] || ctx.findTask?.(a.taskId) : null;
     if (a.busy && task && isUserTask(task)) {
       const rows = planRows(task).slice(-5);
-      const plan = rows.length ? `<div class="cd-plan">${rows.map((r) => `<div class="plan-row" data-mark="${r.mark}"><span class="m">${MARK[r.mark]}</span><span title="${esc(r.label)}">${esc(r.label)}</span></div>`).join("")}</div>` : "";
+      const plan = rows.length ? `<div class="cd-plan">${planList(rows)}</div>` : "";
       return `${plan}<div class="cd-actions">
         ${a.canStop ? `<button class="btn danger" data-cd="stop">${ICON.stop} Остановить</button>` : ""}
         ${task.state === "paused" ? `<button class="btn" data-cd="resume">${ICON.play} Продолжить</button>`
@@ -261,8 +259,7 @@ export function createCompanionDock(ctx) {
     const a = deriveAgent(ctx.agentInput());
     st.agent = a;
     const reply = ctx.lastReply();
-    const c = ctx.context();
-    const sig = JSON.stringify([a, st.expanded, st.pinned, st.docked, c, reply?.at, ctx.currentView(),
+    const sig = JSON.stringify([a, st.expanded, st.pinned, st.docked, reply?.at, ctx.currentView(),
       a.taskId && planRows(ctx.S.tasks[a.taskId] || ctx.findTask?.(a.taskId) || { steps: [] })]);
     attention(a);
     // A fresh answer while the person is in another workspace: show it once in the companion.
@@ -292,7 +289,6 @@ export function createCompanionDock(ctx) {
     ph.hidden = idx < 0 || a.mode === "SPEAKING";
     if (!ph.hidden) ph.innerHTML = PHASES.map(([k, l], i) => `<span class="${i < idx ? "done" : i === idx ? "on" : ""}">${l}</span>`).join("<i></i>");
     el.querySelector(".cd-body").innerHTML = body(a);
-    el.querySelector(".cd-ctx").innerHTML = `Контекст: <b>${esc(c.title)}</b>${c.detail ? ` · ${esc(c.detail)}` : ""}`;
     const pin = el.querySelector('[data-cd="pin"]');
     pin.setAttribute("aria-pressed", String(st.pinned));
     pin.title = st.pinned ? "Открепить (сворачивать сам)" : "Закрепить открытым";
@@ -309,8 +305,6 @@ export function createCompanionDock(ctx) {
   el.dataset.docked = st.docked ? "1" : "0";
   relayout();
   render(true);
-  // A short reaction (SUCCESS/ERROR/CANCELLED) must end on time even without new events.
-  setInterval(() => { if (st.agent && ["SUCCESS", "ERROR", "CANCELLED"].includes(st.agent.mode)) render(); }, 700);
 
   return {
     el, render, relayout,

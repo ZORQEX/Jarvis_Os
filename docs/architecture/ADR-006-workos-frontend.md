@@ -47,3 +47,9 @@ The brief mentions React; the existing UI is a no-build ES-module app under a st
   code does not change.
 
 Update 2026-10-24: the «Флора» workspace (synthetic demo project) was removed at the user's request.
+
+## Update 2026-10-25 (user's request)
+«Главная», the task center and the right activity panel are gone: they repeated what the chat, the companion and the
+top bar already show. The chat is the first screen; a task's detail is its turn in the chat; «Ошибки» keeps the list of
+problems for fixing later (self-improvement); «История действий» is reachable from Ctrl+K. Section titles appear once
+(each section's header), so the top bar has no breadcrumb.

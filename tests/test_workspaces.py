@@ -12,14 +12,15 @@ from conftest import wait_done
 
 # ---------------------------------------------------------------- navigation phrases (no model call)
 @pytest.mark.parametrize("text,view", [
-    ("перейди в задачи", "tasks"),
-    ("Джарвис, домой", "home"),
-    ("вернись на главную", "home"),
+    ("перейди в ошибки", "errors"),
+    ("Джарвис, домой", "chat"),            # no «Главная» any more: the chat is the first screen
+    ("вернись на главную", "chat"),
     ("перейди в телеграм", "telegram"),
     ("перейди в WhatsApp", "whatsapp"),
     ("открой раздел файлы", "files"),
     ("переключись на вкладку почта", "mail"),
-    ("покажи задачи", "tasks"),
+    ("покажи ошибки", "errors"),
+    ("открой историю действий", "history"),
     ("открой вкладку настройки", "settings"),
 ])
 def test_navigation_phrases(text, view):
@@ -31,6 +32,8 @@ def test_navigation_phrases(text, view):
     ("открой телеграм", "tool", "app_open"),                  # the app, not the workspace
     ("перейди на 3 рабочий стол", "tool", "workspace_switch"),  # Hyprland desktops keep their meaning
     ("какие задачи", "reply", None),
+    ("покажи задачи", "reply", None),        # the task list is gone: JARVIS says what is running
+    ("перейди в задачи", "reply", None),
 ])
 def test_navigation_does_not_steal_other_commands(text, kind, tool):
     r = router.route(text)
@@ -45,7 +48,7 @@ def test_not_navigation(text):
 
 async def test_ui_route_publishes_navigate(core):
     q = core.bus.subscribe()
-    tid = await core.director.submit("перейди в задачи")
+    tid = await core.director.submit("перейди в ошибки")
     task = await wait_done(core, tid)
     assert task["state"] == "completed"
     kinds = []
@@ -53,10 +56,10 @@ async def test_ui_route_publishes_navigate(core):
         ev = q.get_nowait()
         kinds.append(ev["kind"])
         if ev["kind"] == "ui.navigate":
-            assert ev["view"] == "tasks"
+            assert ev["view"] == "errors"
     assert "ui.navigate" in kinds
     msgs = core.director.messages(core.director.conversation_id())
-    assert msgs[-1]["role"] == "assistant" and "Задачи" in msgs[-1]["text"]
+    assert msgs[-1]["role"] == "assistant" and "Ошибки" in msgs[-1]["text"]
 
 
 # ---------------------------------------------------------------- read-only browsing (Files workspace)
@@ -229,8 +232,8 @@ async def test_window_show_opens_a_closed_window_first(core):
     wt.opener = lambda: state.update(open=True)
     q = core.bus.subscribe()
     t = core.tasks.create("x", None)
-    out = await core.director.gw.execute(t, "window_show", {"view": "tasks"}, "test")
-    assert out.status == "ok" and out.result.data["window_opened"] and navigations(q) == ["tasks"]
+    out = await core.director.gw.execute(t, "window_show", {"view": "errors"}, "test")
+    assert out.status == "ok" and out.result.data["window_opened"] and navigations(q) == ["errors"]
 
 
 async def test_window_show_reports_a_window_that_did_not_open(core):

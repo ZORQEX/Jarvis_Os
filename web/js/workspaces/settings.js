@@ -66,13 +66,6 @@ function renderSettings() {
       <div id="memoryBox" style="margin-top:10px"><span class="faint">Загружаю…</span></div>
     </div>
     <div class="panel">
-      <h2>Самоулучшение</h2>
-      <div class="muted" style="font-size:13.5px">JARVIS сам находит по своим записям, где работает плохо, и улучшает свой код: Claude Code
-        правит его в отдельной ветке, JARVIS прогоняет все тесты. Применяется только после вашего «да», с перезапуском.
-        Можно и голосом: «Джарвис, улучши себя».</div>
-      <div id="improveBox" style="margin-top:10px"><span class="faint">Ищу проблемы…</span></div>
-    </div>
-    <div class="panel">
       <h2>Публикация сайтов</h2>
       <div class="muted" style="font-size:13.5px">Готовые сайты JARVIS может выложить в интернет по ссылке (GitHub Pages, бесплатно) —
         через ваш аккаунт GitHub. Вход подтверждаете вы в своём браузере одноразовым кодом; пароль и токен JARVIS не видит.</div>
@@ -147,7 +140,6 @@ function renderSettings() {
   renderPhone();
   renderProactive();
   renderHome();
-  renderImprove();
   renderMemory();
   $$("[data-privacy]", el).forEach((b) => b.addEventListener("click", async () => {
     try { await ctx.link.request("privacy.set", { profile: b.dataset.privacy }); ctx.S.core.privacy = b.dataset.privacy; } catch (er) { ctx.toast(er.message, "err"); }
@@ -308,24 +300,6 @@ async function renderMemory(op = null) {
       <span class="t">${esc(f.text)}</span><button class="btn ghost" data-mforget="${esc(f.id)}">Забыть</button></div>`).join("")}</div>`
     : `<div class="faint">Пока ничего. Скажите: «Запомни, что …»</div>`;
   $$("[data-mforget]", box).forEach((b) => b.addEventListener("click", () => renderMemory({ id: b.dataset.mforget })));
-}
-
-async function renderImprove() {
-  const box = $("#improveBox");
-  if (!box) return;
-  let d;
-  try { d = await ctx.link.request("improve.issues", { days: 7 }); } catch (e) { box.innerHTML = `<div class="faint">${esc(e.message)}</div>`; return; }
-  const rows = d.issues.map((x, i) => `<div class="row" style="grid-template-columns:minmax(0,1fr) auto;align-items:start">
-      <span class="t"><div><b>${esc(x.title)}</b> <span class="faint">— ${x.count} раз за неделю${x.last_text ? `, последний ${esc(x.last_text)}` : ""}</span></div>
-        ${x.examples.length ? `<div class="p">${x.examples.slice(0, 3).map(esc).join(" · ")}</div>` : ""}</span>
-      <button class="btn" data-improve="${i}">Исправить</button></div>`).join("");
-  box.innerHTML = (d.issues.length ? `<div class="rows">${rows}</div>` : `<div class="faint">За неделю проблем в записях не найдено.</div>`)
-    + (d.branches.length ? `<div class="faint" style="font-size:12.5px;margin-top:8px">Готовы к применению: ${d.branches.map(esc).join(", ")} — скажите «примени улучшение».</div>` : "");
-  $$("[data-improve]", box).forEach((b) => b.addEventListener("click", () => {
-    const x = d.issues[+b.dataset.improve];
-    ctx.submit(`Улучши себя: ${x.title}. Доказательства: ${x.evidence}`, { stay: true });
-    ctx.toast("JARVIS разбирается — подтвердите запуск в карточке", "ok");
-  }));
 }
 
 async function renderVoicePicker() {

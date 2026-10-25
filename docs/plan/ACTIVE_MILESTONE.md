@@ -2,7 +2,7 @@
 
 Done: milestone 1 (working JARVIS), milestone 2 (Flora on synthetic data — removed
 2026-10-24 at the user's request), WorkOS window milestone 1
-(workspaces, global companion, task center, palette — ADR-006). See TEST_MATRIX.md.
+(workspaces, global companion, palette — ADR-006; the task center was removed on 2026-10-25). See TEST_MATRIX.md.
 
 ## Next, in order
 1. **Claude live check** (the Claude Code sign-in on this computer; `JARVIS_LIVE=1 uv run pytest tests/test_live.py`):

@@ -75,7 +75,7 @@ export function create(ctx) {
       const phrase = s ? `Зайди на сайт ${s} в браузере и ${t.charAt(0).toLowerCase() + t.slice(1)}` : `Через браузер: ${t}`;
       go.disabled = true;
       const id = await ctx.submit(phrase, { stay: true });
-      if (id) { ctx.toast("Поручено JARVIS — ход выполнения в «Задачах» и у компаньона", "ok"); task.value = ""; }
+      if (id) { ctx.toast("Поручено JARVIS — ход выполнения у компаньона и в беседе", "ok"); task.value = ""; }
       upd();
     });
     drawLinks();

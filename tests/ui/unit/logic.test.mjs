@@ -128,13 +128,15 @@ test("dock detection and stored state validation", () => {
 });
 
 // ---------------------------------------------------------------- intent router (window level)
-for (const [text, viewId] of [["перейди в задачи", "tasks"], ["Джарвис, домой", "home"], ["вернись на главную", "home"],
+for (const [text, viewId] of [["перейди в ошибки", "errors"], ["Джарвис, домой", "chat"], ["вернись на главную", "chat"],
   ["перейди в телеграм", "telegram"], ["перейди в WhatsApp", "whatsapp"], ["открой раздел файлы", "files"],
-  ["переключись на вкладку почта", "mail"], ["покажи задачи", "tasks"],
+  ["переключись на вкладку почта", "mail"], ["покажи ошибки", "errors"], ["открой историю действий", "history"],
   ["открой вкладку настройки", "settings"]]) {
   test(`navigation: «${text}»`, () => assert.deepEqual(classify(text), { kind: "nav", view: viewId }));
 }
-for (const text of ["открой телеграм", "перейди на 3 рабочий стол", "перейди на сайт ya.ru", "перейди в загрузки", "состояние системы"]) {
+// «перейди в задачи» is not a section any more: the core answers what is running.
+for (const text of ["открой телеграм", "перейди на 3 рабочий стол", "перейди на сайт ya.ru", "перейди в загрузки", "состояние системы",
+  "перейди в задачи", "покажи задачи"]) {
   test(`not navigation: «${text}»`, () => assert.equal(uiView(text), null));
 }
 test("global commands", () => {
@@ -193,7 +195,9 @@ test("groups, retry and status mapping", () => {
 test("workspace registry is complete and unique", () => {
   const ids = ALL.map((w) => w.id);
   assert.equal(new Set(ids).size, ids.length);
-  for (const id of ["home", "chat", "tasks", "browser", "telegram", "whatsapp", "mail", "files", "settings"]) assert.ok(byId(id), id);
+  for (const id of ["chat", "errors", "history", "browser", "telegram", "whatsapp", "mail", "files", "settings"]) assert.ok(byId(id), id);
+  for (const id of ["home", "tasks"]) assert.equal(byId(id), null, id + " was removed");
+  assert.deepEqual(WORKSPACES.map((w) => w.hotkey), ["1", "2", "3", "4", "5", "6", "7", "8", "9"]);   // Ctrl+1… in sidebar order
   for (const w of WORKSPACES) { assert.ok(w.title && w.icon && w.context, w.id); assert.ok(Array.isArray(w.tools), w.id); }
 });
 test("tool status follows the real connection, never assumed", () => {

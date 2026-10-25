@@ -89,7 +89,7 @@ def collect_issues(db, days: float = 7.0, limit: int = 8) -> list[dict]:
         groups.setdefault(key, []).append(r["request"][:100])
         lasts[key] = max(lasts.get(key, 0.0), r["created_at"])
     for err, reqs in sorted(groups.items(), key=lambda x: -len(x[1]))[:4]:
-        out.append({"kind": "failed", "title": f"Ошибка: {err[:90]}", "count": len(reqs), "examples": reqs[:5],
+        out.append({"kind": "failed", "title": f"Ошибка: {err[:90]}{'…' if len(err) > 90 else ''}", "count": len(reqs), "examples": reqs[:5],
                     "last": lasts[err],
                     "evidence": f"Задачи завершились ошибкой «{err}» ({len(reqs)} раз), например: "
                                 + "; ".join(f"«{x}»" for x in reqs[:4])})
