@@ -97,3 +97,10 @@ def test_russian_words_shared_with_ukrainian_stay_russian():
     from jarvis.voice.lang import detect
     for s in ("Отправил сообщение для друга.", "Доброго утра!", "Это подарок для друга."):
         assert detect(s) == "ru", s
+
+
+def test_a_phrase_written_in_latin_is_heard_again_while_waiting_for_the_name():
+    """GigaAM on English speech: «How Mauch Free Space Is Loft On My Disk» — «Jarvis» lost (measured 2026-10-26)."""
+    from jarvis.voice.lexicon import mostly_latin, wake_like
+    assert mostly_latin("How Mauch Free Space Is Loft On My Disk") and not wake_like("How Mauch Free Space Is Loft On My Disk")
+    assert not mostly_latin("сколько места на диске") and not mostly_latin("открой YouTube на компьютере") and not mostly_latin("")

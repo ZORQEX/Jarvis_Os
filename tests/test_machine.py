@@ -185,3 +185,24 @@ async def test_locked_screen_is_said_at_once(monkeypatch):
     with pytest.raises(ToolError, match="заблокирован"):
         await desk.ScreenText().run({}, ctx())
     assert time.perf_counter() - t0 < 1
+
+
+async def test_a_silent_weather_service_is_not_an_unknown_city(monkeypatch):
+    """Seen 2026-10-26: a 10 s timeout became «Не нашёл город «алматы»»."""
+    from jarvis.tools import daily
+    from jarvis.tools.base import ToolError
+    calls = []
+
+    async def flaky(name, session):
+        calls.append(name)
+        if len(calls) == 1:
+            raise asyncio.TimeoutError()
+        return [{"name": "Алматы", "country": "Казахстан", "lat": 43.25, "lon": 76.9, "tz": "Asia/Almaty", "population": 1977011}]
+    monkeypatch.setattr(daily, "geocode", flaky)
+    assert (await daily.find_place("алматы", None))["name"] == "Алматы" and len(calls) == 2      # asked once more
+
+    async def down(name, session):
+        raise asyncio.TimeoutError()
+    monkeypatch.setattr(daily, "geocode", down)
+    with pytest.raises(ToolError, match="не отвечает"):
+        await daily.find_place("алматы", None)

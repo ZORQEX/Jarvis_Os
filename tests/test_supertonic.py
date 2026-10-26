@@ -98,19 +98,20 @@ async def test_when_the_voice_fails_the_old_voices_speak_and_say_so():
     assert await eng.synth("Hello there, how are you?", "en") == b"RIFFK"
 
 
-async def test_a_silero_voice_keeps_the_per_language_voices():
+async def test_an_earlier_choice_becomes_the_best_voice_of_its_gender():
     st, silero, kokoro = Fake(tag=b"S"), Fake(tag=b"R"), Fake(tag=b"K")
-    eng = VoiceEngine(silero, None, "silero:eugene", kokoro=kokoro, supertonic=st)
-    assert await eng.synth("Привет.") == b"RIFFR" and await eng.synth("Hello there, how are you?", "en") == b"RIFFK"
-    assert not st.calls and silero.speaker == "eugene"
+    eng = VoiceEngine(silero, None, "silero:baya", kokoro=kokoro, supertonic=st)    # a Silero voice chosen before
+    assert eng.voice_id == "supertonic:F1" and await eng.synth("Привет.") == b"RIFFS" and st.calls[-1][1][0] == "F1"
     await eng.set_voice("supertonic:M5")
-    assert await eng.synth("Привет.") == b"RIFFS" and st.calls[-1][1][0] == "M5"
+    assert eng.voice_id == "supertonic:M4" and await eng.synth("Привет.") == b"RIFFS" and st.calls[-1][1][0] == "M4"
 
 
-def test_voice_list():
-    ids = [v["id"] for v in VOICES]
-    assert ids[0] == "supertonic:M4" and "supertonic:F1" in ids and "silero:aidar" in ids
-    assert voice_info("unknown")["id"] == "supertonic:M4"
+def test_two_voices_the_most_natural_of_each_gender():
+    """The person asked for one or two voices (2026-10-26): the two highest measured, both speak every language."""
+    assert [(v["id"], v["gender"]) for v in VOICES] == [("supertonic:M4", "м"), ("supertonic:F1", "ж")]
+    assert all(v["engine"] == "supertonic" and "Все языки" in v["desc"] for v in VOICES)
+    assert voice_info("unknown")["id"] == "supertonic:M4" and voice_info("silero:xenia")["id"] == "supertonic:F1"
+    assert voice_info("supertonic:F3")["id"] == "supertonic:F1" and voice_info("silero:eugene")["id"] == "supertonic:M4"
 
 
 @pytest.mark.skipif(not SupertonicTTS().available(), reason="Supertonic is not installed")

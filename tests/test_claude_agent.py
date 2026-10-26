@@ -233,6 +233,24 @@ def test_the_answer_keeps_no_narration_from_between_tool_calls():
     assert answer_only("Готово, файл создан.", []) == "Готово, файл создан."
 
 
+async def test_every_message_says_the_language_of_the_request(core):
+    """Seen live: after an English question a Russian one was answered in English."""
+    g = ScriptedClaude(core.config, [["The disk has 29 GB free."], ["Выручка — 79 261 000 ₸."]])
+    install(core, claude=g)
+    await wait_done(core, await core.director.submit("Jarvis, how much free space is left on my disk?", "voice"))
+    await wait_done(core, await core.director.submit("Джарвис, какая общая выручка в файле продажи?", "voice"))
+    assert "[Язык ответа: английский" in g.calls[0]["user"] and "[Язык ответа: русский" in g.calls[1]["user"]
+
+
+def test_jarvis_marks_are_never_repeated_in_the_answer():
+    from jarvis.providers.claude_chat import MARKER_ECHO
+    from jarvis.voice.tts import clean_for_speech
+    assert MARKER_ECHO.sub("", "[voice] System disk has 29.2 GB free.") == "System disk has 29.2 GB free."
+    assert MARKER_ECHO.sub("", "[голос] [Язык ответа: русский] Готово.") == "Готово."
+    assert MARKER_ECHO.sub("", "Источник [1] — и [голос] внутри текста не трогаю.").startswith("Источник [1]")
+    assert clean_for_speech("[voice] System disk has 29 GB free.", "en") == "System disk has 29 GB free."
+
+
 # ---------------------------------------------------------------- a hung process
 class _In:
     def write(self, b):

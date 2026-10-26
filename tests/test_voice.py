@@ -257,14 +257,15 @@ async def test_silero_failure_falls_back_to_piper_and_is_reported():
     eng = VoiceEngine(DeadSilero(), OkPiper(), "silero:xenia")
     assert (await eng.synth("Привет.")).startswith(b"RIFF") and eng.last_engine == "piper"
     assert "Silero" in eng.last_fallback
-    await eng.set_voice("silero:eugene", 1.2)
-    assert eng.silero.speaker == "eugene" and eng.silero.rate == 1.2
+    await eng.set_voice("supertonic:M4", 1.2)
+    assert eng.silero.speaker == "aidar" and eng.silero.rate == 1.2          # the fallback voice of the same gender
 
 
 def test_old_cloud_or_piper_choice_becomes_a_local_voice(core):
     from jarvis.voice.tts import VOICES
-    assert all(v["id"].split(":")[0] in ("supertonic", "silero") for v in VOICES)
-    assert core.director.speech.engine.voice_id.startswith("silero:")       # Supertonic is not installed in tests
+    assert all(v["engine"] == "supertonic" for v in VOICES)
+    eng = core.director.speech.engine        # Supertonic is not installed in tests: the chosen voice stays, the
+    assert eng.voice_id == "supertonic:M4" and not eng._st_on()              # fallback speaks and the window says so
 
 
 async def test_streamed_voice_chunks_are_played_in_order(core):

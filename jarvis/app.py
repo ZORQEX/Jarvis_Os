@@ -106,24 +106,16 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
                         gateway=gateway, ai=claude, scheduler=scheduler, config=config,
                         providers=manager, agency=agency)
     from .voice.speech import SpeechManager
-    from .voice.tts import DEFAULT_VOICE, VOICES, KokoroTTS, PiperTTS, SileroTTS, SupertonicTTS, VoiceEngine
-    # Local voices only: Supertonic (one voice, every language), Silero / Kokoro / Piper as fallback and as choices.
-    # The user's choice from Settings → Голос.
+    from .voice.tts import DEFAULT_VOICE, KokoroTTS, PiperTTS, SileroTTS, SupertonicTTS, VoiceEngine, voice_info
+    # Local voices only. Settings → Голос offers the two most natural voices of Supertonic (every language); Silero,
+    # Kokoro and Piper speak only when Supertonic is not installed or fails (the window says so).
     supertonic = SupertonicTTS()
-    chosen = db.get_kv("tts_voice") or DEFAULT_VOICE
-    if not supertonic.available() and str(chosen).startswith("supertonic:"):
-        chosen = "silero:aidar" if chosen[-2] == "M" else "silero:xenia"      # not installed: the Russian voice
-    elif supertonic.available() and not db.get_kv("voice_supertonic_switched"):
-        # The person asked for one natural voice for every language (2026-10-24): switch once to the measured best
-        # (male, like before: M4; female: F1); a later choice in Settings stays.
-        g = next((v["gender"] for v in VOICES if v["id"] == chosen), "м")
-        chosen = "supertonic:M4" if g == "м" else "supertonic:F1"
+    saved = db.get_kv("tts_voice") or DEFAULT_VOICE
+    chosen = voice_info(saved)["id"]          # an earlier choice (another voice) → the best voice of its gender
+    if chosen != saved:
         db.set_kv("tts_voice", chosen)
-        db.set_kv("voice_supertonic_switched", True)
-    if not any(v["id"] == chosen for v in VOICES):
-        chosen = DEFAULT_VOICE if supertonic.available() else "silero:aidar"   # older (cloud / Piper) choices
     engine = VoiceEngine(SileroTTS(), PiperTTS(config.piper_voice), chosen, float(db.get_kv("tts_rate") or 1.0),
-                         kokoro=KokoroTTS(), en_voice_id=db.get_kv("tts_voice_en"), supertonic=supertonic)
+                         kokoro=KokoroTTS(), supertonic=supertonic)
     director.speech = SpeechManager(db, bus, engine)
     director.fashion = fashion if fashion.enabled() else None
     director.research = research if research.enabled() else None

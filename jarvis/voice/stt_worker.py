@@ -50,7 +50,7 @@ def _load_turn_module():
 
 
 _lex = _load_lexicon_module()
-Lexicon, prefer_second, wake_like = _lex.Lexicon, _lex.prefer_second, _lex.wake_like
+Lexicon, prefer_second, wake_like, mostly_latin = _lex.Lexicon, _lex.prefer_second, _lex.wake_like, _lex.mostly_latin
 
 MODEL = os.environ.get("JARVIS_STT_MODEL", "gigaam-v3-e2e-rnnt")
 MULTI = os.environ.get("JARVIS_STT_MULTI", "nemo-parakeet-tdt-0.6b-v3")
@@ -153,9 +153,11 @@ def main() -> None:
             mode = req.get("mode", "auto")
             # Re-hear with the multilingual model when GigaAM's text is not Russian — or when GigaAM heard nothing in
             # a real stretch of speech (French and German came back empty: «не расслышал»). Waiting for «Джарвис»,
-            # only a phrase with something like the name is worth the second model.
+            # only a phrase with something like the name is worth the second model — or one GigaAM wrote in Latin
+            # letters: another language, where it may lose the name itself («Jarvis, how much free space…» →
+            # «How Mauch Free Space Is Loft On My Disk», measured 2026-10-26: the phrase was dropped).
             unclear = (not text.strip() and len(audio) > 12800) or (text.strip() and not lex.russian(text))
-            if multi and mode != "ru" and unclear and (mode != "wake" or wake_like(text)):
+            if multi and mode != "ru" and unclear and (mode != "wake" or wake_like(text) or mostly_latin(text)):
                 other = (multi.recognize(audio) or "").strip()
                 if prefer_second(other) or (other and not text.strip()):
                     text, used = other, "parakeet"

@@ -48,7 +48,7 @@ async def geocode(name: str, session: aiohttp.ClientSession) -> list[dict]:
     key = name.casefold()
     if key in _GEO:
         return _GEO[key]
-    async with session.get("https://geocoding-api.open-meteo.com/v1/search",
+    async with session.get("https://geocoding-api.open-meteo.com/v1/search", timeout=aiohttp.ClientTimeout(total=5),
                            params={"name": name, "count": 3, "language": "ru", "format": "json"}) as r:
         r.raise_for_status()
         res = (await r.json()).get("results") or []
@@ -59,9 +59,18 @@ async def geocode(name: str, session: aiohttp.ClientSession) -> list[dict]:
 
 
 async def find_place(city: str, session: aiohttp.ClientSession) -> dict | None:
-    """All grammatical forms are asked at once; the most populated match wins («Москве» → Москва, not Москверо)."""
-    found = await asyncio.gather(*(geocode(n, session) for n in base_forms(city)), return_exceptions=True)
+    """All grammatical forms are asked at once; the most populated match wins («Москве» → Москва, not Москверо). A form
+    whose request failed is asked once more; when the service never answered, that is said — never «no such city»
+    (seen 2026-10-26: «Не нашёл город «алматы»» after a 10 s timeout)."""
+    forms = base_forms(city)
+    found = await asyncio.gather(*(geocode(n, session) for n in forms), return_exceptions=True)
+    failed = [n for n, f in zip(forms, found) if isinstance(f, BaseException)]
+    if failed:
+        found = [f for f in found if not isinstance(f, BaseException)] + \
+            list(await asyncio.gather(*(geocode(n, session) for n in failed), return_exceptions=True))
     places = [p for f in found if isinstance(f, list) for p in f]
+    if not places and any(isinstance(f, BaseException) for f in found):
+        raise ToolError("Сервис погоды сейчас не отвечает — проверьте интернет и спросите ещё раз")
     return max(places, key=lambda p: p["population"]) if places else None
 
 

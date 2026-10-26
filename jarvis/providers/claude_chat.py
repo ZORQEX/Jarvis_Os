@@ -62,6 +62,8 @@ CHAT_SYSTEM = """Ты — JARVIS, персональный ассистент н
 - В одной просьбе несколько дел («открой браузер, найди картинку и покажи загрузки») — сделай ВСЕ по порядку, каждое
   до конца, не останавливайся на первом; ответь одной фразой на всё сразу.
 - Строка [Состояние JARVIS: …] в начале сообщения — служебная: что сейчас подключено. Учитывай её и не пересказывай.
+- Строка [Язык ответа: …] — на каком языке человек спросил сейчас: отвечай на нём, даже если раньше говорили на другом.
+- Служебные пометки ([голос], [Язык ответа…], [Состояние JARVIS…]) никогда не повторяй и не переводи в ответе.
 - Строка [Память о пользователе: …] — то, что человек просил запомнить: пользуйся ею молча. Сказал о себе что-то
   постоянное (как зовут, кто близкие и как они записаны в мессенджерах, учёба, работа, где лежат его вещи,
   предпочтения) — сохрани одной короткой фразой через memory_save; попросил забыть — memory_forget.
@@ -163,6 +165,9 @@ MONTHS_RU = ("января", "февраля", "марта", "апреля", "м
 LOCAL_OK = "Простые команды — открыть приложение, папку или сайт, громкость, заметки, напоминания — работают и без него."
 
 
+# JARVIS's own marks on a message ([голос], [Язык ответа: …], [Состояние JARVIS: …]) repeated at the start of an answer —
+# an English answer once began «[voice] System disk has…» (seen 2026-10-26).
+MARKER_ECHO = re.compile(r"^\s*(?:\[(?:голос|voice|язык ответа[^\]]*|reply language[^\]]*|состояние jarvis[^\]]*)\]\s*)+", re.I)
 TOOL_MARKUP = re.compile(r"<(?:invoke|function_calls|parameter)\b[^>]*>")
 
 
@@ -700,7 +705,7 @@ class ClaudeChatProvider(AIProvider):
             raise e
         self.status, self.last_error, self.last_error_kind, self.limited_until = "ready", None, None, None
         usage = res.get("usage") or {}
-        final = answer_only(turn.text, turn.cuts).strip() or str(res.get("result") or "").strip()
+        final = MARKER_ECHO.sub("", answer_only(turn.text, turn.cuts)).strip() or str(res.get("result") or "").strip()
         return GenResult(final, "claude", turn.model or self.active_model, [], usage_of(usage),
                          res.get("turn_cost_usd"), turn.first_ms, (time.perf_counter() - t0) * 1000,
                          {"rounds": len(turn.tools), "tools_used": turn.tools})

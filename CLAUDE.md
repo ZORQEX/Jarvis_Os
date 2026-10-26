@@ -39,8 +39,11 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
 - Skills: `jarvis/skills.py`, folder `~/.local/share/jarvis-skills` (config `skills_dir`); limits are 0 = none.
   A manifest's `say` phrases run the skill straight from the director (no AI); `open_result` opens the output file.
 - Voice: STT worker = GigaAM, then Parakeet only for phrases that are not Russian or came back empty (`voice/lexicon.py`;
-  waiting for «Джарвис» only if a wake-like word was heard). TTS = Supertonic 3 (`supertonic_worker.py`, one voice for
-  every language, default M4); Silero (ru/de/uk) + Kokoro (en/es/fr/it/pt) are the fallback and start only when used.
+  waiting for «Джарвис» only if a wake-like word was heard or GigaAM wrote Latin — `mostly_latin`). TTS = Supertonic 3
+  (`supertonic_worker.py`, one voice for every language); Settings offer only M4 and F1 (the most natural measured, the
+  user asked for 1–2 voices; an older choice maps to its gender's voice in `voice_info`); Silero (ru/de/uk) + Kokoro
+  (en/es/fr/it/pt) are only the fallback and start only when used. Every chat message carries `[Язык ответа: …]`
+  (`agency.reply_language`); echoed marks are cut (`claude_chat.MARKER_ECHO`).
   Numbers/symbols → words: `voice/textnorm.py` (loaded by path in the workers). Each runs in its own venv under
   `~/.local/share/jarvis/` (install.sh). ONNX sessions: few threads, no spinning (4–6× less CPU on this laptop).
   End of a phrase: Smart Turn v3.2 (`voice/turn.py`, numpy features = Whisper's, trailing silence trimmed to 0.2 s);

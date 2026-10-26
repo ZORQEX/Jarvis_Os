@@ -106,6 +106,15 @@ def jarvis_state_line(director) -> str:
     return (f"[Состояние JARVIS: {'; '.join(bits)}]\n" if bits else "") + mem
 
 
+def reply_language(director, tid: str, s) -> str:
+    """«[Язык ответа: русский]» — the language of the person's own words, said with every message: after an English
+    question the conversation kept answering in English a Russian one (seen live 2026-10-26, by voice)."""
+    from ..voice.lang import NAMES, detect
+    task = director.tasks.get(tid) or {}
+    lang = detect(task.get("request") or s.instruction)
+    return f"[Язык ответа: {NAMES.get(lang, lang)} — язык этой просьбы]\n"
+
+
 WRITE_GUIDE = ("\nПодготовь только черновик (ничего не отправляется). Пиши естественно и готово к отправке. "
                "Не выдумывай факты: цифр, дат и условий, которых нет в данных, не пиши. Если не хватает "
                "чего-то действительно важного (имя получателя, цена, срок), поставь не больше 2–3 пометок "
@@ -602,7 +611,7 @@ class Agency:
             if kind == "retry" and voice and director.speech and info.get("attempt") == 3:
                 from ..voice.speech import SLOW_BY_LANG
                 director.speech.ack(tid, SLOW_BY_LANG)     # ~10 s of API retries in silence: say why, once
-        state = jarvis_state_line(director)
+        state = jarvis_state_line(director) + reply_language(director, tid, s)
         t0 = time.perf_counter()
         try:
             res = await p.run_tool_loop(system, hist, state + (instruction or s.instruction), self.registry.model_tools(), execute,

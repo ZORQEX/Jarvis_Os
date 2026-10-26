@@ -64,6 +64,12 @@ def wake_like(text: str) -> bool:
     return False
 
 
+def mostly_latin(text: str) -> bool:
+    """GigaAM wrote the phrase in Latin letters: it was another language (and GigaAM may have lost the name in it)."""
+    letters = [ch for ch in (text or "").casefold() if ch.isalpha()]
+    return bool(letters) and sum("a" <= ch <= "z" for ch in letters) > 0.5 * len(letters)
+
+
 def prefer_second(other: str) -> bool:
     """Parakeet wrote Latin (or Ukrainian): another language — use it. Parakeet wrote Russian: the phrase was Russian
     after all, keep GigaAM's text (it is better at Russian)."""

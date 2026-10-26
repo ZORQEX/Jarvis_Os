@@ -57,42 +57,27 @@ def phrase(table: dict, lang: str) -> str:
     v = table.get(lang) or table["ru"]
     return random.choice(v) if isinstance(v, list) else v
 
-# The voices offered in Settings → Голос. Supertonic: the ten voices of the model, each speaking every language; the
-# score is the measured naturalness (UTMOS, 1–5, mean of 8 phrases in 6 languages, 2026-10-24). Silero: the five
-# speakers of its Russian model (other languages then go to Kokoro / Silero's German and Ukrainian voices).
-_ST_SCORE = {"M4": 3.95, "M5": 3.74, "M2": 3.73, "M1": 3.71, "M3": 3.57,
-             "F1": 3.99, "F5": 3.94, "F3": 3.76, "F2": 3.71, "F4": 3.66}
+# The voices offered in Settings → Голос: the two most natural voices of Supertonic 3 — one model that speaks every
+# language. Measured naturalness (UTMOS, 1–5, mean of 8 phrases in 6 languages, 2026-10-24): F1 3.99, M4 3.95, the
+# other eight 3.57–3.94; Silero + Kokoro 2.98 (Ukrainian 1.82). The person asked for one or two voices (2026-10-26):
+# Silero (ru / de / uk), Kokoro (en / es / fr / it / pt) and Piper stay only as the fallback when Supertonic is not
+# installed or fails — reported in the window, never offered as a choice.
 VOICES: list[dict] = [
-    {"id": f"supertonic:{k}", "engine": "supertonic", "speaker": k, "gender": "м" if k[0] == "M" else "ж",
-     "name": ("Мужской " if k[0] == "M" else "Женский ") + k[1], "score": s,
-     "desc": "Все языки · естественность " + f"{s:.2f}".replace(".", ",")}
-    for k, s in _ST_SCORE.items()
-] + [
-    {"id": "silero:aidar", "engine": "silero", "speaker": "aidar", "name": "Айдар", "gender": "м",
-     "desc": "Только русский · спокойный, уверенный"},
-    {"id": "silero:eugene", "engine": "silero", "speaker": "eugene", "name": "Евгений", "gender": "м",
-     "desc": "Только русский · мягкий, разговорный"},
-    {"id": "silero:xenia", "engine": "silero", "speaker": "xenia", "name": "Ксения", "gender": "ж",
-     "desc": "Только русский · чистый, дружелюбный"},
-    {"id": "silero:kseniya", "engine": "silero", "speaker": "kseniya", "name": "Ксения (вторая)", "gender": "ж",
-     "desc": "Только русский · ниже и строже"},
-    {"id": "silero:baya", "engine": "silero", "speaker": "baya", "name": "Бая", "gender": "ж",
-     "desc": "Только русский · звонкий, живой"},
+    {"id": "supertonic:M4", "engine": "supertonic", "speaker": "M4", "gender": "м", "name": "Мужской", "score": 3.95,
+     "desc": "Все языки · естественность 3,95 из 5 · спокойный, уверенный"},
+    {"id": "supertonic:F1", "engine": "supertonic", "speaker": "F1", "gender": "ж", "name": "Женский", "score": 3.99,
+     "desc": "Все языки · естественность 3,99 из 5 · тёплый, ясный"},
 ]
+FEMALE_BEFORE = {"silero:xenia", "silero:kseniya", "silero:baya"}       # earlier choices, for the gender
 DEFAULT_VOICE = "supertonic:M4"
 SILERO_DEFAULT = {"м": "aidar", "ж": "xenia"}       # the Russian fallback voice for a Supertonic voice
 PREVIEW = "Привет! Я Джарвис. Так я буду звучать, когда отвечаю. Что сделать?"
 PREVIEW_EN = "Hello, I'm Jarvis. This is how I sound in English. What shall I do?"
 
-# English voices (Kokoro). The British male voice suits «JARVIS»; a female Russian voice gets a female English one.
+# The fallback English voice (Kokoro), by the gender of the main voice: British, as suits «JARVIS».
 EN_VOICES: list[dict] = [
-    {"id": "bm_george", "lang": "en-gb", "name": "George", "gender": "м", "desc": "Британский, спокойный"},
-    {"id": "bm_lewis", "lang": "en-gb", "name": "Lewis", "gender": "м", "desc": "Британский, низкий"},
-    {"id": "bm_fable", "lang": "en-gb", "name": "Fable", "gender": "м", "desc": "Британский, живой"},
-    {"id": "am_michael", "lang": "en-us", "name": "Michael", "gender": "м", "desc": "Американский"},
-    {"id": "bf_emma", "lang": "en-gb", "name": "Emma", "gender": "ж", "desc": "Британский, мягкий"},
-    {"id": "bf_isabella", "lang": "en-gb", "name": "Isabella", "gender": "ж", "desc": "Британский, звонкий"},
-    {"id": "af_heart", "lang": "en-us", "name": "Heart", "gender": "ж", "desc": "Американский, тёплый"},
+    {"id": "bm_george", "lang": "en-gb", "name": "George", "gender": "м"},
+    {"id": "bf_emma", "lang": "en-gb", "name": "Emma", "gender": "ж"},
 ]
 # Other languages: (Kokoro voice, Kokoro language) for a male / female main voice; Silero speakers for de / uk.
 KOKORO_LANGS = {"es": {"м": ("em_alex", "es"), "ж": ("ef_dora", "es")},
@@ -102,13 +87,17 @@ KOKORO_LANGS = {"es": {"м": ("em_alex", "es"), "ж": ("ef_dora", "es")},
 SILERO_SPEAKERS = {"de": {"м": "bernd_ungerer", "ж": "eva_k"}, "uk": {"м": "mykyta", "ж": "mykyta"}}
 
 
-def en_voice(vid: str | None, gender: str = "м") -> dict:
-    return next((v for v in EN_VOICES if v["id"] == vid), None) or \
-        next(v for v in EN_VOICES if v["gender"] == gender)
+def en_voice(gender: str = "м") -> dict:
+    return next(v for v in EN_VOICES if v["gender"] == gender)
 
 
 def voice_info(vid: str) -> dict:
-    return next((v for v in VOICES if v["id"] == vid), next(v for v in VOICES if v["id"] == DEFAULT_VOICE))
+    """One of the two voices; an earlier choice (another Supertonic voice, a Silero one) → the best of its gender."""
+    v = next((v for v in VOICES if v["id"] == vid), None)
+    if v:
+        return v
+    female = str(vid) in FEMALE_BEFORE or str(vid).startswith("supertonic:F")
+    return next(v for v in VOICES if v["gender"] == ("ж" if female else "м"))
 
 
 def clean_for_speech(text: str, lang: str = "ru") -> str:
@@ -118,6 +107,7 @@ def clean_for_speech(text: str, lang: str = "ru") -> str:
     t = re.sub(r"https?://\S+", " ", t)
     t = re.sub(r"[*_`#>|]+", "", t)
     t = re.sub(r"\[уточнить[^\]]*\]", "уточнить", t)
+    t = re.sub(r"\[(?:голос|voice)\]\s*", "", t, flags=re.I)              # JARVIS's own mark, never read aloud
     if lang in ("ru", "uk"):
         t = re.sub(r"\b([01]?\d|2[0-3]):00\b", r"\1 ноль-ноль", t)        # 13:00 → «тринадцать ноль-ноль»
         t = re.sub(r"\b([01]?\d|2[0-3]):0(\d)\b", r"\1 ноль \2", t)
@@ -454,11 +444,10 @@ class VoiceEngine:
     multilingual = True
 
     def __init__(self, silero: SileroTTS, piper: PiperTTS | None = None, voice_id: str = DEFAULT_VOICE,
-                 rate: float = 1.0, kokoro: KokoroTTS | None = None, en_voice_id: str | None = None,
-                 supertonic: SupertonicTTS | None = None):
+                 rate: float = 1.0, kokoro: KokoroTTS | None = None, supertonic: SupertonicTTS | None = None):
         self.silero, self.piper, self.kokoro, self.supertonic = silero, piper, kokoro, supertonic
         self.voice, self.rate = voice_info(voice_id), rate
-        self.en = en_voice(en_voice_id, self.voice["gender"])
+        self.en = en_voice(self.voice["gender"])
         silero.speaker, silero.rate = self._silero_speaker(), rate
         self.last_engine = "supertonic" if self._st_on() else "silero"
         self.last_fallback: str | None = None
@@ -485,7 +474,7 @@ class VoiceEngine:
         return self.voice.get("engine") == "supertonic" and bool(self.supertonic and self.supertonic.available())
 
     def _silero_speaker(self) -> str:
-        return self.voice["speaker"] if self.voice.get("engine") == "silero" else SILERO_DEFAULT[self.voice["gender"]]
+        return SILERO_DEFAULT[self.voice["gender"]]
 
     def languages(self) -> list[str]:
         """Languages this computer can speak right now."""
@@ -499,12 +488,9 @@ class VoiceEngine:
 
     async def set_voice(self, voice_id: str, rate: float = 1.0) -> dict:
         self.voice, self.rate = voice_info(voice_id), rate
+        self.en = en_voice(self.voice["gender"])
         await self.silero.configure(self._silero_speaker(), rate)
         return self.voice
-
-    def set_en_voice(self, vid: str) -> dict:
-        self.en = en_voice(vid, self.gender)
-        return self.en
 
     async def _russian(self, text: str) -> bytes:
         if self.silero.available():
@@ -556,19 +542,13 @@ class VoiceEngine:
         pieces = [a async for a in self.synth_stream(text, lang)]
         return join_wavs(pieces)
 
-    async def preview(self, voice_id: str, text: str = PREVIEW) -> bytes:
+    async def preview(self, voice_id: str) -> bytes:
+        """A sample of a voice without choosing it: a Russian and an English sentence — the same voice in both."""
         v = voice_info(voice_id)
-        if v.get("engine") == "supertonic":
-            if not (self.supertonic and self.supertonic.available()):
-                raise RuntimeError("Голос Supertonic не установлен (scripts/install.sh)")
-            return await self.supertonic.synth(text, v["speaker"], "ru", self.rate)
-        return await self.silero.synth(text, speaker=v["speaker"], rate=self.rate)
-
-    async def preview_en(self, vid: str) -> bytes:
-        if not (self.kokoro and self.kokoro.available()):
-            raise RuntimeError("Английский голос не установлен (scripts/install.sh)")
-        v = en_voice(vid, self.gender)
-        return await self.kokoro.synth(PREVIEW_EN, v["id"], v["lang"], self.rate)
+        if not (self.supertonic and self.supertonic.available()):
+            raise RuntimeError("Голос Supertonic не установлен (scripts/install.sh)")
+        return join_wavs([await self.supertonic.synth(PREVIEW, v["speaker"], "ru", self.rate),
+                          await self.supertonic.synth(PREVIEW_EN, v["speaker"], "en", self.rate)])
 
     async def prewarm(self) -> None:
         """Only the chosen voice is started (the fallback voices start on their first phrase: ~1 GB of memory less)."""

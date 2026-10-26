@@ -708,35 +708,31 @@ class Server:
 
     def _voices(self) -> dict:
         from .voice.lang import NAMES
-        from .voice.tts import EN_VOICES, VOICES
+        from .voice.tts import VOICES
         eng = self.core.director.speech.engine if self.core.director.speech else None
-        ok = bool(getattr(eng, "silero", None) and eng.silero.available())
         st_ok = bool(getattr(eng, "supertonic", None) and eng.supertonic.available())
-        en_ok = bool(getattr(eng, "kokoro", None) and eng.kokoro.available())
         stt = getattr(self.core.director, "stt", None)
         langs = eng.languages() if hasattr(eng, "languages") else ["ru"]
-        return {"voices": [{**v, "available": st_ok if v.get("engine") == "supertonic" else ok} for v in VOICES],
+        return {"voices": [{**v, "available": st_ok} for v in VOICES],
                 "current": getattr(eng, "voice_id", None), "supertonic_installed": st_ok,
-                "all_languages": bool(st_ok and str(getattr(eng, "voice_id", "")).startswith("supertonic:")),
-                "en_voices": [{**v, "available": en_ok} for v in EN_VOICES],
-                "en_current": (getattr(eng, "en", None) or {}).get("id"), "en_installed": en_ok,
                 "languages": [{"id": x, "name": NAMES.get(x, x)} for x in langs],
                 "stt_mode": getattr(stt, "mode", "ru"), "stt_multi": bool(stt and stt.multilingual()),
-                "rate": getattr(eng, "rate", 1.0), "installed": ok,
+                "rate": getattr(eng, "rate", 1.0),
                 "last_engine": getattr(eng, "last_engine", None), "last_fallback": getattr(eng, "last_fallback", None),
                 "ai_model": self.core.db.get_kv("voice_ai_model") or "fast",
                 "ai_models": {"fast": self.core.config.claude_voice_model, "quality": self.core.config.claude_chat_model}}
 
-    async def _voice_preview(self, vid: str, tid: str, en: bool = False) -> None:
-        """Speak a sample in any voice without changing the chosen one."""
-        from .voice.tts import PREVIEW, PREVIEW_EN, en_voice, voice_info
+    async def _voice_preview(self, vid: str, tid: str) -> None:
+        """Speak a sample in a voice without changing the chosen one: a Russian and an English sentence."""
+        from .voice.tts import PREVIEW, PREVIEW_EN, voice_info
         bus = self.core.bus
-        v = en_voice(vid) if en else voice_info(vid)
+        v = voice_info(vid)
         eng = self.core.director.speech.engine if self.core.director.speech else None
+        text = PREVIEW + " " + PREVIEW_EN
         try:
-            audio = await (eng.preview_en(v["id"]) if en else eng.preview(v["id"]))
-            self.core.director.speech.played(tid, PREVIEW_EN if en else PREVIEW, audio)    # for the echo check
-            bus.publish("speech.audio", {"seq": 1, "text": PREVIEW_EN if en else PREVIEW, "mime": "audio/wav",
+            audio = await eng.preview(v["id"])
+            self.core.director.speech.played(tid, text, audio)    # for the echo check
+            bus.publish("speech.audio", {"seq": 1, "text": text, "mime": "audio/wav",
                                          "audio_b64": base64.b64encode(audio).decode()}, tid)
             bus.publish("speech.end", {"segments": 1}, tid)
         except Exception as e:   # noqa: BLE001
@@ -849,10 +845,8 @@ class Server:
                 eng = d.speech.engine if d.speech else None
                 v = voice_info(str(data.get("voice")))
                 st = getattr(eng, "supertonic", None)
-                installed = (st and st.available()) if v.get("engine") == "supertonic" else \
-                    (hasattr(eng, "silero") and eng.silero.available())
-                if not (hasattr(eng, "set_voice") and installed):
-                    raise ValueError("Этот голос не установлен — запустите scripts/install.sh")
+                if not (hasattr(eng, "set_voice") and st and st.available()):
+                    raise ValueError("Голос Supertonic не установлен — запустите scripts/install.sh")
                 rate = min(1.4, max(0.7, float(data.get("rate", self.core.db.get_kv("tts_rate") or 1.0))))
                 await eng.set_voice(v["id"], rate)
                 self.core.db.set_kv("tts_voice", v["id"])
@@ -862,16 +856,8 @@ class Server:
                 res = self._voices()
             elif typ == "voice.preview":
                 tid = "preview_" + pysecrets.token_hex(4)
-                spawn(self._voice_preview(str(data.get("voice")), tid, en=bool(data.get("en"))), "voice-preview")
+                spawn(self._voice_preview(str(data.get("voice")), tid), "voice-preview")
                 res = {"task_id": tid}
-            elif typ == "voice.set_en":           # the English voice (Kokoro)
-                eng = d.speech.engine if d.speech else None
-                if not hasattr(eng, "set_en_voice"):
-                    raise ValueError("Озвучивание не настроено")
-                v = eng.set_en_voice(str(data.get("voice")))
-                self.core.db.set_kv("tts_voice_en", v["id"])
-                self.core.audit.write("voice.selected_en", voice=v["id"])
-                res = self._voices()
             elif typ == "voice.stt_mode":         # «auto»: Russian + other languages; «ru»: Russian only (less memory)
                 mode = "ru" if data.get("mode") == "ru" else "auto"
                 self.core.db.set_kv("stt_mode", mode)

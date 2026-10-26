@@ -531,3 +531,17 @@ Independent answers: the Т-49 figures by hand, the ledgers with Python's csv mo
 | .xls / .ods blanks | could not be changed at all | filled into a new .xlsx next to the blank | test_an_old_format_blank_is_filled_into_a_new_xlsx; live 8, 10 |
 | «Сравни …» about files | a tool-less one-off step, raw tool-call text shown | the conversation with the table tools | test_a_comparison_needing_files_or_the_web…; live 5 |
 | Narration glued to the answer | «Сначала найду файлы. Суммы по месяцам есть. Теперь…» | the answer only (narration still shown live) | test_the_answer_keeps_no_narration…; live 11 |
+
+## Two voices; the whole app checked again (2026-10-26, user's request)
+Settings → Голос: only Supertonic M4 (male, UTMOS 3.95) and F1 (female, 3.99) — one model for every language; the ten
+Supertonic voices, five Silero and seven Kokoro choices are gone (Silero / Kokoro / Piper remain the silent fallback).
+Demo copy (own JARVIS_HOME, real Claude): `tests/ui/workos.mjs` 21/21; 30 typed requests (`chat-run.mjs`) 30/30 after
+the fixes below; three spoken requests (`voice-mic.mjs`, Supertonic F1 as the speaker) ru / en / ru.
+
+| Found | Before | After | Evidence |
+|---|---|---|---|
+| A weather-service timeout | «Не нашёл город «алматы»» after 10 s | asked again (5 s each); a silent service is said as such | test_a_silent_weather_service_is_not_an_unknown_city; direct: Алматы 1.1 s |
+| Russian after English, by voice | «The total revenue for 2026 is 79 million…» | «Общая выручка за 2026 год — 79 261 000 тенге…» | `[Язык ответа: …]` with every message; test_every_message_says_the_language… ; live 11:53 |
+| An English phrase while waiting for «Джарвис» | dropped: GigaAM wrote «How Mauch Free Space Is Loft On My Disk» (no name), Parakeet never ran | Latin output → Parakeet → «Jarvis, how much free space is left on my disc?» | test_a_phrase_written_in_latin…; live 11:58, 12:02 |
+| JARVIS's mark echoed | «[voice] System disk has…» | «System disk has 29.2 GB free…» | test_jarvis_marks_are_never_repeated…; live 12:02 |
+| Fast web search | — | DuckDuckGo CAPTCHA / Brave timeouts on this network today; JARVIS fell back to Claude's own search (correct answer, 26.6 s) | SearXNG `unresponsive_engines` |
