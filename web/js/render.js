@@ -106,7 +106,7 @@ export const ICON = {
 
 const TOOL_ICON = { system_info: "cpu", search_files: "search", read_file: "file", open_path: "open", create_note: "note",
   app_open: "window", window_list: "window", workspace_switch: "window", volume_set: "volume", screenshot: "image",
-  notify: "alert", reminder_create: "clock", cloud_send: "cloud", mic_check: "mic", mic_repair: "mic" };
+  notify: "alert", reminder_create: "clock", cloud_send: "cloud", mic_check: "mic" };
 
 export const STATE_RU = {
   created: "создана", queued: "в очереди", planning: "планирую", running: "выполняется",
@@ -177,7 +177,7 @@ const TITLES = { system_info: "Система", search_files: "Поиск", read
   file_write: "Запись файла", folder_create: "Новая папка", file_trash: "В корзину", computer_task: "Claude Code",
   system_install: "Установка", shell_read: "Команда", trust_rule_add: "Правило", site_publish: "Публикация",
   sheet_read: "Таблица", sheet_query: "Расчёт по таблице", sheet_create: "Новый Excel", sheet_edit: "Правка Excel",
-  mic_check: "Микрофон", mic_repair: "Починка микрофона" };
+  mic_check: "Микрофон" };
 export const toolTitle = (id) => TITLES[id] || id;
 
 // ---------------------------------------------------------------- result cards

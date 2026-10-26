@@ -1,14 +1,13 @@
 """The microphone broken after sleep (voice/mic.py): measured speed, the plain sentence instead of «Не расслышал»,
-the check / repair tools. Nothing here records the real microphone or touches the real sound card."""
+the check tool and the reboot it offers. Nothing here records the real microphone."""
 import base64
 import sys
 
-import pytest
 from conftest import wait_for
 
 from jarvis.router import route
 from jarvis.tools import machine
-from jarvis.tools.base import ToolContext, ToolError
+from jarvis.tools.base import ToolContext
 from jarvis.voice import mic
 
 
@@ -44,23 +43,13 @@ async def test_capture_speed_without_sound_or_recorder(tmp_path):
     assert not mic.broken(None)
 
 
-def test_restart_argv_never_puts_values_into_the_script():
-    argv = mic.restart_argv("0000:00:1f.3", "snd_hda_intel")
-    assert argv[:3] == ["pkexec", "/bin/sh", "-c"] and argv[-2:] == ["0000:00:1f.3", "snd_hda_intel"]
-    assert "0000" not in argv[3] and "snd_hda" not in argv[3]
-    for bad in (("0000:00:1f.3; reboot", "snd_hda_intel"), ("0000:00:1f.3", "x/../../y"), ("../..", "a")):
-        with pytest.raises(ValueError):
-            mic.restart_argv(*bad)
+# ------------------------------------------------------------------ routing and the tool
 
-
-# ------------------------------------------------------------------ routing and tools
-
-def test_phrases_route_to_check_and_repair():
-    assert route("Почини микрофон").tool == "mic_repair"
-    assert route("микрофон не работает").tool == "mic_repair"
-    assert route("перезапусти звуковую карту").tool == "mic_repair"
-    assert route("проверь микрофон").tool == "mic_check"
-    assert route("почему ты меня не слышишь").tool == "mic_check"
+def test_phrases_route_to_the_check():
+    """Re-binding the driver did not help the real broken mic (tried live): «почини» measures and says what helps."""
+    for phrase in ("Почини микрофон", "микрофон не работает", "перезапусти звуковую карту", "проверь микрофон",
+                   "почему ты меня не слышишь"):
+        assert route(phrase).tool == "mic_check", phrase
     assert route("какие микрофоны").tool == "audio_devices"          # the device list stays as it was
 
 
@@ -68,63 +57,16 @@ async def test_check_says_broken_or_fine(monkeypatch, cfg):
     ctx = ToolContext(config=cfg, task_id="t")
     monkeypatch.setattr(mic, "capture_speed", _speed(0.18))
     r = await machine.MicCheck().run({}, ctx)
-    assert r.data["broken"] and "в 6 раз медленнее" in r.summary and "почини микрофон" in r.summary
+    assert r.data["broken"] and "в 6 раз медленнее" in r.summary and "перезагрузи компьютер" in r.summary
     monkeypatch.setattr(mic, "capture_speed", _speed(1.0))
     r = await machine.MicCheck().run({}, ctx)
     assert not r.data["broken"] and "в порядке" in r.summary
 
 
-async def test_repair_does_nothing_when_the_mic_is_fine(monkeypatch, cfg):
-    ran = []
-    monkeypatch.setattr(mic, "capture_speed", _speed(0.99))
-    monkeypatch.setattr(machine, "run_cmd", lambda *a, **k: ran.append(a))
-    r = await machine.MicRepair().run({}, ToolContext(config=cfg, task_id="t"))
-    assert not r.data["restarted"] and not ran and "не нужно" in r.summary
-
-
-async def test_repair_restarts_the_card_and_measures_again(monkeypatch, cfg):
-    from jarvis.tools.base import CmdResult
-    speeds = iter([0.18, 1.0])
-    async def capture(*a, **k):
-        return next(speeds)
-    calls = []
-    async def run_cmd(argv, timeout=10.0, **k):
-        calls.append(argv)
-        return CmdResult(argv, 0, "", "", 1.0)
-    async def card():
-        return 0
-    monkeypatch.setattr(mic, "capture_speed", capture)
-    monkeypatch.setattr(mic, "default_card", card)
-    monkeypatch.setattr(mic, "sound_card", lambda n: ("0000:00:1f.3", "snd_hda_intel"))
-    monkeypatch.setattr(machine, "run_cmd", run_cmd)
-    monkeypatch.setattr(machine, "_which", lambda c: True)
-    monkeypatch.setattr(machine.asyncio, "sleep", _speed(None))
-    tool, ctx = machine.MicRepair(), ToolContext(config=cfg, task_id="t")
-    r = await tool.run({}, ctx)
-    assert r.data["restarted"] and calls[0][0] == "pkexec" and calls[0][-2:] == ["0000:00:1f.3", "snd_hda_intel"]
-    v = await tool.verify({}, r, ctx)
-    assert v.status == "verified" and "снова работает" in r.summary
-
-
-async def test_repair_without_the_password_says_so(monkeypatch, cfg):
-    from jarvis.tools.base import CmdResult
-    async def run_cmd(argv, timeout=10.0, **k):
-        return CmdResult(argv, 126, "", "", 1.0)               # the person closed the password dialog
-    async def card():
-        return 0
-    monkeypatch.setattr(mic, "capture_speed", _speed(0.18))
-    monkeypatch.setattr(mic, "default_card", card)
-    monkeypatch.setattr(mic, "sound_card", lambda n: ("0000:00:1f.3", "snd_hda_intel"))
-    monkeypatch.setattr(machine, "run_cmd", run_cmd)
-    monkeypatch.setattr(machine, "_which", lambda c: True)
-    with pytest.raises(ToolError, match="Пароль не введён"):
-        await machine.MicRepair().run({}, ToolContext(config=cfg, task_id="t"))
-
-
-def test_repair_needs_the_persons_ok(core):
-    spec = core.director.gw.registry.get("mic_repair").spec
-    assert spec.risk == "moderate" and "пароль" in spec.impact
+def test_check_is_read_only_and_the_reboot_it_offers_always_asks(core):
     assert core.director.gw.registry.get("mic_check").spec.risk == "low"
+    assert route("Перезагрузи компьютер").tool == "power_action"          # the companion's button sends this
+    assert core.director.gw.registry.get("power_action").spec.risk == "high"
 
 
 # ------------------------------------------------------------------ the voice path
@@ -146,7 +88,7 @@ LONG_WAV = base64.b64encode(b"RIFF" + bytes(48000)).decode()     # ~1.5 s of 16 
 SHORT_WAV = base64.b64encode(b"RIFF" + bytes(4000)).decode()
 
 
-async def test_empty_phrase_with_a_broken_mic_says_how_to_fix(core, monkeypatch):
+async def test_empty_phrase_with_a_broken_mic_says_what_helps(core, monkeypatch):
     from jarvis.server import MIC_SAY, Server
     monkeypatch.setattr(mic, "capture_speed", _speed(0.18))
     srv = Server(core)
@@ -157,7 +99,7 @@ async def test_empty_phrase_with_a_broken_mic_says_how_to_fix(core, monkeypatch)
     r = await srv._voice_turn({"audio_b64": LONG_WAV, "mime": "audio/wav"})
     assert r["mic"] == "broken" and said == [MIC_SAY]
     msgs = core.director.messages(core.director.conversation_id())
-    assert "почини микрофон" in msgs[-1]["text"] and msgs[-1]["role"] == "assistant"
+    assert "перезагрузка компьютера" in msgs[-1]["text"] and msgs[-1]["role"] == "assistant"
     kinds = []
     while not q.empty():
         kinds.append(q.get_nowait().get("kind"))
@@ -168,6 +110,7 @@ async def test_short_noise_or_a_healthy_mic_keeps_not_heard(core, monkeypatch):
     from jarvis.server import Server
     from jarvis.voice.tts import NOT_HEARD
     measured = []
+
     async def capture(*a, **k):
         measured.append(1)
         return 1.0
@@ -195,18 +138,3 @@ async def test_wake_listening_tells_a_broken_mic_once(core, monkeypatch):
         assert r.get("ignored")
     await wait_for(lambda: said)
     assert said == [MIC_SAY]
-
-
-async def test_repair_when_nobody_types_the_password(monkeypatch, cfg):
-    async def run_cmd(argv, timeout=10.0, **k):
-        assert timeout == machine.PASSWORD_WAIT_S
-        raise ToolError(f"Команда не завершилась за {timeout:.0f} с: pkexec")
-    async def card():
-        return 0
-    monkeypatch.setattr(mic, "capture_speed", _speed(0.18))
-    monkeypatch.setattr(mic, "default_card", card)
-    monkeypatch.setattr(mic, "sound_card", lambda n: ("0000:00:1f.3", "snd_hda_intel"))
-    monkeypatch.setattr(machine, "run_cmd", run_cmd)
-    monkeypatch.setattr(machine, "_which", lambda c: True)
-    with pytest.raises(ToolError, match="Пароль не ввели за 4 минуты"):
-        await machine.MicRepair().run({}, ToolContext(config=cfg, task_id="t"))

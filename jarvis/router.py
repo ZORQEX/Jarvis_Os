@@ -377,12 +377,10 @@ def _caps_route(t: str, raw: str = "") -> Route | None:
     if re.search(r"ночн\w+ (?:режим|свет|подсветк)|тепл\w+ экран|night light", t):
         return tool("appearance", {"action": "night_off" if re.search(_OFF, t) else "night_on"}, "hyprsunset")
 
-    # the microphone broken after sleep (voice/mic.py): check without asking, repair with the person's «Разрешить»
-    if re.search(r"(?:почини|исправь|перезапусти|наладь|оживи|верни) (?:мне )?(?:микрофон|звуковую карту)|"
-                 r"микрофон (?:не работает|сломался|глючит|не пишет)", t):
-        return tool("mic_repair", {}, "pkexec — с вашего подтверждения и пароля")
-    if re.search(r"(?:проверь|протестируй) микрофон|(?:работает ли|исправен ли) микрофон|"
-                 r"почему ты (?:меня )?не слышишь|ты (?:меня )?не слышишь", t):
+    # the microphone broken after sleep (voice/mic.py): measured without asking; the check says what helps (a reboot)
+    if re.search(r"(?:почини|исправь|перезапусти|наладь|оживи|верни|проверь|протестируй) (?:мне )?(?:микрофон|"
+                 r"звуковую карту)|микрофон (?:не работает|сломался|глючит|не пишет)|(?:работает ли|исправен ли) "
+                 r"микрофон|почему ты (?:меня )?не слышишь|ты (?:меня )?не слышишь", t):
         return tool("mic_check", {}, "pw-record (PipeWire)")
 
     # sound devices

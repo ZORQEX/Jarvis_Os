@@ -556,6 +556,6 @@ recognised at 0, −20, −34 dB). Not JARVIS's code — but JARVIS kept saying 
 | Check | Before | After | Evidence |
 |---|---|---|---|
 | A phrase recorded with the broken mic | empty transcript, «Не расслышал» or nothing (wake mode) | mic measured (1.5 s) → «Микрофон работает с ошибкой — я не слышу слов. Напишите мне «почини микрофон».» + toast + companion card with a button + chat message | test_empty_phrase_with_a_broken_mic_says_how_to_fix, test_wake_listening_tells_a_broken_mic_once; dev core 8816 live 12:43 (speed 0.184) |
-| «проверь микрофон» | went to the AI | `mic_check`, no approval, 1.5 s: «…звук с него идёт в 5 раз медленнее…» | test_check_says_broken_or_fine; dev core live |
-| «почини микрофон» | — | `mic_repair`: «Разрешить» → system password → driver re-bound → measured again | tests with a fake pkexec; real repair: see below |
+| «проверь / почини микрофон» | went to the AI | `mic_check`, no approval, 1.5 s: «…звук с него идёт в 5 раз медленнее… нужна перезагрузка компьютера» | test_check_says_broken_or_fine; dev core live |
+| Repair without a reboot | — | tried on the real laptop 12:51 with the user's password: pkexec re-bound `snd_hda_intel` (full codec re-probe in the kernel log) → still 0.18; no PCI reset method; the controller's own D3hot neither. Not shipped: JARVIS offers the reboot (power_action, always asks) | live 12:47 / 12:51, kernel log |
 | Silence in push-to-talk | Parakeet made up «Thank you.» (zeros) / «No, no» (−60 dB hiss) → a phantom request | not re-heard below −45 dBFS peak: empty | direct worker check: zeros, −70…−30 dB noise → ''; the test phrase still recognised at −34 dB |

@@ -1094,7 +1094,7 @@ FRAGMENT_TTL_S = 15.0
 MIC_CHECK_BYTES = 32044     # an empty transcript of ≥ 1 s of 16 kHz sound: measure the microphone itself (voice/mic.py)
 MIC_OK_TTL_S = 300.0        # a healthy mic is not measured again for 5 min (each check records ~2 s)
 MIC_TELL_EVERY_S = 120.0    # while listening for «Джарвис», a broken mic is said at most this often
-MIC_SAY = "Микрофон работает с ошибкой — я не слышу слов. Напишите мне «почини микрофон»."
+MIC_SAY = "Микрофон работает с ошибкой, я не слышу слов. Поможет перезагрузка компьютера."
 FRAGMENT_WAIT_S = 4.0       # a cut-off phrase with no continuation after this much quiet is done as it is
 _DANGLING = {"в", "во", "на", "и", "а", "но", "или", "что", "чтобы", "для", "к", "ко", "по", "с", "со", "у", "о", "об",
              "мне", "ему", "ей", "моей", "моему", "моим", "контакту", "сообщение", "письмо", "текст", "который", "которая",

@@ -52,9 +52,10 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   Broken mic after sleep (`voice/mic.py`): the sound card can capture ~6× too slowly after s2idle (2026-10-26: 0.18 of
   real time, direct ALSA read = I/O error; every phrase came back empty). An empty transcript of ≥ 1 s → `capture_speed`
   (pw-record, ~1.5 s; trusted 5 min when healthy) → `server.MIC_SAY` + `voice.mic` event (toast; companion card with
-  «Починить микрофон») + chat message. Tools `mic_check` (LOW) / `mic_repair` (MODERATE: pkexec re-binds the PCI sound
-  driver, one password prompt; does nothing when the mic is fine; verify measures again). Tests never record the real
-  mic (conftest fakes `capture_speed`). Parakeet does not re-hear silence (peak < −45 dBFS): it made up «Thank you.».
+  «Перезагрузить компьютер» → power_action, always asks) + chat message. «проверь / почини микрофон» → `mic_check` (LOW).
+  Re-binding the driver as root (pkexec) was tried live and did NOT help (full codec re-probe, still 0.18); the
+  controller has no PCI reset — so there is no «repair» tool, only the reboot. Tests never record the real mic (conftest
+  fakes `capture_speed`). Parakeet does not re-hear silence (peak < −45 dBFS): it made up «Thank you.».
 - Self-improvement (`jarvis/improve.py`): `collect_issues` ranks problems from JARVIS's own records (repeats, failures,
   slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,
   then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Window:
