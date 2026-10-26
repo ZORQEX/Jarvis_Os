@@ -195,3 +195,18 @@ async def test_wake_listening_tells_a_broken_mic_once(core, monkeypatch):
         assert r.get("ignored")
     await wait_for(lambda: said)
     assert said == [MIC_SAY]
+
+
+async def test_repair_when_nobody_types_the_password(monkeypatch, cfg):
+    async def run_cmd(argv, timeout=10.0, **k):
+        assert timeout == machine.PASSWORD_WAIT_S
+        raise ToolError(f"Команда не завершилась за {timeout:.0f} с: pkexec")
+    async def card():
+        return 0
+    monkeypatch.setattr(mic, "capture_speed", _speed(0.18))
+    monkeypatch.setattr(mic, "default_card", card)
+    monkeypatch.setattr(mic, "sound_card", lambda n: ("0000:00:1f.3", "snd_hda_intel"))
+    monkeypatch.setattr(machine, "run_cmd", run_cmd)
+    monkeypatch.setattr(machine, "_which", lambda c: True)
+    with pytest.raises(ToolError, match="Пароль не ввели за 4 минуты"):
+        await machine.MicRepair().run({}, ToolContext(config=cfg, task_id="t"))

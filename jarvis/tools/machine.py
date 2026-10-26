@@ -940,6 +940,9 @@ MIC_BROKEN_TEXT = ("Микрофон работает неправильно: з
                    "(система спросит пароль). Если не поможет — перезагрузите компьютер.")
 
 
+PASSWORD_WAIT_S = 240
+
+
 def _slower(speed: float) -> str:
     return str(max(2, round(1 / speed))) if speed > 0 else "много"
 
@@ -976,7 +979,7 @@ class MicRepair(Tool):
         description="Restart the sound card when the microphone captures too slowly (after sleep). Measures first and "
                     "does nothing if the mic is fine; otherwise re-binds the sound driver as root via pkexec — the "
                     "system asks the person for the password.",
-        params={"type": "object", "properties": {}}, risk=Risk.MODERATE, side_effects="local", timeout_s=150,
+        params={"type": "object", "properties": {}}, risk=Risk.MODERATE, side_effects="local", timeout_s=300,
         idempotent=False, verification="Скорость звука с микрофона измерена снова после перезапуска",
         impact="Звуковая карта перезапустится: звук пропадёт на несколько секунд; система спросит пароль компьютера")
 
@@ -999,7 +1002,11 @@ class MicRepair(Tool):
         if not _which("pkexec"):
             raise ToolError("Нет pkexec — перезапустить звуковую карту без пароля нельзя. Перезагрузите компьютер.")
         ctx.progress("Перезапускаю звуковую карту — введите пароль в окне системы", None)
-        r = await run_cmd(mic.restart_argv(*found), timeout=120)
+        try:                                      # the system's password window waits for the person (4 min here)
+            r = await run_cmd(mic.restart_argv(*found), timeout=PASSWORD_WAIT_S)
+        except ToolError:
+            raise ToolError("Пароль не ввели за 4 минуты — окно пароля закрыто, звуковая карта не перезапущена. "
+                            "Напишите «почини микрофон» ещё раз.") from None
         if r.code in (126, 127):
             raise ToolError("Пароль не введён — звуковая карта не перезапущена.")
         if r.code != 0:
