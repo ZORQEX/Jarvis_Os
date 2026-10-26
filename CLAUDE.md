@@ -112,6 +112,14 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   program) is recalculated by LibreOffice headless (own profile) before reading. Edits in place refuse files with
   charts / pivots / pictures (openpyxl drops them) → `save_as`. Planner: a table clause → `chat` (`R["sheet"]`), never a
   Claude Code job; a table file of its own is not the orders ledger (`director._not_the_ledger`).
+  Unified forms (Т-49, КО-4, ТОРГ-12…): the graph-number row («1 | 2 | 3…») is the header (`is_numbering`), titles come
+  from up to 5 rows above (`_form_table`, «Начислено, руб. / всего (гр. 14)»), data stop at the signatures; forms and
+  wide sheets are shown as filled cells with addresses («AC14=…»). `sheet_edit` writes into a merged box's first cell
+  (`box`), copies a form row's boxes into inserted rows, and fills .xls/.ods into a new .xlsx (LibreOffice). Text cells:
+  «31,037.55», «1.234,56», «(5 000)», «£1,200», «04-Dec-25», «04/12/2025», cp1252 CSV; «007» stays text.
+- A single «сравни / проанализируй» with nothing to refer back to goes to the conversation (tables, search), not a
+  tool-less one-off step; a one-off answer with tool-call markup is a failure (`TOOL_MARKUP`). The final answer drops
+  the short narration before tool calls (`claude_chat.answer_only`).
 - Speech: one task speaks at a time (`take_floor`), never while the person talks (`voice.active` → `hold_until`).
   Echo: `_strip_echo` drops what JARVIS's voice said during the phrase (both windows; they are separate browsers, so
   neither's echo cancellation hears the other). A cut-off phrase is done as is after 4 s of quiet (`FRAGMENT_WAIT_S`).

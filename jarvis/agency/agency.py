@@ -156,6 +156,17 @@ class Agency:
             d.mode, conf = "single_ai", 1.0
             d.verification = verifications(d.steps)
             validate(d, set(self.mgr.providers), tools)
+        if len(d.steps) == 1 and d.steps[0].action == "analyze" and not d.override \
+                and not REFERS_BACK.search(text) and not self.last_research(director, director.conversation_id(), text):
+            # «Сравни платежи за декабрь и март», «сравни цены в Алматы и Астане»: the data are in files or on the web,
+            # and only the conversation has the tools (tables, search); a one-off step has none (measured 2026-10-26: it
+            # answered «данных нет» with raw tool-call text). «Проанализируй это» / «сравни найденных» keep the one-off
+            # step: it gets the previous answer or the last search as data. A named file is still read first.
+            from ..router import strip_wake
+            d.steps = [Step(id="s1", action="chat", instruction=strip_wake(text) or text)]
+            d.mode, conf = "single_ai", 1.0
+            d.verification = verifications(d.steps)
+            validate(d, set(self.mgr.providers), tools)
         if len(d.steps) >= 2 and all(s.action in CONVERSATIONAL for s in d.steps) and not d.override:
             # «Запомни число… Ответь одним словом»: several conversational clauses are ONE message to Claude — no
             # separate planning call (measured: +2.7–3.5 s and an extra AI call for nothing).

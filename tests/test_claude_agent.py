@@ -222,6 +222,17 @@ async def test_while_the_limit_lasts_every_request_hears_the_same_plain_words(co
     await wait_for(lambda: any("Лимит Claude закончился" in c for c in tts.calls))
 
 
+def test_the_answer_keeps_no_narration_from_between_tool_calls():
+    from jarvis.providers.claude_chat import answer_only
+    t = "Сначала найду файлы. Суммы по месяцам есть. Теперь по двум поставщикам. **Итого:** декабрь 27 495 125 £, март 25 624 008 £."
+    cuts = [len("Сначала найду файлы."), len("Сначала найду файлы. Суммы по месяцам есть."),
+            len("Сначала найду файлы. Суммы по месяцам есть. Теперь по двум поставщикам.")]
+    assert answer_only(t, cuts) == "**Итого:** декабрь 27 495 125 £, март 25 624 008 £."
+    long = "Отчёт: " + "выручка выросла, " * 12
+    assert answer_only(long + "Открываю.", [len(long)]) == long + "Открываю."      # the answer came before the call
+    assert answer_only("Готово, файл создан.", []) == "Готово, файл создан."
+
+
 # ---------------------------------------------------------------- a hung process
 class _In:
     def write(self, b):

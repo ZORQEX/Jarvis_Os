@@ -163,6 +163,9 @@ MONTHS_RU = ("января", "февраля", "марта", "апреля", "м
 LOCAL_OK = "Простые команды — открыть приложение, папку или сайт, громкость, заметки, напоминания — работают и без него."
 
 
+TOOL_MARKUP = re.compile(r"<(?:invoke|function_calls|parameter)\b[^>]*>")
+
+
 class Trouble:
     """A Claude failure for a person: what happened and what still works (screen), one short sentence (voice)."""
 
@@ -269,10 +272,22 @@ def progress_line(name: str, args: dict | None, titles: dict | None = None) -> s
     return title or "Выполняю действие"
 
 
+def answer_only(text: str, cuts: list[int]) -> str:
+    """The answer without the short phrases Claude writes before its tool calls («Сначала найду файлы.», «Теперь по
+    двум поставщикам.»): heard and seen live while it works, not glued to the front of the answer that stays (seen
+    2026-10-26). A paragraph written before a tool call stays (an answer, then «open the result»), and so does
+    everything when almost nothing comes after the last call."""
+    if not cuts or len(text[cuts[-1]:].strip()) < 40:
+        return text
+    parts = [text[a:b] for a, b in zip([0, *cuts], cuts)]
+    return " ".join([*(x.strip() for x in parts if len(x.strip()) > 160), text[cuts[-1]:].strip()])
+
+
 class _Turn:
     def __init__(self, on_delta, on_tool, proc=None, on_status=None):
         self.on_delta, self.on_tool, self.proc, self.on_status = on_delta, on_tool, proc, on_status
         self.text, self.result, self.tools = "", None, []
+        self.cuts: list[int] = []         # where in the text a tool call came (narration before it, answer after)
         self.first_ms = None
         self.model = None                 # the fallback model, when the main one was overloaded for this answer
         self.t0 = time.perf_counter()
@@ -512,6 +527,7 @@ class ClaudeChatProvider(AIProvider):
                         turn.tools.append(name)
                         if turn.on_tool:
                             turn.on_tool(name, c.get("input") or {})
+                        turn.cuts.append(len(turn.text))
                         if turn.text and not turn.text.endswith(("\n", " ")):
                             turn.text += " "          # narration before a tool call, then the answer
             elif t == "result":
@@ -684,7 +700,7 @@ class ClaudeChatProvider(AIProvider):
             raise e
         self.status, self.last_error, self.last_error_kind, self.limited_until = "ready", None, None, None
         usage = res.get("usage") or {}
-        final = turn.text.strip() or str(res.get("result") or "").strip()
+        final = answer_only(turn.text, turn.cuts).strip() or str(res.get("result") or "").strip()
         return GenResult(final, "claude", turn.model or self.active_model, [], usage_of(usage),
                          res.get("turn_cost_usd"), turn.first_ms, (time.perf_counter() - t0) * 1000,
                          {"rounds": len(turn.tools), "tools_used": turn.tools})
@@ -782,6 +798,9 @@ class ClaudeChatProvider(AIProvider):
         if result is None or result.get("is_error"):
             raise self._failure(str((result or {}).get("result") or err or "нет ответа")[:300])
         final = (str(result.get("result") or "") or text).strip()
+        if TOOL_MARKUP.search(final):
+            # A one-off step has no tools; a model that still «calls» them writes the call as text. Never show it.
+            raise ProviderFailure("server", "Claude ответил служебными командами вместо ответа — шаг не выполнен")
         sources, seen = [], set()
         for u in URL_RE.findall(final):
             u = u.rstrip(".,;")

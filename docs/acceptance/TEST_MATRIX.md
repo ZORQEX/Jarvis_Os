@@ -500,3 +500,34 @@ f7ce0f4 (every question went to a Claude Code job). Tests: `tests/test_sheets.py
 | Files with charts / pivot tables / pictures are never edited in place | VERIFIED MOCK | test_edit_never_loses_charts_in_place |
 | xls / ods via LibreOffice | IMPLEMENTED UNVERIFIED | no .xls / .ods sample in the run |
 | While Claude's limit lasts, every request hears the same plain sentence | VERIFIED LIVE (found) + MOCK | live: 2nd–9th request said «нет доступного исполнителя … (RATE_LIMITED)»; test_while_the_limit_lasts… |
+
+## Real accounting files from the internet (2026-10-26, user's request «найди в интернете бухгалтерские Excel и проверь все 4 инструмента»)
+Downloaded: nalog-nalog.ru — cash book КО-4 sample (.xls), trial balance blank (.xls), payroll statement Т-49 filled
+sample (.xls, 5 employees); buhexpert8.ru — Т-49 blank (.xlsx); glavkniga.ru — Т-49 blank (.xls); gov.uk — HM Treasury
+«spending over £25,000» December 2025 and March 2026 (CSV, Windows-1252, 149 / 136 payments); the КО-4 also as .ods.
+Independent answers: the Т-49 figures by hand, the ledgers with Python's csv module. Direct run of the four tools:
+27/27 checks. Chat with the real Claude on a dev core (`tests/ui/chat-run.mjs`):
+
+| # | Request | Tools | Result | Status |
+|---|---|---|---|---|
+| 1 | «Что в файле Т-49 (образец).xls?» | sheet_read | 5 employees, accrued 387 359, НДФЛ 50 357, advance 120 000, to pay 193 200 — 10.3 s | VERIFIED LIVE |
+| 2 | totals and «сходится ли с шапкой» | (context) | 387 359 / 50 357 / 193 200, checked against the header's «Сто девяносто три тысячи двести» — 4.7 s | VERIFIED LIVE |
+| 3 | who gets the most | (context) | Васильченко И.Д., 69 450 — 1.9 s | VERIFIED LIVE |
+| 4 | UK ledger: payments, total, top-3 suppliers | sheet_read, sheet_query | 149, £27 495 125.11, NS&I / GPA / Royal Mint with exact sums — 11.7 s | VERIFIED LIVE |
+| 5 | compare December and March (different column names) | sheet_query ×4 | £27 495 125.11 vs £25 624 008.59, both suppliers' change exact — 18.9 s (before the fix: a tool-less step answered with raw `<invoke>` text) | VERIFIED LIVE |
+| 6 | new workbook: spending by type, sorted, total as a formula | sheet_query, sheet_create | 31 types, =SUM total 27 495 125.11 — 13.4 s, 1 approval | VERIFIED LIVE |
+| 7 | fill the Т-49 blank (.xlsx): one employee, НДФЛ and to pay as formulas | sheet_read, sheet_edit | row 26 in the right graphs (checked as a PDF), =ROUND(DR26*0.13,0) → 11 700, to pay 78 300 — 22.5 s | VERIFIED LIVE |
+| 8 | change one amount in the .xls sample | sheet_edit | new .xlsx next to it, the .xls untouched; JARVIS noticed the header no longer matches — 8.2 s | VERIFIED LIVE |
+| 9 | «Что в файле … .ods?» | sheet_read ×2 | an empty КО-4 blank, both sheets described — 9.8 s | VERIFIED LIVE |
+| 10 | fill the cash book's title (.xls) | sheet_read, sheet_edit | organisation in A7, year in AD16 on cover and title page (checked as a PDF) — 13.4 s | VERIFIED LIVE |
+| 11 | the largest March expense type | sheet_query | Facilities Service Charges Recoverable, £5 784 736.64 in 8 payments — 12 s | VERIFIED LIVE |
+
+| Found on the real files and fixed | Before | After | Evidence |
+|---|---|---|---|
+| Unified forms (graph-number row under 2–3 title rows) | not a table; a form's title row taken for a 134-column header | Т-49 = table, «к выплате (гр. 21)», signatures not data | test_a_unified_form_is_a_table_under_its_graph_numbers; live 1–3 |
+| Forms on an 80–256-column grid | hundreds of empty « | » cells | only filled cells, «AC14=КАССОВАЯ КНИГА» | live 9, 10 |
+| English ledger exports | «31,037.55» and «04-Dec-25» were text: no sum, no months | numbers and dates; cp1252; «(5 000)», «£», «1.234,56» | test_numbers_and_dates…, test_an_english_ledger_export… |
+| Merged boxes of a form | writing into one crashed (openpyxl MergedCell) | set → the box's first cell; a new form row gets the boxes of the row above | test_a_form_is_filled_box_by_box |
+| .xls / .ods blanks | could not be changed at all | filled into a new .xlsx next to the blank | test_an_old_format_blank_is_filled_into_a_new_xlsx; live 8, 10 |
+| «Сравни …» about files | a tool-less one-off step, raw tool-call text shown | the conversation with the table tools | test_a_comparison_needing_files_or_the_web…; live 5 |
+| Narration glued to the answer | «Сначала найду файлы. Суммы по месяцам есть. Теперь…» | the answer only (narration still shown live) | test_the_answer_keeps_no_narration…; live 11 |

@@ -130,6 +130,100 @@ def test_reading_stays_inside_the_allowed_folders(core, home, tmp_path_factory):
         core.registry.tools["sheet_query"].validate({"path": str(home / "files" / "notes.txt")}, _ctx(core))
 
 
+@pytest.mark.parametrize("text,decimal_comma,value", [
+    ("31,037.55", False, 31037.55), ("1,234", False, 1234), ("1,234", True, 1.234), ("1.234,56", True, 1234.56),
+    ("£1,200.00", False, 1200.0), ("(5 000)", True, -5000), ("1 200,50", True, 1200.5), ("007", True, "007"),
+    ("04-Dec-25", False, dt.date(2025, 12, 4)), ("4 дек 2025 г.", True, dt.date(2025, 12, 4)),
+    ("04/12/2025", False, dt.date(2025, 12, 4)), ("12/31/2025", False, dt.date(2025, 12, 31)),
+    ("04.12.25", True, dt.date(2025, 12, 4)), ("Иванов", True, "Иванов"),
+])
+def test_numbers_and_dates_as_accounting_exports_write_them(text, decimal_comma, value):
+    assert sheets._cell_from_text(text, decimal_comma) == value
+
+
+async def test_an_english_ledger_export_sums_and_groups_by_month(core, home):
+    """Seen in HM Treasury's «spending over £25,000» CSV: Windows-1252, «04-Dec-25», "31,037.55"."""
+    p = home / "files" / "spend.csv"
+    p.write_bytes('Entity,Date,Supplier, Amount \nDMO,04-Dec-25,Bank of England,"31,037.55"\n'
+                  'HMT,16-Dec-25,Royal Mint – coins,"2,649,194.84"\nHMT,03-Jan-26,Royal Mint – coins,"£1,000.00"\n'
+                  .encode("cp1252"))
+    q = core.registry.tools["sheet_query"]
+    r = await q.run(q.validate({"path": str(p), "group_by": [{"column": "Date", "by": "month"}],
+                                "metrics": [{"fn": "sum", "column": "Amount"}]}, _ctx(core)), _ctx(core))
+    assert r.data["rows"] == [["2025-12", 2680232.39], ["2026-01", 1000]]
+    r = await q.run(q.validate({"path": str(p), "group_by": ["Supplier"], "metrics": [{"fn": "count"}]}, _ctx(core)), _ctx(core))
+    assert ["Royal Mint – coins", 2] in r.data["rows"]                      # «–» read as cp1252, not as Cyrillic
+
+
+def _form(path):
+    """A Т-49-like unified form: a title, titles in two rows over merged boxes, the graph numbers, three employees,
+    signatures."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "стр1"
+    ws["AA1"] = "РАСЧЕТНО-ПЛАТЕЖНАЯ ВЕДОМОСТЬ"
+    cols = {"A": ("Номер по порядку", None), "C": ("Табель- ный номер", None), "E": ("Начислено, руб.", "Оклад"),
+            "G": (None, "всего"), "I": ("Удержано", "налог на доходы"), "K": ("Сумма, руб.", "к выплате"),
+            "M": ("Деньги получил", "фамилия, инициалы")}
+    for n, (c, (top, low)) in enumerate(cols.items(), start=1):
+        nxt = sheets.col_letter(sheets.col_number(c) + 1)
+        ws[f"{c}3"], ws[f"{c}4"], ws[f"{c}5"] = top, low, n
+        for r in range(6, 9):
+            ws.merge_cells(f"{c}{r}:{nxt}{r}")
+    for r, (fio, oklad) in enumerate([("Иванова А.П.", 90000), ("Петров И.И.", 60000), ("Ким Д.", 45000)], start=6):
+        ws[f"A{r}"], ws[f"C{r}"], ws[f"E{r}"], ws[f"G{r}"] = r - 5, f"00{r}", oklad, oklad
+        ws[f"I{r}"], ws[f"K{r}"], ws[f"M{r}"] = round(oklad * 0.13), oklad - round(oklad * 0.13), fio
+    ws["A11"], ws["K11"], ws["O11"], ws["S11"] = "Выплаты произвел", "кассир", "Семенова", "(подпись)"
+    wb.save(path)
+    return path
+
+
+async def test_a_unified_form_is_a_table_under_its_graph_numbers(core, home, no_lo):
+    p = _form(home / "files" / "Т-49.xlsx")
+    t = sheets.table_of(sheets.load_book_sync(p).sheets[0])
+    assert t.header == 5 and [r for r, _ in t.data] == [6, 7, 8]           # the signatures are not data
+    assert t.names[6] == "Начислено, руб. / всего (гр. 4)" and t.names[2] == "Табельный номер (гр. 2)"
+    q = core.registry.tools["sheet_query"]
+    r = await q.run(q.validate({"path": str(p), "metrics": [{"fn": "sum", "column": "всего"},
+                                                            {"fn": "sum", "column": "к выплате"}]}, _ctx(core)), _ctx(core))
+    assert r.data["rows"] == [[195000, 169650]]
+    r = await core.registry.tools["sheet_read"].run({"path": str(p), "from_row": 1, "max_rows": 60}, _ctx(core))
+    assert "AA1=РАСЧЕТНО-ПЛАТЕЖНАЯ ВЕДОМОСТЬ" in r.data["text"] and "B «B»" not in r.data["text"]   # filled cells only
+
+
+async def test_a_form_is_filled_box_by_box(core, home, no_lo):
+    p = _form(home / "files" / "Т-49.xlsx")
+    e = core.registry.tools["sheet_edit"]
+    a = e.validate({"path": str(p), "changes": [{"op": "set", "cell": "F6", "value": 95000},     # inside the E6:F6 box
+                                                {"op": "insert_rows", "row": 9, "count": 1},
+                                                {"op": "set", "cell": "M9", "value": "Новикова Е."}]}, _ctx(core))
+    await e.run(a, _ctx(core))
+    ws = load_workbook(p)["стр1"]
+    assert ws["E6"].value == 95000 and ws["M9"].value == "Новикова Е."
+    assert {"E9:F9", "M9:N9"} <= {str(m) for m in ws.merged_cells.ranges}  # the new row has the boxes of the row above
+    with pytest.raises(ToolInputError, match="пишите в A9"):
+        await e.run(e.validate({"path": str(p), "changes": [{"op": "insert_rows", "row": 9, "values": [[4, 5]]}]},
+                               _ctx(core)), _ctx(core))
+
+
+@pytest.mark.skipif(not sheets.soffice(), reason="LibreOffice is not installed")
+async def test_an_old_format_blank_is_filled_into_a_new_xlsx(core, home):
+    import subprocess
+    sheets._cache.clear()
+    src = _form(home / "Т-49.xlsx")
+    subprocess.run([sheets.soffice(), f"-env:UserInstallation=file://{home}/lo", "--headless", "--convert-to", "ods",
+                    "--outdir", str(home / "files"), str(src)], capture_output=True, timeout=120, check=True)
+    ods = home / "files" / "Т-49.ods"
+    before = ods.read_bytes()
+    e = core.registry.tools["sheet_edit"]
+    a = e.validate({"path": str(ods), "changes": [{"op": "set", "cell": "K6", "value": 80000}]}, _ctx(core))
+    assert a["save_as"] == str(home / "files" / "Т-49.xlsx")
+    r = await e.run(a, _ctx(core))
+    assert ods.read_bytes() == before and not r.data["backup"]              # the blank itself is never changed
+    assert load_workbook(a["save_as"])["стр1"]["K6"].value == 80000
+    assert (await e.verify(a, r, _ctx(core))).status == "verified"
+
+
 # ---------------------------------------------------------------- changing
 def test_formulas_follow_inserted_and_deleted_rows_like_excel():
     f = sheets.shift_formula
@@ -240,6 +334,22 @@ def test_a_table_file_of_its_own_is_not_the_orders_ledger():
     assert _not_the_ledger("В файле «Большая выгрузка.xlsx» сколько заказов отменено?")
     assert not _not_the_ledger("Загрузи файл фабрики «Заказ фабрики Dior SS27.xlsx» в заказы")
     assert not _not_the_ledger("сколько клиентов в заказе SS27")
+
+
+@pytest.mark.parametrize("phrase,action", [
+    ("Сравни платежи HMT за декабрь 2025 и март 2026: общая сумма в каждом месяце", "chat"),   # was a tool-less step
+    ("сравни цены на iPhone 17 в Алматы и Астане", "chat"),
+    ("Проанализируй этот документ", "analyze"),          # refers to the previous answer: it is given as data
+])
+async def test_a_comparison_needing_files_or_the_web_goes_to_the_conversation(core, phrase, action):
+    d = await core.director.agency.plan(core.director, "t", phrase)
+    assert [s.action for s in d.steps] == [action]
+
+
+def test_a_one_off_step_never_shows_tool_call_text():
+    from jarvis.providers.claude_chat import TOOL_MARKUP
+    assert TOOL_MARKUP.search('Проверю.\n<invoke name="Bash">\n<parameter name="command">ls</parameter>')
+    assert not TOOL_MARKUP.search("Сумма <b>выросла</b> на 5 % (данные < 2025)")
 
 
 def test_code_about_tables_is_still_code():

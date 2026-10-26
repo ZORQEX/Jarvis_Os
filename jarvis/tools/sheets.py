@@ -179,45 +179,83 @@ def _read_openpyxl(path: Path, formulas: bool) -> list[Sheet]:
 
 
 NUM_RE = re.compile(r"^[+-]?(\d{1,3}([   ]\d{3})+|\d+)([.,]\d+)?$")
-DATE_DMY = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+NUM_US = re.compile(r"^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$")              # 31,037.55 (English exports)
+NUM_EU = re.compile(r"^[+-]?\d{1,3}(\.\d{3})+(,\d+)?$")              # 1.234,56
+SPACES = re.compile(r"[\s\u00a0\u202f\u2009]")
+CURRENCY = "£$€₸₽¥"
+DATE_DMY = re.compile(r"^(\d{1,2})([./])(\d{1,2})\2(\d{4}|\d{2})$")     # 04.12.2025, 04/12/2025, 04.12.25
 DATE_ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+DATE_MON = re.compile(r"^(\d{1,2})[-\s]([^\W\d_]{3,9})\.?[-\s](\d{4}|\d{2})(?:\s*г\.?)?$")   # 04-Dec-25, 4 дек 2025
+MONTH_WORDS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10,
+               "nov": 11, "dec": 12, "янв": 1, "фев": 2, "мар": 3, "апр": 4, "мая": 5, "май": 5, "июн": 6, "июл": 7,
+               "авг": 8, "сен": 9, "окт": 10, "ноя": 11, "дек": 12}
+
+
+def _year(y: str) -> int:
+    return int(y) + 2000 if len(y) == 2 else int(y)
+
+
+def _number(t: str, decimal_comma: bool):
+    """«1 200,50», «31,037.55», «1.234,56», «£1,200», «(5 000)» (a negative in accounting) → a number, else None."""
+    neg = t.startswith("(") and t.endswith(")")
+    u = (t[1:-1] if neg else t).strip().strip(CURRENCY).strip()
+    if re.match(r"^[+-]?0\d", u):
+        return None                                       # «007», «0012345»: a personnel number or a code, not 7
+    if NUM_RE.match(u) and ("," not in u or decimal_comma):
+        u = SPACES.sub("", u).replace(",", ".")
+    elif NUM_US.match(u):
+        u = u.replace(",", "")
+    elif NUM_EU.match(u):
+        u = u.replace(".", "").replace(",", ".")
+    else:
+        return None
+    try:
+        f = float(u)
+    except ValueError:
+        return None
+    f = -f if neg else f
+    return int(f) if f.is_integer() and "." not in u else f
+
+
+def _date(t: str):
+    try:
+        m = DATE_ISO.match(t)
+        if m:
+            return dt.date(*(int(x) for x in m.groups()))
+        m = DATE_DMY.match(t)
+        if m:
+            d, mo, y = int(m.group(1)), int(m.group(3)), _year(m.group(4))
+            if m.group(2) == "/" and mo > 12 >= d:
+                d, mo = mo, d                                 # 12/31/2025: an American date
+            return dt.date(y, mo, d)
+        m = DATE_MON.match(t)
+        if m and m.group(2)[:3].casefold() in MONTH_WORDS:
+            return dt.date(_year(m.group(3)), MONTH_WORDS[m.group(2)[:3].casefold()], int(m.group(1)))
+    except ValueError:
+        return None
+    return None
 
 
 def _cell_from_text(s: str, decimal_comma: bool):
     t = s.strip()
     if not t:
         return None
-    if NUM_RE.match(t):
-        u = re.sub(r"[   ]", "", t)
-        if "," in u:
-            if not decimal_comma:
-                return t
-            u = u.replace(",", ".")
-        try:
-            f = float(u)
-            return int(f) if f.is_integer() and "." not in u else f
-        except ValueError:
-            return t
-    m = DATE_DMY.match(t) or DATE_ISO.match(t)
-    if m:
-        try:
-            a, b, c = (int(x) for x in m.groups())
-            return dt.date(c, b, a) if m.re is DATE_DMY else dt.date(a, b, c)
-        except ValueError:
-            return t
-    return s
+    n = _number(t, decimal_comma)
+    if n is not None:
+        return n
+    d = _date(t)
+    return d if d is not None else s
 
 
 def _read_text_table(path: Path) -> list[Sheet]:
     raw = path.read_bytes()
-    for enc in ("utf-8-sig", "cp1251"):
-        try:
-            text = raw.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
-    else:
-        text = raw.decode("utf-8", "replace")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1251")
+        high = sum(1 for ch in text if ord(ch) > 127)
+        if sum(1 for ch in text if "а" <= ch.casefold() <= "я" or ch in "ёЁ") < 0.5 * high:
+            text = raw.decode("cp1252", "replace")           # an English export (£, –), not Russian letters
     sample = text[:20000]
     if path.suffix.lower() == ".tsv":
         delim = "\t"
@@ -293,10 +331,46 @@ def col_number(letters: str) -> int:
     return n
 
 
+def is_numbering(r: list) -> bool:
+    """«1 | 2 | 3 | …» under the titles of a Russian unified form (Т-49, ТОРГ-12, КО-4, ОСВ): the graph numbers — one
+    run 1…n, or several side by side (a two-page spread)."""
+    vals = [v for v in r if v is not None]
+    if len(vals) < 4:
+        return False
+    expect = 1
+    for v in vals:
+        x = v if is_num(v) else int(v) if isinstance(v, str) and v.strip().isdigit() else None
+        if x is None or x != int(x):
+            return False
+        if x == expect:
+            expect += 1
+        elif x == 1 and expect > 3:
+            expect = 2
+        else:
+            return False
+    return True
+
+
+def _aligned(cols: set, rows: list[list]) -> bool:
+    """Most rows below have their values under the titles (not a form with captions scattered over a grid)."""
+    rows = rows[:30]
+    hits = 0
+    for r in rows:
+        filled = [j for j, v in enumerate(r) if v is not None]
+        if filled and sum(j in cols for j in filled) >= 0.6 * len(filled):
+            hits += 1
+    return bool(rows) and hits >= 0.6 * len(rows)
+
+
 def header_row(rows: list[list]) -> int | None:
     """1-based row of the column titles: the first row (of the first 15) with ≥ 2 filled cells, mostly text, followed
-    by rows with values — numbers or dates below it, or (an all-text list such as contacts) titles that never appear
-    again in their column. None = the sheet is not a plain table (a form, a budget in blocks)."""
+    by rows with values under those titles — numbers or dates, or (an all-text list such as contacts) titles that never
+    appear again in their column. A unified form's graph-number row («1 | 2 | 3 …» under titles in several rows) is
+    returned itself (`table_of` takes the titles from above it). None = not a plain table (a form, a budget in
+    blocks)."""
+    for i, r in enumerate(rows[:60]):
+        if i and is_numbering(r) and any(isinstance(v, str) for v in rows[i - 1]):
+            return i + 1
     for i, r in enumerate(rows[:15]):
         filled = [v for v in r if v is not None]
         if len(filled) < 2 or sum(isinstance(v, str) for v in filled) < max(2, 0.7 * len(filled)):
@@ -304,6 +378,8 @@ def header_row(rows: list[list]) -> int | None:
         below = [x for x in rows[i + 1:i + 51] if any(v is not None for v in x)]
         if not below:
             return None
+        if not _aligned({j for j, v in enumerate(r) if v is not None}, below):
+            continue
         if any(not isinstance(v, str) and v is not None for v in below[0]):
             return i + 1
         filled_cols = [j for j, v in enumerate(r) if isinstance(v, str)]
@@ -323,9 +399,50 @@ class Table:
     totals: list[tuple[int, list]]     # rows like «Итого»: not data
 
 
+def _form_table(sheet: Sheet, h: int) -> Table:
+    """A unified form: titles in up to 5 rows above the graph numbers (a title over several graphs is carried to the
+    right in the top row, as its merged cell shows it), data = the rows right below whose values sit in numbered
+    graphs; the signatures below end it."""
+    rows, width = sheet.rows, sheet.width
+    top = h - 1
+    block, k = [], top - 1
+    while k >= 0 and len(block) < 5 and any(v is not None for v in rows[k]):
+        block.insert(0, rows[k] + [None] * (width - len(rows[k])))
+        k -= 1
+    graphs = {j: int(float(v)) for j, v in enumerate(rows[top]) if v is not None}
+    carried, last = {}, None
+    for j in range(width):                    # «Начислено, руб.» over graphs 8–14: each of them is «Начислено…»
+        v = block[0][j] if block else None
+        last = v if isinstance(v, str) and v.strip() else last
+        carried[j] = last
+    names = []
+    for j in range(width):
+        if j not in graphs:
+            names.append(col_letter(j + 1))
+            continue
+        texts = [carried[j]] + [b[j] for b in block[1:]]
+        parts = [re.sub(r"(\w)- (\w)", r"\1\2", re.sub(r"\s+", " ", t)).strip() for t in texts
+                 if isinstance(t, str) and t.strip()]
+        name = " / ".join(dict.fromkeys(parts))
+        names.append(f"{name} (гр. {graphs[j]})" if name else f"гр. {graphs[j]}")
+    data, totals = [], []
+    for i in range(top + 1, len(rows)):
+        r = rows[i]
+        filled = [j for j, v in enumerate(r) if v is not None]
+        if not filled:
+            continue
+        if sum(j in graphs for j in filled) < 0.6 * len(filled):
+            break
+        r = r + [None] * (width - len(r))
+        (totals if any(isinstance(v, str) and TOTAL_RE.match(v) for v in r) else data).append((i + 1, r))
+    return Table(sheet, h, names, data, totals)
+
+
 def table_of(sheet: Sheet, header: int | None = None) -> Table:
     rows = sheet.rows
     h = header if header else header_row(rows)
+    if h and h - 1 < len(rows) and is_numbering(rows[h - 1]):
+        return _form_table(sheet, h)
     width = sheet.width
     if h:
         top = rows[h - 1] if h - 1 < len(rows) else []
@@ -360,7 +477,12 @@ def find_col(t: Table, name: str) -> int:
         hits = [j for j, n in enumerate(names) if want and test(n)]
         if hits:
             return hits[0]
-    raise ToolInputError(f"Столбца «{name}» нет. Столбцы: " + ", ".join(f"{col_letter(j + 1)} «{n}»" for j, n in enumerate(t.names)))
+    raise ToolInputError(f"Столбца «{name}» нет. Столбцы: " + titled(t))
+
+
+def titled(t: Table) -> str:
+    """The columns that have a title (a form's grid has hundreds of untitled narrow ones)."""
+    return ", ".join(f"{col_letter(j + 1)} «{n}»" for j, n in enumerate(t.names) if n != col_letter(j + 1))
 
 
 def is_num(v) -> bool:
@@ -432,8 +554,7 @@ def render(book: Book, sheet: Sheet, start: int = 1, max_rows: int = 60, formula
     lines = [f"«{book.path.name}»: " + ", ".join(f"лист «{s.name}» ({len(s.rows)} стр. × {s.width} столб.)" for s in book.sheets)
              + (f" — {book.note}" if book.note else "") + "."]
     if t.header:
-        lines.append(f"Лист «{sheet.name}»: заголовки в строке {t.header} — "
-                     + ", ".join(f"{col_letter(j + 1)} «{n}»" for j, n in enumerate(t.names)) + ".")
+        lines.append(f"Лист «{sheet.name}»: заголовки в строке {t.header} — " + titled(t) + ".")
         if t.data:
             lines.append(f"Строк с данными: {len(t.data)} (строки {t.data[0][0]}–{t.data[-1][0]}).")
         for rno, r in t.totals:
@@ -444,22 +565,34 @@ def render(book: Book, sheet: Sheet, start: int = 1, max_rows: int = 60, formula
     else:
         lines.append(f"Лист «{sheet.name}» — не простая таблица со строкой заголовков (форма или блоки); ниже ячейки как есть.")
     end = min(len(sheet.rows), start + max_rows - 1)
-    lines.append(f"Строки {start}–{end} из {len(sheet.rows)} (номер строки: ячейки A | B | …):")
+    # A form (КО-4, Т-49, a budget in blocks) or a very wide sheet: only the filled cells, each with its address —
+    # official forms sit on a grid of 80–130 narrow columns, and «AC14=…» says where to write without counting «|».
+    sparse = not t.header or sheet.width > 26
+    lines.append(f"Строки {start}–{end} из {len(sheet.rows)} " + ("(заполненные ячейки: адрес=значение):" if sparse
+                                                                else "(номер строки: ячейки A | B | …):"))
+    filled_cells = []
     for i in range(start - 1, end):
         r = sheet.rows[i]
         cells = []
         for j, v in enumerate(r, start=1):
             f = sheet.formulas.get((i + 1, j)) if formulas else None
-            cells.append(f"{f} → {fmt(v)}" if f else fmt(v))
+            shown = f"{f} → {fmt(v)}" if f else fmt(v)
+            if sparse:
+                if shown:
+                    cells.append(f"{col_letter(j)}{i + 1}={shown}")
+                    filled_cells.append([f"{col_letter(j)}{i + 1}", shown])
+            else:
+                cells.append(shown)
         if any(cells):
-            lines.append(f"{i + 1}: " + " | ".join(cells))
+            lines.append(f"{i + 1}: " + ("; ".join(cells) if sparse else " | ".join(cells)))
     if end < len(sheet.rows):
         lines.append(f"… ещё {len(sheet.rows) - end} строк (sheet_read from_row={end + 1}, или sheet_query, чтобы посчитать).")
-    preview_rows = [[fmt(v) for v in r] for _, r in t.data[:12]] if t.header else \
-        [[fmt(v) for v in r] for r in sheet.rows[start - 1:start + 11]]
+    if sparse and not t.header:
+        columns, preview_rows = ["Ячейка", "Значение"], filled_cells[:30]
+    else:
+        columns, preview_rows = t.names, [[fmt(v) for v in r] for _, r in t.data[:12]]
     card = {"title": book.path.name, "sub": f"лист «{sheet.name}»" + (f" · {len(t.data)} строк с данными" if t.header else ""),
-            "columns": t.names if t.header else [col_letter(j + 1) for j in range(sheet.width)],
-            "rows": preview_rows, "path": str(book.path)}
+            "columns": columns, "rows": preview_rows, "path": str(book.path)}
     return "\n".join(lines), card
 
 
@@ -893,6 +1026,12 @@ def _move_rows(wb, ws, at: int, n: int) -> list[str]:
         moved = _shift_cells(m, at, n, expand_end=False)
         if moved != "#REF!":
             ws.merge_cells(moved)
+    if n > 0 and at > 1:                                     # a new row of a form gets the boxes of the row above
+        for m in merged:
+            p = REF_RE.match(m.split(":")[0]), REF_RE.match(m.split(":")[-1])
+            if all(p) and int(p[0].group(4)) == int(p[1].group(4)) == at - 1:
+                for k in range(n):
+                    ws.merge_cells(f"{p[0].group(2)}{at + k}:{p[1].group(2)}{at + k}")
     for tbl in getattr(ws, "tables", {}).values():
         moved = _shift_cells(tbl.ref, at, n, expand_end=False)
         if moved != "#REF!":
@@ -918,6 +1057,18 @@ def _move_rows(wb, ws, at: int, n: int) -> list[str]:
                 for k in range(n):
                     ws.cell(at + k, j)._style = copy(src._style)
     return notes
+
+
+def box(ws, ref: str, redirect: bool = False):
+    """The cell to write for ref. Inside a merged box (forms are made of them) only its top-left cell holds a value:
+    `set` writes there; a row of values must not spill into a neighbour's box, so it is refused with the address."""
+    for m in ws.merged_cells.ranges:
+        if ref in m:
+            first = f"{col_letter(m.min_col)}{m.min_row}"
+            if ref == first or redirect:
+                return ws[first]
+            raise ToolInputError(f"{ref} внутри объединённой ячейки {m.coord} — пишите в {first} (op set с адресом)")
+    return ws[ref]
 
 
 # ------------------------------------------------------------------------------------------------ tools
@@ -1174,7 +1325,9 @@ class SheetEdit(Tool):
                          "for operations without their own «sheet». Look at the file first (sheet_read formulas=true) to "
                          "know the rows. A backup copy is kept. save_as = save the result as another file instead (needed "
                          "when the file has charts, pivot tables or pictures: they would be lost). The answer lists the "
-                         "recalculated results of the formulas."),
+                         "recalculated results of the formulas. A .xls / .ods file (most blank forms) is converted and saved as a new "
+                         ".xlsx next to it; the original stays. Forms are made of merged boxes: write into the box's "
+                         "first cell as sheet_read shows it (set cell: 'BS26')."),
             params={"type": "object", "required": ["path", "changes"], "properties": {
                 "path": {"type": "string", "maxLength": 1000},
                 "sheet": {"type": "string", "maxLength": 200},
@@ -1190,9 +1343,17 @@ class SheetEdit(Tool):
         p = resolve_target(a["path"], ctx.config)
         if not p.is_file():
             raise ToolInputError(f"Файл не найден: {_short(p)}")
-        if p.suffix.lower() not in (".xlsx", ".xlsm"):
-            raise ToolInputError("Менять на месте можно .xlsx и .xlsm. Для .xls, .ods и .csv прочитайте файл (sheet_read) "
-                                 "и создайте новый Excel-файл с изменениями (sheet_create)")
+        ext = p.suffix.lower()
+        if ext in CONVERT_EXT:
+            # .xls / .ods (most Russian blanks are .xls): LibreOffice turns it into .xlsx, the changes go into a new
+            # file next to it; the original stays as it was.
+            if not soffice():
+                raise ToolInputError("Для правки .xls и .ods нужен LibreOffice (пакет libreoffice-fresh)")
+            a["save_as"] = a.get("save_as") or next(f"{p.stem}{sfx}.xlsx" for sfx in ["", " (заполнен)", " (изменён)"] + [
+                f" ({k})" for k in range(2, 100)] if not (p.parent / f"{p.stem}{sfx}.xlsx").exists())
+        elif ext not in (".xlsx", ".xlsm"):
+            raise ToolInputError("Менять можно .xlsx, .xlsm, .xls и .ods. Для .csv прочитайте файл (sheet_read) и создайте "
+                                 "новый Excel-файл с изменениями (sheet_create)")
         a["path"] = str(p)
         if a.get("save_as"):
             q = _target(a["save_as"] if a["save_as"].startswith(("/", "~")) else str(p.parent / a["save_as"]), ctx.config)
@@ -1233,7 +1394,11 @@ class SheetEdit(Tool):
 
         def edit():
             from openpyxl import load_workbook
-            wb = load_workbook(p, keep_vba=p.suffix.lower() == ".xlsm")
+            if p.suffix.lower() in CONVERT_EXT:
+                with tempfile.TemporaryDirectory(prefix="jarvis-sheet-") as tmp:
+                    wb = load_workbook(_lo_convert(p, Path(tmp)))
+            else:
+                wb = load_workbook(p, keep_vba=p.suffix.lower() == ".xlsm")
             default = args.get("sheet")
             notes, touched = [], set()
 
@@ -1256,7 +1421,7 @@ class SheetEdit(Tool):
                 ws = ws_for(c)
                 touched.add(ws.title)
                 if op == "set":
-                    ws[c["cell"].upper()] = _cell_value(c.get("value"))
+                    box(ws, c["cell"].upper(), redirect=True).value = _cell_value(c.get("value"))
                 elif op == "rename_sheet":
                     ws.title = str(c.get("new_name"))[:31]
                 elif op == "insert_rows":
@@ -1264,14 +1429,16 @@ class SheetEdit(Tool):
                     notes += _move_rows(wb, ws, c["row"], n)
                     for k, vals in enumerate(c.get("values") or []):
                         for j, v in enumerate(vals, start=1):
-                            ws.cell(c["row"] + k, j).value = _cell_value(v)
+                            if v is not None:
+                                box(ws, f"{col_letter(j)}{c['row'] + k}").value = _cell_value(v)
                 elif op == "delete_rows":
                     notes += _move_rows(wb, ws, c["row"], -int(c.get("count") or 1))
                 elif op == "append_rows":
                     last = max((cell.row for row in ws.iter_rows() for cell in row if cell.value is not None), default=0)
                     for k, vals in enumerate(c.get("values") or [], start=1):
                         for j, v in enumerate(vals, start=1):
-                            ws.cell(last + k, j).value = _cell_value(v)
+                            if v is not None:
+                                box(ws, f"{col_letter(j)}{last + k}").value = _cell_value(v)
             wb.calculation.fullCalcOnLoad = True
             out.parent.mkdir(parents=True, exist_ok=True)
             wb.save(out)
