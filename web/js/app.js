@@ -200,6 +200,7 @@ function onEvent(ev) {
       toast(ev.meeting ? `🔴 Записываю встречу «${ev.meeting.title}»` : "Запись встречи остановлена", ev.meeting ? "warn" : "", { ttl: 6000 });
       bus.emit("core");
       break;
+    case "voice.mic": if (!ev.ok) toast(ev.text, "warn", { ttl: 30000 }); break;
     case "notice": toast(`🔔 ${ev.title}${ev.body ? ". " + ev.body : ""}`, ev.urgent ? "warn" : "", { ttl: ev.urgent ? 20000 : 10000 }); break;
     case "estop": toast(ev.active ? "Экстренная остановка включена" : "Экстренная остановка снята", ev.active ? "err" : "ok"); break;
     case "speech.stop": voice.stopSpeaking(); break;

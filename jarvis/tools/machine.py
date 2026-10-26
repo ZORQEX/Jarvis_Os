@@ -933,5 +933,98 @@ class PowerAction(Tool):
         return Verification("unverified", self.spec.verification)
 
 
+# ------------------------------------------------------------------ the microphone after sleep (voice/mic.py)
+
+MIC_BROKEN_TEXT = ("Микрофон работает неправильно: звук с него идёт в {x} раз медленнее, чем нужно (так бывает после "
+                   "сна ноутбука), поэтому я не слышу слов. Напишите «почини микрофон» — я перезапущу звуковую карту "
+                   "(система спросит пароль). Если не поможет — перезагрузите компьютер.")
+
+
+def _slower(speed: float) -> str:
+    return str(max(2, round(1 / speed))) if speed > 0 else "много"
+
+
+class MicCheck(Tool):
+    spec = ToolSpec(
+        id="mic_check", title="Проверка микрофона",
+        description="Check that the microphone delivers sound at its real speed (after the laptop sleeps the sound card "
+                    "can capture several times too slowly: JARVIS then hears nothing). Read-only, ~2 s.",
+        params={"type": "object", "properties": {}}, risk=Risk.LOW, side_effects="none", timeout_s=10,
+        verification="Скорость звука с микрофона измерена (pw-record)")
+
+    async def run(self, args, ctx):
+        from ..voice import mic
+        speed = await mic.capture_speed()
+        if speed is None:
+            raise ToolError("Нечем проверить микрофон: нет pw-record (PipeWire)")
+        if mic.broken(speed):
+            text = MIC_BROKEN_TEXT.format(x=_slower(speed))
+        elif speed < mic.OK_FROM:
+            text = f"Микрофон работает с перебоями (скорость {speed:.0%} от нужной). Напишите «почини микрофон»."
+        else:
+            text = ("Микрофон в порядке: звук идёт с обычной скоростью. Если я всё равно не слышу — проверьте, тот ли "
+                    "микрофон выбран («какие микрофоны»).")
+        return ToolResult({"speed": speed, "broken": mic.broken(speed)}, text)
+
+    async def verify(self, args, result, ctx):
+        return Verification("verified", self.spec.verification)
+
+
+class MicRepair(Tool):
+    spec = ToolSpec(
+        id="mic_repair", title="Починить микрофон",
+        description="Restart the sound card when the microphone captures too slowly (after sleep). Measures first and "
+                    "does nothing if the mic is fine; otherwise re-binds the sound driver as root via pkexec — the "
+                    "system asks the person for the password.",
+        params={"type": "object", "properties": {}}, risk=Risk.MODERATE, side_effects="local", timeout_s=150,
+        idempotent=False, verification="Скорость звука с микрофона измерена снова после перезапуска",
+        impact="Звуковая карта перезапустится: звук пропадёт на несколько секунд; система спросит пароль компьютера")
+
+    def describe(self, args):
+        return "Перезапустить звуковую карту, чтобы микрофон снова работал"
+
+    async def run(self, args, ctx):
+        from ..voice import mic
+        ctx.progress("Проверяю микрофон", None)
+        before = await mic.capture_speed()
+        if before is None:
+            raise ToolError("Нечем проверить микрофон: нет pw-record (PipeWire)")
+        if before >= mic.OK_FROM:
+            return ToolResult({"before": before, "restarted": False},
+                              "Микрофон в порядке — перезапускать звуковую карту не нужно.")
+        card = await mic.default_card()
+        found = mic.sound_card(card) if card is not None else None
+        if not found:
+            raise ToolError("Не нашёл встроенную звуковую карту микрофона. Перезагрузите компьютер — это поможет.")
+        if not _which("pkexec"):
+            raise ToolError("Нет pkexec — перезапустить звуковую карту без пароля нельзя. Перезагрузите компьютер.")
+        ctx.progress("Перезапускаю звуковую карту — введите пароль в окне системы", None)
+        r = await run_cmd(mic.restart_argv(*found), timeout=120)
+        if r.code in (126, 127):
+            raise ToolError("Пароль не введён — звуковая карта не перезапущена.")
+        if r.code != 0:
+            raise ToolError("Не удалось перезапустить звуковую карту: " + (r.stderr.strip()[:200] or f"код {r.code}"))
+        ctx.progress("Жду, пока звук вернётся", None)
+        for _ in range(30):                     # PipeWire sees the card again within a few seconds
+            await asyncio.sleep(0.5)
+            if await mic.default_card() is not None:
+                break
+        await asyncio.sleep(1.0)
+        return ToolResult({"before": before, "restarted": True, "card": found[0]},
+                          "Перезапустил звуковую карту.")
+
+    async def verify(self, args, result, ctx):
+        from ..voice import mic
+        if not result.data.get("restarted"):
+            return Verification("verified", f"Скорость звука {result.data['before']:.0%} от нужной")
+        after = await mic.capture_speed()
+        result.data["after"] = after
+        if after is not None and after >= mic.OK_FROM:
+            result.summary = "Перезапустил звуковую карту — микрофон снова работает."
+            return Verification("verified", f"Было {result.data['before']:.0%} скорости, стало {after:.0%}")
+        result.summary = "Перезапустил звуковую карту, но микрофон всё ещё не работает. Перезагрузите компьютер."
+        return Verification("failed", f"После перезапуска скорость {0 if after is None else after:.0%} от нужной")
+
+
 TOOLS = [Processes, ProcessEnd, DiskUsage, DiskCleanup, Diagnostics, Brightness, Appearance, AudioDevices, NetworkStatus,
-         PowerProfile, PowerAction]
+         PowerProfile, PowerAction, MicCheck, MicRepair]

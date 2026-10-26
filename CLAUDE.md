@@ -49,6 +49,12 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   End of a phrase: Smart Turn v3.2 (`voice/turn.py`, numpy features = Whisper's, trailing silence trimmed to 0.2 s);
   p < 0.30 → no early answer, p < 0.15 → held like a cut-off phrase (`server.unfinished`). Browser VAD is `web/js/core/vad.js` (unit-tested; clicks ≠ voice);
   barge-in = `voice.barge` (stops speech only, never the work). `tests/ui/voice-mic.mjs` feeds a WAV as the mic.
+  Broken mic after sleep (`voice/mic.py`): the sound card can capture ~6× too slowly after s2idle (2026-10-26: 0.18 of
+  real time, direct ALSA read = I/O error; every phrase came back empty). An empty transcript of ≥ 1 s → `capture_speed`
+  (pw-record, ~1.5 s; trusted 5 min when healthy) → `server.MIC_SAY` + `voice.mic` event (toast; companion card with
+  «Починить микрофон») + chat message. Tools `mic_check` (LOW) / `mic_repair` (MODERATE: pkexec re-binds the PCI sound
+  driver, one password prompt; does nothing when the mic is fine; verify measures again). Tests never record the real
+  mic (conftest fakes `capture_speed`). Parakeet does not re-hear silence (peak < −45 dBFS): it made up «Thank you.».
 - Self-improvement (`jarvis/improve.py`): `collect_issues` ranks problems from JARVIS's own records (repeats, failures,
   slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,
   then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Window:

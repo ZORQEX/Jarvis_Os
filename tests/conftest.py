@@ -57,6 +57,10 @@ def core(home, cfg, monkeypatch):
         from jarvis.tools.base import CmdResult
         return CmdResult(list(a[0]) if a else [], 0, "", "", 0.0)
     monkeypatch.setattr(scheduler, "run_cmd", no_desktop)
+    from jarvis.voice import mic                # never record the real microphone: a healthy mic unless a test says
+    async def healthy_mic(*a, **k):
+        return 1.0
+    monkeypatch.setattr(mic, "capture_speed", healthy_mic)
     c = build(Paths.detect(), cfg)
     wt = c.director.gw.registry.get("window_show")     # tests never open a real JARVIS window on the desktop
     wt.opener, wt.wait_s = (lambda: None), 0.2

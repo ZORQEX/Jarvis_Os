@@ -545,3 +545,17 @@ the fixes below; three spoken requests (`voice-mic.mjs`, Supertonic F1 as the sp
 | An English phrase while waiting for «Джарвис» | dropped: GigaAM wrote «How Mauch Free Space Is Loft On My Disk» (no name), Parakeet never ran | Latin output → Parakeet → «Jarvis, how much free space is left on my disc?» | test_a_phrase_written_in_latin…; live 11:58, 12:02 |
 | JARVIS's mark echoed | «[voice] System disk has…» | «System disk has 29.2 GB free…» | test_jarvis_marks_are_never_repeated…; live 12:02 |
 | Fast web search | — | DuckDuckGo CAPTCHA / Brave timeouts on this network today; JARVIS fell back to Claude's own search (correct answer, 26.6 s) | SearXNG `unresponsive_engines` |
+
+## The microphone after sleep (2026-10-26, user's report «показывает, что слушает, но ответа нет» on «Джарвис, привет»)
+
+Cause (measured on the real laptop, ASUS, Intel Alder Lake HDA + Realtek ALC256 digital mic): after waking from a
+9-hour sleep (10:26) the capture side ran at 8 200 samples/s instead of 48 000 (kernel hw_ptr; pw-record 0.18 of real
+time; direct `arecord -D hw:0,0` → «Input/output error»); speakers were fine. The recognisers were fine (the test phrase
+recognised at 0, −20, −34 dB). Not JARVIS's code — but JARVIS kept saying nothing useful.
+
+| Check | Before | After | Evidence |
+|---|---|---|---|
+| A phrase recorded with the broken mic | empty transcript, «Не расслышал» or nothing (wake mode) | mic measured (1.5 s) → «Микрофон работает с ошибкой — я не слышу слов. Напишите мне «почини микрофон».» + toast + companion card with a button + chat message | test_empty_phrase_with_a_broken_mic_says_how_to_fix, test_wake_listening_tells_a_broken_mic_once; dev core 8816 live 12:43 (speed 0.184) |
+| «проверь микрофон» | went to the AI | `mic_check`, no approval, 1.5 s: «…звук с него идёт в 5 раз медленнее…» | test_check_says_broken_or_fine; dev core live |
+| «почини микрофон» | — | `mic_repair`: «Разрешить» → system password → driver re-bound → measured again | tests with a fake pkexec; real repair: see below |
+| Silence in push-to-talk | Parakeet made up «Thank you.» (zeros) / «No, no» (−60 dB hiss) → a phantom request | not re-heard below −45 dBFS peak: empty | direct worker check: zeros, −70…−30 dB noise → ''; the test phrase still recognised at −34 dB |

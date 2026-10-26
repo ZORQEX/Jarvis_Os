@@ -350,6 +350,8 @@ class Server:
         return text
 
     async def _wake_turn(self, text: str, data: dict, nbytes: int, stt_start: float, stt_end: float) -> dict:
+        if not (text or "").strip() and nbytes >= MIC_CHECK_BYTES:
+            spawn(self._wake_mic_check(nbytes), "mic-check")       # nothing at all in a real stretch of sound
         text = self._wake_text(text, data)
         if text is None:
             return {"text": "", "ignored": True}
@@ -361,6 +363,38 @@ class Server:
             sp.mark(turn, "stt_start", stt_start)
             sp.mark(turn, "stt_end", stt_end)
         return await self._after_stt(text, turn, nbytes, data)
+
+    async def _mic_trouble(self, nbytes: int) -> float | None:
+        """An empty transcript of a real stretch of sound: is the microphone itself broken? After the laptop sleeps
+        the sound card can capture ~6× too slowly (measured 2026-10-26) — every phrase then comes back empty and
+        «Не расслышал» would be said forever. Returns the measured speed when broken, else None."""
+        from .voice import mic
+        if nbytes < MIC_CHECK_BYTES:
+            return None
+        now = time.time()
+        last = getattr(self, "_mic_last", None)
+        if last and not mic.broken(last[1]) and now - last[0] < MIC_OK_TTL_S:
+            return None
+        speed = await mic.capture_speed()
+        self._mic_last = (now, speed)
+        self.core.audit.write("voice.mic_check", speed=speed)
+        return speed if mic.broken(speed) else None
+
+    def _tell_mic(self, speed: float, turn: str | None = None) -> None:
+        """Say it (the speakers still work), show it in both windows, and write the fix into the conversation."""
+        from .tools.machine import MIC_BROKEN_TEXT, _slower
+        d = self.core.director
+        self._mic_told = time.time()
+        if d.speech:
+            d.speech.say("notice-" + (turn or pysecrets.token_hex(4)), MIC_SAY, turn)
+        text = MIC_BROKEN_TEXT.format(x=_slower(speed))
+        self.core.bus.publish("voice.mic", {"ok": False, "speed": speed, "text": text})
+        d.add_message(d.conversation_id(), "assistant", text, meta={"route": "notice", "kind": "mic_broken"})
+
+    async def _wake_mic_check(self, nbytes: int) -> None:
+        speed = await self._mic_trouble(nbytes)
+        if speed is not None and time.time() - getattr(self, "_mic_told", 0.0) >= MIC_TELL_EVERY_S:
+            self._tell_mic(speed)
 
     async def _voice_turn(self, data: dict) -> dict:
         """One spoken request: STT → Director (same path as typed text) → streamed speech."""
@@ -431,6 +465,9 @@ class Server:
                 sp.annotate(turn, route="echo")
             return {"text": "", "ignored": True, "turn": turn}
         if not text.strip():
+            if (speed := await self._mic_trouble(nbytes)) is not None:      # the mic itself, not the person
+                self._tell_mic(speed, turn)
+                return {"text": "", "turn": turn, "mic": "broken"}
             if sp:
                 from .voice.tts import NOT_HEARD_BY_LANG, phrase
                 sp.say("notice-" + (turn or "x"), phrase(NOT_HEARD_BY_LANG, sp.lang), turn)
@@ -1054,6 +1091,10 @@ QUIET_UI = {"voice.active", "ui.view", "fashion.state", "hub.snapshot", "coding.
 TURN_HOLD = 0.15     # Smart Turn this sure the person is not done: wait for the rest (the int8 model is jumpy near 0.5)
 TURN_VETO = 0.30     # …and below this no early answer after a short pause  # sent at every sound the always-on companion takes for speech: not worth an audit line
 FRAGMENT_TTL_S = 15.0
+MIC_CHECK_BYTES = 32044     # an empty transcript of ≥ 1 s of 16 kHz sound: measure the microphone itself (voice/mic.py)
+MIC_OK_TTL_S = 300.0        # a healthy mic is not measured again for 5 min (each check records ~2 s)
+MIC_TELL_EVERY_S = 120.0    # while listening for «Джарвис», a broken mic is said at most this often
+MIC_SAY = "Микрофон работает с ошибкой — я не слышу слов. Напишите мне «почини микрофон»."
 FRAGMENT_WAIT_S = 4.0       # a cut-off phrase with no continuation after this much quiet is done as it is
 _DANGLING = {"в", "во", "на", "и", "а", "но", "или", "что", "чтобы", "для", "к", "ко", "по", "с", "со", "у", "о", "об",
              "мне", "ему", "ей", "моей", "моему", "моим", "контакту", "сообщение", "письмо", "текст", "который", "которая",
