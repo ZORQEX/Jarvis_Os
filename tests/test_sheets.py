@@ -189,6 +189,8 @@ async def test_a_unified_form_is_a_table_under_its_graph_numbers(core, home, no_
     assert r.data["rows"] == [[195000, 169650]]
     r = await core.registry.tools["sheet_read"].run({"path": str(p), "from_row": 1, "max_rows": 60}, _ctx(core))
     assert "AA1=РАСЧЕТНО-ПЛАТЕЖНАЯ ВЕДОМОСТЬ" in r.data["text"] and "B «B»" not in r.data["text"]   # filled cells only
+    card = r.data["card"]                     # the window's card: the titled graphs only, not «B C D E…»
+    assert card["columns"][0] == "Номер по порядку (гр. 1)" and "B" not in card["columns"] and len(card["rows"]) == 3
 
 
 async def test_a_form_is_filled_box_by_box(core, home, no_lo):

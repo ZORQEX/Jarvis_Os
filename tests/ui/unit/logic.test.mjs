@@ -215,3 +215,14 @@ test("tool status follows the real connection, never assumed", () => {
   assert.equal(navBadge(tg, { connected: false, providers: { telegram: { state: "connected" } } }), "off");
   assert.equal(navBadge(byId("files"), { providers: {} }), null);
 });
+
+test("md: Claude's tables are tables, numbers right-aligned", async () => {
+  const { md } = await import("../../../web/js/render.js");
+  const h = md("Сравнение:\n\n| Поставщик | Декабрь | Март |\n|---|---|---|\n| **GPA** | 5 675 836,92 £ | 5 784 736,64 £ |\n| NS&I | 13 591 752,54 £ | 4 597 041,33 £ |\n\nИтог ниже.");
+  assert.match(h, /<table><thead><tr><th>Поставщик<\/th>/);
+  assert.equal((h.match(/<td class="num">/g) || []).length, 4);
+  assert.match(h, /<td><strong>GPA<\/strong><\/td>/);
+  assert.match(h, /NS&amp;I/);                                  // still escaped
+  assert.match(h, /<p>Итог ниже.<\/p>/);
+  assert.doesNotMatch(md("Просто | палка в тексте"), /<table>/);
+});

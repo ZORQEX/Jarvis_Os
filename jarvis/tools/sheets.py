@@ -587,10 +587,13 @@ def render(book: Book, sheet: Sheet, start: int = 1, max_rows: int = 60, formula
             lines.append(f"{i + 1}: " + ("; ".join(cells) if sparse else " | ".join(cells)))
     if end < len(sheet.rows):
         lines.append(f"… ещё {len(sheet.rows) - end} строк (sheet_read from_row={end + 1}, или sheet_query, чтобы посчитать).")
-    if sparse and not t.header:
+    if t.header and t.data:                  # only the titled columns: a form's grid has hundreds of untitled ones
+        keep = [j for j, n in enumerate(t.names) if n != col_letter(j + 1)] or list(range(len(t.names)))
+        columns, preview_rows = [t.names[j] for j in keep], [[fmt(r[j]) for j in keep] for _, r in t.data[:12]]
+    elif filled_cells:                        # a form, or an empty blank: what is written where
         columns, preview_rows = ["Ячейка", "Значение"], filled_cells[:30]
     else:
-        columns, preview_rows = t.names, [[fmt(v) for v in r] for _, r in t.data[:12]]
+        columns, preview_rows = t.names, []
     card = {"title": book.path.name, "sub": f"лист «{sheet.name}»" + (f" · {len(t.data)} строк с данными" if t.header else ""),
             "columns": columns, "rows": preview_rows, "path": str(book.path)}
     return "\n".join(lines), card

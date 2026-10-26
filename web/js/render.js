@@ -16,7 +16,16 @@ export function md(src) {
     .replace(/(^|[\s(])_([^_]+)_(?=$|[\s).,!?:;])/g, "$1<em>$2</em>")
     .replace(/(^|[\s(])\*([^*]+)\*(?=$|[\s).,!?:;])/g, "$1<em>$2</em>");
   const out = [];
-  const UL = /^\s*[-*•]\s+/, OL = /^\s*\d+[.)]\s+/, H = /^#{1,4}\s+/;
+  const UL = /^\s*[-*•]\s+/, OL = /^\s*\d+[.)]\s+/, H = /^#{1,4}\s+/, TR = /^\s*\|.*\|\s*$/;
+  const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  const NUM = /^[−-]?[£$€₸₽]?\s?\d[\d\s\u00a0]*([.,]\d+)?\s?(%|₸|₽|руб\.?|£|\$|€)?$/;
+  const table = (rows) => {               // a Markdown table from Claude («| Поставщик | Декабрь | Март |»)
+    const sep = rows.length > 1 && cells(rows[1]).every((c) => /^:?-{2,}:?$/.test(c));
+    const head = sep ? cells(rows[0]) : null, body = (sep ? rows.slice(2) : rows).map(cells);
+    const td = (c, tag) => `<${tag}${tag === "td" && NUM.test(c.replace(/\*\*/g, "")) ? ' class="num"' : ""}>${inline(c)}</${tag}>`;
+    return `<div class="md-table"><table>${head ? `<thead><tr>${head.map((c) => td(c, "th")).join("")}</tr></thead>` : ""}`
+      + `<tbody>${body.map((r) => `<tr>${r.map((c) => td(c, "td")).join("")}</tr>`).join("")}</tbody></table></div>`;
+  };
   for (const para of text.split(/\n{2,}/)) {
     // A paragraph may mix plain lines, headings and list runs: group consecutive lines of the same kind.
     let run = [], kind = null;
@@ -24,12 +33,13 @@ export function md(src) {
       if (!run.length) return;
       if (kind === "ul") out.push("<ul>" + run.map((l) => `<li>${inline(l.replace(UL, ""))}</li>`).join("") + "</ul>");
       else if (kind === "ol") out.push("<ol>" + run.map((l) => `<li>${inline(l.replace(OL, ""))}</li>`).join("") + "</ol>");
+      else if (kind === "tr") out.push(table(run));
       else out.push(`<p>${run.map(inline).join("<br>")}</p>`);
       run = [];
     };
     for (const l of para.split("\n")) {
       if (H.test(l)) { flush(); kind = null; out.push(`<p><strong>${inline(l.replace(H, ""))}</strong></p>`); continue; }
-      const k = UL.test(l) ? "ul" : OL.test(l) ? "ol" : "p";
+      const k = TR.test(l) ? "tr" : UL.test(l) ? "ul" : OL.test(l) ? "ol" : "p";
       if (k !== kind) { flush(); kind = k; }
       run.push(l);
     }
