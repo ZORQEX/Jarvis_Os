@@ -91,6 +91,11 @@ mcp__jarvis__system_install (официальные пакеты Arch; паро�
 покажи window_show settings — там кнопка «Подключить GitHub» — и скажи об этом одной фразой). Подтверждение у пользователя спрашивает сам JARVIS — не
 переспрашивай сам. Никогда не говори, что что-то сделал, отправил, записал или запланировал, если инструмент не вернул
 status "ok". Если инструмент отклонён — не обходи запрет.
+Архитектура (план, чертёж, эскиз дома → 3D-модель; стены, двери, окна, комнаты, мебель, материалы) — только
+инструменты architect_*: построить 3D по файлу плана — architect_build (путь к файлу из сообщения); вопрос модуля
+(масштаб, какая дверь) задай пользователю дословно, ответ передай в architect_answer; правка словами —
+architect_command с фразой пользователя; если не понял — architect_inspect (id элементов) и architect_edit; файлы —
+architect_export; картинка — architect_render; показать — architect_view. Не делай это через computer_task.
 Свежие факты (новости, цены, компании, поставщики, документация) — сначала mcp__jarvis__web_search: быстрый поиск
 JARVIS (секунды; источники [n] со ссылками и выдержками со страниц), отвечай по нему и ставь номера [n]. Курсы валют и
 криптовалют — market_quote, погода — weather. Встроенные WebSearch / WebFetch — только если web_search не хватило или
@@ -817,6 +822,54 @@ class ClaudeChatProvider(AIProvider):
         return GenResult(final, "claude", model, sources[:10], usage_of(usage),
                          result.get("total_cost_usd"), first, (time.perf_counter() - t0) * 1000,
                          {"tools_used": used, "grounding": "WebSearch" in used})
+
+    async def vision(self, system: str, user: str, images: list[Path], schema: dict, budget: float | None = 240.0,
+                     model: str | None = None) -> dict:
+        """One JSON object matching `schema`, made by looking at the given pictures (copied into an empty folder;
+        the only tool is Read, on that folder). For drawings (JARVIS Architect): the main model, not the fast one."""
+        if not self.configured():
+            raise ProviderFailure("unavailable", "Claude Code не установлен")
+        model = model or self.config.claude_chat_model
+        with tempfile.TemporaryDirectory(prefix="jarvis-vision-") as tmp:
+            names = []
+            for i, p in enumerate(images, 1):
+                dst = Path(tmp) / f"image{i}{Path(p).suffix.lower() or '.png'}"
+                dst.write_bytes(Path(p).read_bytes())
+                names.append(str(dst))
+            prompt = ("Изображения лежат в файлах: " + ", ".join(names) + ". Открой каждое (Read) и выполни задачу.\n\n"
+                      + user)
+            argv = ["claude", "-p", prompt, "--output-format", "json", "--no-session-persistence", "--restricted",
+                    "--strict-mcp-config", "--disable-slash-commands", "--permission-mode", "dontAsk", "--tools", "Read",
+                    "--allowedTools", "Read", "--model", model, "--json-schema", json.dumps(schema, ensure_ascii=False),
+                    "--append-system-prompt", system]
+            if self._fallbacks(model):
+                argv[argv.index("--model"):argv.index("--model")] = ["--fallback-model", self._fallbacks(model)]
+            proc = await asyncio.create_subprocess_exec(*argv, cwd=tmp, env=_clean_env(), stdin=asyncio.subprocess.DEVNULL,
+                                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                        start_new_session=True, limit=16 * 1024 * 1024)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), budget or None)
+            except (asyncio.CancelledError, asyncio.TimeoutError) as e:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+                if isinstance(e, asyncio.TimeoutError):
+                    raise ProviderFailure("network", f"Claude не разобрал чертёж за {budget:.0f} с") from None
+                raise
+        try:
+            d = json.loads(out or b"{}")
+        except ValueError:
+            raise ProviderFailure("invalid", "Claude вернул неразборчивый ответ: "
+                                  + (err or b"").decode("utf-8", "replace")[:200]) from None
+        if d.get("is_error"):
+            raise self._failure(str(d.get("result"))[:300])
+        data = d.get("structured_output")
+        if not isinstance(data, dict):
+            raise ProviderFailure("invalid", "Claude не вернул структуру чертежа")
+        self.last_structured_model = model
+        return data
 
     async def structured(self, system: str, user: str, schema: dict, budget: float | None = 15.0, **_) -> dict:
         """One JSON object matching `schema` (Claude Code --json-schema, fast model). Measured: ~3–4 s."""

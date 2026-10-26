@@ -110,6 +110,7 @@ class Director:
         self.hub = None              # CommsHub
         self.capabilities = None     # «Возможности»: OpenClaw, Hermes, the capability catalog (hub/__init__.Hub)
         self.coding = None           # Claude Code / Codex sessions on this computer (hub/coding.CodingAgents)
+        self.architect = None        # JARVIS Architect: plan → FreeCAD/OCCT → Blender (architect/service.Architect)
         self.rt: dict[str, Runtime] = {}
         self.speech_owner: dict[str, str] = {}   # task id → the window that plays its speech (default: the main one)
         self._last_finish: tuple[float, str] | None = None
@@ -232,6 +233,78 @@ class Director:
             return self._submit_batch(parts, text, cid, source, turn, speak, client)
         return self._start_task(text, cid, route, source, turn, speak, client)
 
+    # ------------------------------------------------------------------ JARVIS Architect
+    ARCH_WORDS = re.compile(r"\b(?:стен\w*|перегородк\w*|двер\w*|окн\w*|окон\w*|потол\w*|пол(?:ы|ов)?\b|этаж\w*|"
+                            r"комнат\w*|помещени\w*|крыш\w*|3\s?d|3\s?д|план\w*|чертеж\w*|модел\w*|рендер\w*|"
+                            r"визуализ\w*|диван\w*|кроват\w*|шкаф\w*|телевизор\w*|мебел\w*|кухн\w*|гостин\w*|"
+                            r"спальн\w*|ванн\w*|санузел|коридор\w*|прихож\w*|детск\w*|кабинет\w*)", re.I)
+
+    def _architect_route(self, text: str, route: rt.Route | None) -> rt.Route | None:
+        """Building commands go to JARVIS Architect without the AI: «сделай 3D по этому плану» (with the attached
+        file), answers to its question, and — while a model is open — «убери стену…», «добавь диван…», «покажи
+        сверху»… Taken only when the phrase is about the building (its words, or the «Архитектура» workspace is on
+        screen, or the model was worked on minutes ago); anything else stays with the usual routes."""
+        a = self.architect
+        if a is None or (route is not None and route.kind == "control"):
+            return None
+        from .architect import commands as acmd
+        raw = rt.strip_wake(text) or text
+        slug = a.active()
+        q = a.pending(slug) if slug else None
+        model = a.load(slug) if slug else None
+        if q and model is not None and acmd.answer(raw, q, model) is not None:
+            return rt.Route("architect", args={"mode": "answer"}, why="Ответ на вопрос по модели", level=1)
+        if acmd.is_build(raw):
+            src = self._plan_path(text)
+            return rt.Route("architect", args={"mode": "build", **({"source": src} if src else {})},
+                            why="Архитектура: 3D по плану", level=1)
+        if model is None:
+            return None
+        recent = self.view == "architect" or time.time() - a.last_activity < 20 * 60
+        specific = bool(self.ARCH_WORDS.search(raw))
+        if not (specific or recent) or (route is not None and not specific and self.view != "architect"):
+            return None
+        p = acmd.parse(raw, model, self.db.get_kv("architect_selected"))
+        if p is None or p.kind == "build":
+            return None
+        return rt.Route("architect", args={"mode": "command"}, why="Архитектура: команда модели", level=1)
+
+    def _plan_path(self, text: str) -> str | None:
+        """The plan the person means: an attached / named file (PNG, JPG, WEBP, PDF, DXF), else the newest such file
+        uploaded into «Архитектура» that has no model yet."""
+        for m in re.finditer(r"(?:^|\s|-\s)(/[^\n]+?\.(?:png|jpe?g|webp|pdf|dxf|dwg|bmp|tiff?))\b", text, re.I):
+            p = Path(m.group(1).strip())
+            if p.is_file():
+                return str(p)
+        return None
+
+    async def _run_architect(self, tid: str, cid: str, text: str, route: rt.Route) -> None:
+        a = self.architect
+        r = self.rt.get(tid)
+        spoken = bool(r and r.spoken)
+        mode = route.args.get("mode")
+        raw = rt.strip_wake(text) or text
+        meta = {"route": "architect", "level": 1, "why": route.why, "cloud": False}
+        if spoken or mode == "build" or self.view != "architect":
+            await self.execute(tid, cid, "window_show", {"view": "architect"}, "Показать модель")
+        if mode == "build":
+            args = {"source": route.args["source"]} if route.args.get("source") else {}
+            slug = a.active()
+            if not args:
+                m = a.load(slug) if slug else None
+                fresh = bool(slug) and m is None and time.time() - (a.meta(slug).get("created_at") or 0) < 3600
+                if not fresh:
+                    return self._finish(tid, cid, "Какой план? Перетащите файл (PNG, JPG, PDF или DXF) в раздел "
+                                        "«Архитектура» — он открыт — или приложите его к сообщению.", meta=meta)
+                args = {"project": slug}
+            out = await self.execute(tid, cid, "architect_build", args, route.why)
+        elif mode == "answer":
+            out = await self.execute(tid, cid, "architect_answer", {"text": raw}, route.why)
+        else:
+            out = await self.execute(tid, cid, "architect_command", {"text": raw}, route.why)
+        self._finish(tid, cid, self.outcome_text(out), meta=meta, failed=out.status in ("failed", "invalid"),
+                     result={"status": out.status, "step_id": out.step_id})
+
     def speak_typed(self) -> bool:
         """Are answers to typed requests spoken as well (Settings → Голос, on unless the person turned it off)?"""
         return bool(self.db.get_kv("speak_typed", True))
@@ -246,6 +319,9 @@ class Director:
         if self.coding is not None:
             ctx = {**ctx, "coding": True}          # «что делают агенты?» (Claude Code / Codex hooks)
         route = rt.route(text, ctx)
+        arch = self._architect_route(text, route)
+        if arch is not None:
+            return arch, arch.args.get("mode") == "answer"
         if route is None:
             route = self._skill_route(text)
         if self.comms and (route is None or route.kind not in ("control",)) and self.comms.answers_pending(text, ctx):
@@ -484,6 +560,8 @@ class Director:
                 await self._run_connect(tid, cid, route)
             elif route.kind == "fashion":
                 await self._run_fashion(tid, cid, text, route)
+            elif route.kind == "architect":
+                await self._run_architect(tid, cid, text, route)
             elif route.kind == "ui":
                 # «Перейди в задачи»: the window switches its workspace; nothing runs on the computer.
                 self.bus.publish("ui.navigate", {"view": route.args["view"]})

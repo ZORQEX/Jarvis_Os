@@ -195,9 +195,9 @@ test("groups, retry and status mapping", () => {
 test("workspace registry is complete and unique", () => {
   const ids = ALL.map((w) => w.id);
   assert.equal(new Set(ids).size, ids.length);
-  for (const id of ["chat", "errors", "history", "browser", "telegram", "whatsapp", "mail", "files", "settings"]) assert.ok(byId(id), id);
+  for (const id of ["chat", "errors", "history", "browser", "telegram", "whatsapp", "mail", "files", "settings", "architect"]) assert.ok(byId(id), id);
   for (const id of ["home", "tasks"]) assert.equal(byId(id), null, id + " was removed");
-  assert.deepEqual(WORKSPACES.map((w) => w.hotkey), ["1", "2", "3", "4", "5", "6", "7", "8", "9"]);   // Ctrl+1… in sidebar order
+  assert.deepEqual(WORKSPACES.map((w) => w.hotkey), ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]);   // Ctrl+1…9, 0 in sidebar order
   for (const w of WORKSPACES) { assert.ok(w.title && w.icon && w.context, w.id); assert.ok(Array.isArray(w.tools), w.id); }
 });
 test("tool status follows the real connection, never assumed", () => {

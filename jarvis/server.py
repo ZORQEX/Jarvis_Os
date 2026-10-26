@@ -36,7 +36,10 @@ UI_BUILD = _ui_build()
 COOKIE = "jarvis_session"
 UI_TOOLS = {"open_path", "open_url",
             # «Возможности» panel buttons: the same tools (and approval cards) as a spoken request
-            "skill_install", "skill_manage", "service_disconnect", "skill_share", "agents_stop", "agents_resume"}
+            "skill_install", "skill_manage", "service_disconnect", "skill_share", "agents_stop", "agents_resume",
+            # «Архитектура» buttons: build, answer, edit, export, render — the same tools as a spoken command
+            "architect_build", "architect_answer", "architect_command", "architect_edit", "architect_export",
+            "architect_render"}
 KEY_PROVIDERS: dict[str, str] = {}      # no API keys: the AI is Claude through the local Claude Code sign-in
 CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: data:; "
        "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; "
@@ -74,6 +77,7 @@ class Server:
         r.add_post("/api/submit", self.api_submit)
         r.add_get("/artifact", self.artifact)
         r.add_get("/static/{path:.+}", self.static)
+        r.add_get("/architect/file", self.architect_file)         # «Архитектура»: GLB / pictures of a project
         # Tool calls of the Claude conversation (jarvis/mcp_bridge.py). Own secret per run, loopback only; every call
         # still goes through the Gateway (policy, the user's approval, verification, audit).
         self.mcp_secret = pysecrets.token_urlsafe(32)
@@ -215,6 +219,8 @@ class Server:
 
     async def on_cleanup(self, app):
         self._fwd.cancel()
+        if getattr(self.core.director, "architect", None):
+            await self.core.director.architect.stop()            # FreeCAD / Blender / drawing workers
         if self.core.director.speech:
             await self.core.director.speech.engine.stop()
         if getattr(self.core.director, "stt", None):
@@ -698,6 +704,27 @@ class Server:
             raise web.HTTPNotFound()
         return web.FileResponse(p, headers={"Cache-Control": "no-cache"})
 
+    async def architect_file(self, req):
+        """A file of an architecture project for the window (the 3D model GLB, the drawing, renders). Only inside the
+        projects folder, only these types; images are sandboxed like any file content."""
+        a = getattr(self.core.director, "architect", None)
+        if a is None:
+            raise web.HTTPNotFound()
+        rel = req.query.get("p", "")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9\-]{0,60}/[A-Za-z0-9_./\-]{1,200}", rel) or ".." in rel:
+            raise web.HTTPNotFound()
+        p = (a.root / rel).resolve()
+        if not p.is_relative_to(a.root.resolve()) or not p.is_file():
+            raise web.HTTPNotFound()
+        types = {".glb": "model/gltf-binary", ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
+                 ".json": "application/json"}
+        ctype = types.get(p.suffix.lower())
+        if not ctype:
+            raise web.HTTPForbidden()
+        return web.FileResponse(p, headers={"Cache-Control": "private, max-age=3600", "Content-Type": ctype,
+                                            "X-Content-Type-Options": "nosniff",
+                                            "Content-Security-Policy": "sandbox; default-src 'none'"})
+
     async def artifact(self, req):
         cfg = self.core.config
         roots = [cfg.expand(cfg.screenshot_dir), cfg.expand(cfg.write_dir), self.core.paths.artifacts]
@@ -810,6 +837,41 @@ class Server:
             bus.publish("speech.end", {"segments": 1}, tid)
         except Exception as e:   # noqa: BLE001
             bus.publish("speech.error", {"error": f"Голос «{v['name']}»: {str(e)[:150]}"}, tid)
+
+    async def _architect(self, typ, data):
+        a = getattr(self.core.director, "architect", None)
+        if a is None:
+            raise ValueError("Архитектура выключена")
+        if typ == "architect.state":
+            slug = str(data.get("project") or "") or None
+            return a.state(slug)
+        if typ == "architect.open":
+            a.set_active(str(data.get("project") or ""))
+            return a.state()
+        if typ == "architect.select":          # what «эту стену» means in a spoken command
+            sid = str(data.get("id") or "")[:20]
+            self.core.db.set_kv("architect_selected", sid if re.fullmatch(r"[A-Z]+_\d{3,}", sid) else "")
+            return {"selected": sid}
+        if typ == "architect.upload":          # a plan dropped into the window → a new project (not built yet)
+            import tempfile
+            name = Path(str(data.get("name") or "plan.png")).name[:120]
+            ext = Path(name).suffix.lower()
+            from .architect.service import INPUTS, NOT_YET
+            if ext in NOT_YET:
+                raise ValueError(NOT_YET[ext])
+            if ext not in INPUTS:
+                raise ValueError("Подойдут PNG, JPG, WEBP, PDF или DXF")
+            raw = base64.b64decode(str(data.get("data_b64") or ""), validate=True)
+            if not raw or len(raw) > 9 * 1024 * 1024:
+                raise ValueError("Файл пустой или больше 9 МБ")
+            with tempfile.TemporaryDirectory(prefix="jarvis-plan-") as tmp:
+                f = Path(tmp) / name
+                f.write_bytes(raw)
+                slug = a.new_project(f, Path(name).stem)
+            self.core.audit.write("architect.upload", project=slug, size=len(raw), ext=ext)
+            self.core.bus.publish("architect.updated", {"project": slug, "reason": "upload"})
+            return {"project": slug, **a.state(slug)}
+        raise ValueError("Неизвестная операция")
 
     async def _comms(self, typ, data):
         return await _comms_action(self, typ, data)
@@ -970,6 +1032,8 @@ class Server:
             elif typ == "ui.view":                # the workspace the window shows («Заказы» → order phrases go there)
                 d.view = str(data.get("view") or "")[:24]
                 res = {"view": d.view}
+            elif typ.startswith("architect."):    # «Архитектура»: state, upload, selection (no AI, no tool run)
+                res = await self._architect(typ, data)
             elif typ in ("fashion.state", "fashion.start", "fashion.conversation"):     # «Заказы»
                 f = d.fashion
                 if f is None:

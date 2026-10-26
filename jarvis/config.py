@@ -147,6 +147,12 @@ class Config:
     # Coding agents on this computer (Claude Code, Codex) report what they do through their hooks; their permission
     # requests can be answered in JARVIS's window (jarvis/hub/coding.py, idea from Coucou). Silence = their own prompt.
     coding_agents_enabled: bool = True
+    # JARVIS Architect (jarvis/architect, ADR-010): 2D plan → FreeCAD BIM (OCCT) → Blender → «Архитектура».
+    # Projects live in <architect_dir> ("" = <write_dir>/Архитектура); the engines are FreeCAD, Blender (pacman) and
+    # the drawing venv ~/.local/share/jarvis/architect/.venv (scripts/install.sh).
+    architect_enabled: bool = True
+    architect_dir: str = ""
+    architect_vision_timeout_s: float = 300.0
     # Spoken/typed app names -> argv. Only these can be launched.
     apps: dict[str, list[str]] = field(default_factory=dict)
 

@@ -109,6 +109,18 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   hooks.sock` (`hub/coding.py`; hooks only after «Подключить»; permission answers opt-in, silence = terminal). Window:
   `workspaces/abilities.js`, `ui/coding-ask.js`. Tests: stand-ins `tests/hub_fakes.py` — never the real agents; dev
   cores need other `openclaw_port`/`hermes_port`. A killed core's gateway is found by its state folder (`agent_pids`).
+- JARVIS Architect (`jarvis/architect/`, ADR-010; window «Архитектура», Ctrl+0): plan (PNG/JPG/WEBP/PDF/DXF/sketch) →
+  `vision.py` (OpenCV walls/openings in `workers/cv_worker.py` + tesseract + Claude Vision over the numbered copy via
+  `ClaudeChatProvider.vision`) → structured plan (`plan.py`, schema jarvis.floorplan/1) → `validate.py` → master model
+  (`model.py`, ids WALL_001…, rooms = faces of the wall graph, edits = ops, revisions/undo) → `specs.py` hashes →
+  FreeCAD worker (Arch BIM on OCCT, checks + repair, `cad/building.FCStd`) → Blender worker (`<ID>_VIS`, procedural
+  furniture, GLB) → `web/js/architect/viewer.js` (vendored three.js 0.186.1, `web/vendor/three`). Projects in
+  <write_dir>/Архитектура/<slug>/. Workers are long-lived (`workers.py`), run with the SYSTEM Python (never the core's
+  venv: PySide6), stop after 10 idle min. Voice: `Director._architect_route` (build phrase + attached path, answers to
+  its question, commands while a model is open — `commands.py`, no AI) → `_run_architect` → architect_* tools. Tests:
+  `tests/test_architect.py` (real engines, skipped if missing; never Claude), drawings `tests/architect/make_plans.py`
+  (run with the architect venv), live window `tests/ui/architect.mjs`. Engines: pacman freecad blender; drawing venv
+  by install.sh.
 - Memory (`jarvis/memory.py`, table `memory`): «запомни, что …» / «что ты обо мне помнишь» / «забудь, что …»;
   `memory_line` goes into the state line of every AI request; the AI may save lasting facts itself (memory_save).
 - Living speech: `router.simplify` strips fillers / «можешь» / infinitives so «Мне нужно открыть папку с колледжем»

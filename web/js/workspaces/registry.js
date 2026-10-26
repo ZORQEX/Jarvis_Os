@@ -54,6 +54,14 @@ export const WORKSPACES = [
   // What went wrong, kept for fixing later (JARVIS's own records); «Исправить» = self-improvement after your «да».
   { id: "errors", title: "Ошибки", icon: "alert", hotkey: "9", context: "Что пошло не так — список для исправления", module: "errors",
     tools: [] },
+  // JARVIS Architect: a plan → parametric model (FreeCAD/OCCT) → Blender → 3D here; edited by voice or in the window.
+  { id: "architect", title: "Архитектура", icon: "plan", hotkey: "0", context: "Архитектура: план → 3D-модель (FreeCAD, Blender)", module: "architect",
+    tools: [
+      { id: "architect.build", label: "План (PNG, JPG, WEBP, PDF, DXF, эскиз) → параметрическая 3D-модель", needs: "core" },
+      { id: "architect.edit", label: "Правка голосом и в окне: стены, двери, окна, комнаты, мебель, материалы", needs: "core" },
+      { id: "architect.export", label: "Экспорт: GLB, OBJ, .blend, FreeCAD, STEP, STL, DXF", needs: "core" },
+      { id: "architect.dwg", label: "DWG", missing: "Закрытый формат Autodesk: нужен DXF или PDF" },
+    ] },
 ];
 
 /** Reachable from the palette and links, not shown in the sidebar list. */

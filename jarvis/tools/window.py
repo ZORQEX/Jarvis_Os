@@ -12,7 +12,8 @@ from .base import Risk, Tool, ToolInputError, ToolResult, ToolSpec, Verification
 VIEWS = {"chat": "Беседа", "errors": "Ошибки", "history": "История действий", "browser": "Браузер",
          "telegram": "Telegram", "whatsapp": "WhatsApp", "mail": "Почта", "files": "Файлы", "orders": "Заказы",
          "settings": "Настройки", "comms": "Сообщения: очередь и правила",
-         "abilities": "Возможности: OpenClaw, Hermes, навыки, агенты на компьютере"}
+         "abilities": "Возможности: OpenClaw, Hermes, навыки, агенты на компьютере",
+         "architect": "Архитектура: план → 3D-модель (FreeCAD, Blender)"}
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -35,7 +36,8 @@ class WindowShow(Tool):
                          "answers) with «Исправить»; files; browser; settings; chat; history; comms = message queue, rules, address book; orders = «Заказы» (fashion orders, factories, "
                          "customers, documents); abilities = «Возможности» (OpenClaw and Hermes, their skills, ClawHub, channels "
                          "connected through OpenClaw, automations, updates, and the Claude Code / Codex sessions on this "
-                         "computer)."),
+                         "computer); architect = «Архитектура» (the 2D plan, the 3D model, its rooms, walls, doors, "
+                         "furniture, exports)."),
             params={"type": "object", "required": ["view"], "properties": {
                 "view": {"type": "string", "enum": sorted(VIEWS)},
                 "connect": {"type": "boolean", "description": "telegram / whatsapp / mail: also start connecting the "

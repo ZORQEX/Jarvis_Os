@@ -155,6 +155,13 @@ def build(paths: Paths | None = None, config: Config | None = None, extra_tools:
     if director.coding:
         director.coding.notify = lambda kind, title, body="": proactive.say(kind, title, body)
         registry.tools["coding_agents"] = CodingStatus(director.coding)
+    director.architect = None
+    if getattr(config, "architect_enabled", True):       # JARVIS Architect: plan → FreeCAD/OCCT → Blender (ADR-010)
+        from .architect.service import Architect
+        from .architect.tools import tools as architect_tools
+        director.architect = Architect(config, paths, db, bus, audit, claude)
+        for t in architect_tools(director.architect, config, bus):
+            registry.tools[t.spec.id] = t
     from .history import ActionHistory
     director.history = ActionHistory(db, bus)       # lasting actions only (sites, code, files, programs, notes)
     director.github = github

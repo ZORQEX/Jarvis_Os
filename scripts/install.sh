@@ -115,6 +115,21 @@ fi
 [[ -x "$SEARX/venv/bin/granian" ]] || (uv venv -q --python 3.12 "$SEARX/venv" && uv pip install -q \
   --python "$SEARX/venv/bin/python" -r "$SEARX/src/requirements.txt" -r "$SEARX/src/requirements-server.txt")
 
+# JARVIS Architect («Архитектура», ADR-010): the drawing worker's own venv (OpenCV, pdfium, ezdxf, Pillow) — pinned;
+# FreeCAD (BIM on Open CASCADE) and Blender are system programs from the official Arch repositories (this script never
+# uses root: when they are missing it says how; JARVIS can install them itself with system_install — the password is
+# typed in the system's own window). tesseract (local OCR) is optional.
+ARCH="$HOME/.local/share/jarvis/architect"
+if [[ ! -x "$ARCH/.venv/bin/python" ]]; then
+  mkdir -p "$ARCH" && (cd "$ARCH" && uv venv -q --python 3.12 .venv && uv pip install -q --python .venv/bin/python \
+    "opencv-python-headless==4.12.0.88" "numpy<2.3" "ezdxf==1.4.2" "pypdfium2==4.30.0" "pillow==11.3.0")
+fi
+for p in freecad blender; do
+  command -v pacman >/dev/null && ! pacman -Q "$p" >/dev/null 2>&1 && \
+    echo "«Архитектура»: нет $p — установите: sudo pacman -S --needed freecad blender (или попросите JARVIS)"
+done
+command -v tesseract >/dev/null || echo "«Архитектура»: tesseract не найден — подписи на чертежах читает только Claude"
+
 # Browser control for Claude Code tasks the user allows (Microsoft Playwright MCP, pinned; uses /usr/bin/chromium).
 command -v npx >/dev/null && npx -y @playwright/mcp@0.0.83 --help >/dev/null 2>&1 || true
 

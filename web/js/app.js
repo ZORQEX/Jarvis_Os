@@ -22,6 +22,7 @@ import * as ordersWs from "./workspaces/orders.js";
 import * as abilitiesWs from "./workspaces/abilities.js";
 import * as errorsWs from "./workspaces/errors.js";
 import * as historyWs from "./workspaces/history.js";
+import * as architectWs from "./workspaces/architect.js";
 import { createCodingAsk } from "./ui/coding-ask.js";
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -231,6 +232,10 @@ function onEvent(ev) {
       codingAsk(ev.requests || []);
       views.abilities?.onEvent(ev);
       break;
+    case "architect.updated": case "architect.op": case "architect.stage": case "architect.question": case "architect.view":
+      if (ev.kind === "architect.view" && S.view !== "architect") nav("architect");
+      (ev.kind === "architect.view" || views.architect ? viewFor("architect") : null)?.onEvent(ev);
+      break;
     case "fashion.turn":                    // a request about orders, answered by the orders assistant
       if (ev.show && S.view !== "orders") nav("orders");
       viewFor("orders")?.turn(ev);
@@ -298,7 +303,7 @@ const settings = settingsWs.create({ ...ctx, onChange: () => { bus.emit("core");
   onDevToggle: () => { turnCache.clear(); $("#thread").innerHTML = ""; } });
 views.settings = settings;
 const FACTORY = { browser: browserWs.create, files: filesWs.create, orders: ordersWs.create, abilities: abilitiesWs.create,
-  errors: errorsWs.create, history: historyWs.create,
+  errors: errorsWs.create, history: historyWs.create, architect: architectWs.create,
   telegram: (c) => commWs.create(c, "telegram"), whatsapp: (c) => commWs.create(c, "whatsapp"), mail: (c) => commWs.create(c, "mail") };
 
 function viewFor(id) {

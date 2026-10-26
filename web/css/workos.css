@@ -422,3 +422,112 @@ button.conn:hover { background: var(--surface-2); }
 .coding-ask .ca-actions { display: flex; gap: 6px; align-items: center; }
 .coding-ask .ca-left { flex: 1; font-size: 12px; }
 .view-abilities .row .n svg { width: 16px; height: 16px; color: var(--text-3); }
+
+/* ------------------------------------------------------------------ «Архитектура» (JARVIS Architect) */
+.ws-arch { max-width: 1680px; gap: var(--s3); }
+.view-arch.drop .ws-arch { outline: 2px dashed var(--accent); outline-offset: -8px; border-radius: var(--r-lg); }
+.ap-proj { width: auto; min-width: 180px; max-width: 280px; }
+.ap-pipe { display: flex; align-items: stretch; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
+.ap-arrow { align-self: center; color: var(--text-3); font-size: 12px; }
+.ap-stage { flex: 1 1 0; min-width: 104px; padding: 6px 9px; border-radius: var(--r); background: var(--surface);
+  border: 1px solid var(--line); display: grid; grid-template-columns: auto 1fr; column-gap: 7px; font-size: 12px; }
+.ap-stage .n { grid-row: span 2; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface-3); color: var(--text-3); font-size: 11px; align-self: center; }
+.ap-stage .l { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-stage .s { color: var(--text-3); font-size: 11px; }
+.ap-stage[data-state="done"] .n { background: var(--ok-soft); color: var(--ok); }
+.ap-stage[data-state="running"] { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.ap-stage[data-state="running"] .n { background: var(--accent-soft); color: var(--accent); }
+.ap-stage[data-state="error"] .n { background: var(--err-soft); color: var(--err); }
+.ap-stage[data-state="error"] .s { color: var(--err); }
+.ap-stage[data-state="waiting"] .n { background: var(--warn-soft); color: var(--warn); }
+.ap-stage[data-state="waiting"] .s { color: var(--warn); }
+.ap-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); min-height: 18px; }
+.ap-q { padding: 12px 14px; border-radius: var(--r-lg); background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  display: flex; flex-direction: column; gap: 10px; }
+.ap-q-text { display: flex; gap: 8px; align-items: flex-start; color: var(--text); font-size: 14px; }
+.ap-q-text svg { width: 18px; height: 18px; flex: none; color: var(--warn); margin-top: 1px; }
+.ap-q-form { display: flex; gap: 6px; flex: 1; min-width: 240px; }
+.ap-grid { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(360px, 1.45fr) minmax(260px, 340px); gap: var(--s3); min-height: 520px; }
+.ap-grid > .panel { display: flex; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
+.ap-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ap-bar .grow { flex: 1; }
+.ap-chk { display: inline-flex; gap: 5px; align-items: center; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.ap-lv { width: auto; font-size: 12.5px; padding: 3px 8px; }
+.btn.sm { padding: 4px 10px; font-size: 12.5px; }
+.btn.danger { color: var(--err); }
+.btn.ghost { background: transparent; }
+.ap-plan { flex: 1; min-height: 420px; display: grid; place-items: center; padding: 8px; overflow: auto; }
+.ap-img { max-width: 100%; max-height: 640px; object-fit: contain; border-radius: var(--r-sm); background: #fff; }
+.ap-svg { width: 100%; height: 100%; max-height: 640px; }
+.ap-svg .ap-room { fill: color-mix(in srgb, var(--tint) 14%, transparent); stroke: none; cursor: pointer; }
+.ap-svg .ap-room.sel { fill: color-mix(in srgb, var(--accent) 28%, transparent); }
+.ap-svg .ap-wall { fill: var(--text-2); stroke: var(--text); stroke-width: 12; cursor: pointer; }
+.ap-svg .ap-wall.ext { fill: var(--text); }
+.ap-svg .ap-wall.low { fill: var(--warn); stroke: var(--warn); }
+.ap-svg .ap-wall.sel { fill: var(--accent); stroke: var(--accent); }
+.ap-svg .ap-door .gap, .ap-svg .ap-win .gap { fill: var(--surface); stroke: none; }
+.ap-svg .ap-door line, .ap-svg .ap-door path, .ap-svg .ap-win line { stroke: var(--text-2); stroke-width: 18; fill: none; }
+.ap-svg .ap-door .swing { stroke-width: 10; stroke-dasharray: 40 30; }
+.ap-svg .ap-win line { stroke: var(--accent); stroke-width: 14; }
+.ap-svg .ap-door.low line, .ap-svg .ap-win.low line, .ap-svg .ap-door.low path { stroke: var(--warn); }
+.ap-svg .ap-door.sel line, .ap-svg .ap-door.sel path, .ap-svg .ap-win.sel line { stroke: var(--accent); stroke-width: 30; }
+.ap-svg .ap-door, .ap-svg .ap-win, .ap-svg .ap-furn, .ap-svg .ap-col, .ap-svg .ap-stair { cursor: pointer; }
+.ap-svg .ap-furn rect { fill: color-mix(in srgb, var(--text-3) 18%, transparent); stroke: var(--text-3); stroke-width: 14; }
+.ap-svg .ap-furn .front { stroke: var(--text-3); stroke-width: 20; }
+.ap-svg .ap-furn.sel rect { stroke: var(--accent); fill: var(--accent-soft); }
+.ap-svg .ap-col { fill: var(--text-2); }
+.ap-svg .ap-stair polygon { fill: none; stroke: var(--text-2); stroke-width: 14; }
+.ap-svg .ap-stair line { stroke: var(--text-3); stroke-width: 8; }
+.ap-svg .ap-label text { font: 600 260px var(--font); fill: var(--text); text-anchor: middle; pointer-events: none; }
+.ap-svg .ap-label text.a { font-weight: 400; font-size: 210px; fill: var(--text-2); }
+.ap-svg .ap-dim line { stroke: var(--text-3); stroke-width: 10; }
+.ap-svg .ap-dim text { font: 220px var(--font); fill: var(--text-3); text-anchor: middle; }
+.ap-svg .ap-under { pointer-events: none; }
+.ap-view { flex: 1; position: relative; min-height: 420px; background: var(--surface-2); }
+.ap-view .av-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+.ap-hint { position: absolute; left: 10px; bottom: 8px; z-index: 1; font-size: 12px; color: var(--text-3); pointer-events: none; }
+.ap-side { padding: 10px 12px !important; overflow-y: auto !important; gap: 10px; max-height: 760px; }
+.ap-insp { padding: 10px; border-radius: var(--r); background: var(--surface-2); display: flex; flex-direction: column; gap: 6px; }
+.ap-insp-h { display: flex; align-items: center; gap: 8px; }
+.ap-form { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.ap-f { display: grid; grid-template-columns: 1fr 1.2fr; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-2); }
+.ap-f .input { padding: 4px 8px; font-size: 13px; }
+.ap-sum { font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 3px; }
+.ap-group summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text-2); padding: 4px 0; }
+.ap-rows { display: flex; flex-direction: column; gap: 2px; }
+.ap-row { display: grid; grid-template-columns: minmax(70px, auto) 1fr auto; gap: 8px; align-items: center; text-align: left;
+  padding: 5px 8px; border-radius: var(--r-sm); font-size: 12.5px; }
+.ap-row:hover { background: var(--surface-2); }
+.ap-row.sel { background: var(--accent-soft); }
+.ap-row.low .nm { color: var(--warn); }
+.ap-row .nm { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-row .tx { color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-conf { font: 11px var(--mono); color: var(--text-3); padding: 1px 6px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-soft) var(--c), transparent var(--c)); border: 1px solid var(--line-2); }
+.ap-warn { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--text-2); display: flex; flex-direction: column; gap: 3px; }
+.ap-cmd { display: flex; gap: 8px; }
+.ap-cmd .input { flex: 1; }
+.ap-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s3); }
+.ap-bottom > .panel { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.ap-h { font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+.ap-files { display: flex; flex-direction: column; gap: 2px; }
+.ap-file { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center; text-align: left; padding: 4px 6px;
+  border-radius: var(--r-sm); font-size: 12.5px; }
+.ap-file:hover { background: var(--surface-2); }
+.ap-file svg { width: 15px; height: 15px; color: var(--text-3); }
+.ap-oplist { display: flex; flex-direction: column; gap: 2px; max-height: 210px; overflow-y: auto; }
+.ap-op { display: grid; grid-template-columns: 8px auto 1fr auto; gap: 8px; align-items: center; font-size: 12.5px; padding: 3px 4px; }
+.ap-op .d { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.ap-op[data-state="done"] .d { background: var(--ok); }
+.ap-op[data-state="running"] .d { background: var(--accent); }
+.ap-op[data-state="failed"] .d { background: var(--err); }
+.ap-op[data-state="failed"] .tx { color: var(--err); }
+.ap-op .nm { color: var(--text); white-space: nowrap; }
+.ap-op .tx { color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-drop { min-height: 360px; display: grid; place-items: center; border: 1px dashed var(--line-2); }
+.ap-eng summary { cursor: pointer; font-size: 12.5px; color: var(--text-3); }
+.ap-eng-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 4px; padding-top: 6px; }
+.view-arch .muted { color: var(--text-3); font-size: 12.5px; }
+@media (max-width: 1280px) { .ap-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .ap-side { grid-column: span 2; max-height: none; } }
+@media (max-width: 860px) { .ap-grid, .ap-bottom { grid-template-columns: 1fr; } .ap-side { grid-column: auto; } .ap-arrow { display: none; } }
