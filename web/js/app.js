@@ -715,7 +715,8 @@ async function submit(text, { source = "text", stay = false } = {}) {
   if (intent.kind === "control" && intent.local === "stop_voice") voice.stopAll();
   if (!stay && S.view !== "chat") nav("chat");
   try {
-    const id = await agent.sendMessage(text, { source, speak: voice.speakReplies || voice.conversation });
+    // Typed answers are spoken by the core itself (Settings → Голос → «Озвучивать ответы и на текстовые запросы»).
+    const id = await agent.sendMessage(text, { source, speak: voice.conversation });
     if (id && stay && S.view !== "chat") {
       S.askedHere.add(id);
       // A local command can finish before this reply arrives: mark its answer now.

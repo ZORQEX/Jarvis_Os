@@ -71,3 +71,16 @@ test("while JARVIS speaks the person can still cut in", () => {
   const ev = run(new Vad(), [...frames(0.5, room), ...frames(1, (t) => speech(t) * 2, 0.5)], true);
   assert.equal(ev[0]?.[0], "start");
 });
+
+test("a quick «Джарвис» (0.3 s of voice) counts its first frames and is not taken for a noise", () => {
+  const v = new Vad();
+  // one 300 ms voiced stretch, then quiet
+  const word = (t) => room() + (t < 1.3 ? 0.12 * Math.sin(2 * Math.PI * 120 * t) : 0);
+  const list = [...frames(1, room), ...frames(0.3, word, 1), ...frames(0.7, room, 1.3)];
+  const st = { lp: 0 };
+  let at = null;
+  list.forEach((pcm) => { if (v.push(features(pcm, st)) === "start") at = v.voiceMs; });
+  assert.equal(at, 80);                                  // the frames that started the phrase are part of it
+  assert.ok(v.voiceMs >= 260 && v.voiceMs <= 320, `voiced ${v.voiceMs} ms`);   // ≥ 200: not dropped as a noise
+  assert.ok(v.dur - v.silent >= 260, `speech span ${v.dur - v.silent} ms`);    // the early check runs (≥ 300 with jitter)
+});

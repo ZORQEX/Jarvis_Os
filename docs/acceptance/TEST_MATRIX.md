@@ -559,3 +559,20 @@ recognised at 0, −20, −34 dB). Not JARVIS's code — but JARVIS kept saying 
 | «проверь / почини микрофон» | went to the AI | `mic_check`, no approval, 1.5 s: «…звук с него идёт в 5 раз медленнее… нужна перезагрузка компьютера» | test_check_says_broken_or_fine; dev core live |
 | Repair without a reboot | — | tried on the real laptop 12:51 with the user's password: pkexec re-bound `snd_hda_intel` (full codec re-probe in the kernel log) → still 0.18; no PCI reset method; the controller's own D3hot neither. Not shipped: JARVIS offers the reboot (power_action, always asks) | live 12:47 / 12:51, kernel log |
 | Silence in push-to-talk | Parakeet made up «Thank you.» (zeros) / «No, no» (−60 dB hiss) → a phantom request | not re-heard below −45 dBFS peak: empty | direct worker check: zeros, −70…−30 dB noise → ''; the test phrase still recognised at −34 dB |
+
+## «Джарвис» right after opening the laptop; every task said aloud (2026-10-26, user's request)
+«Сделай так, чтобы джарвис срабатывал на фразу «Джарвис» и начинал слушать задачу … и любую выполненную задачу
+проговаривал, независимо, сказал я это в микрофон или написал.» Live checks: dev core 8825 (own JARVIS_HOME), headless
+companion page with a Silero-recorded WAV as the microphone.
+
+| Check | Before | After | Evidence |
+|---|---|---|---|
+| Wake listening | off unless switched on (the real JARVIS had `wake_listen=false`) | on by default (Settings / companion button still turn it off) | test_settings_persist_and_are_announced; live: a fresh companion opened its mic by itself |
+| Bare «Джарвис.» | «Да?» after the full 1.3 s pause (1.6 s after the word); a quick name (220 ms voiced by the VAD) was close to the 200 ms «noise» bar | «Слушаю.» (pre-synthesized) 0.83 s after the word: the VAD counts the frames that started the phrase, the short-pause check runs from 0.3 s of speech, a bare name that sounds finished (Smart Turn ≥ 0.30; measured 0.81 / 0.51, «Джарвис, открой» 0.05) is answered at once | test_a_bare_name_that_sounds_finished…, vad.test.mjs «a quick «Джарвис»…»; live voice_turns |
+| The task after «Слушаю.» without the name | — (already worked: 20 s follow-up window) | «Который час?» → answered and spoken by the companion | live 13:21 |
+| Typed request (main window, companion, `jarvis …` in a terminal) | spoken only with Settings → «Озвучивать ответы и на текстовые запросы» (off, per browser) | spoken by default (core setting `speak_typed`, same toggle); the chat keeps its full answer style (voice style only for spoken requests: `Runtime.spoken`); phone / API stay silent | test_typed_requests_are_spoken_unless_turned_off, test_typed_answers_are_spoken…; live: «17 × 3» typed in the companion → spoken by the companion |
+| Reminder at its time | chat message only | also said aloud | test_a_reminder_is_said |
+| Only one of the two windows open | the other window's answers went silent | the open one plays them (`Server._speaker`, `/ws?client=overlay`) | test_the_open_window_speaks_when_the_other_is_closed |
+| Mic stream dies (device gone, sound server restart, sleep) | the companion showed «слушаю» and heard nothing | reopened on the next tick (track ended / no frames 3 s / digital zeros 3 s, at most every 30 s); keeps retrying while no mic | live: track stopped → reopened in 0.1 s (`voice.mic_reopened why=ended`) |
+| Lid opened after sleep | broken mic noticed only after a phrase came back empty | the companion sees the clock jump → `voice.woke` → mic measured twice (2 s + 3 s) → said at once if broken | test_waking_from_sleep_checks_the_mic_twice; live: clock moved 1 h → two checks 0.18 / 0.20 → told |
+| The real microphone today | — | **BROKEN in hardware, not fixed by a normal reboot**: after the 13:00 reboot pw-record 0.19–0.20; direct `arecord -D hw:0,0` 48 kHz: 2 s of sound took 9.9 s, 44.1 kHz: I/O error; playback 48 000 frames/s (fine). JARVIS now advises a full power-off, not a reboot; companion button «Выключить компьютер» (asks). Wake listening cannot hear anything until the mic works | measured 13:22–13:30 |

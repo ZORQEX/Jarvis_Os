@@ -85,6 +85,7 @@ class Server:
         self.app.on_shutdown.append(self.on_shutdown)
         self.app.on_cleanup.append(self.on_cleanup)
         self.sockets: set[web.WebSocketResponse] = set()
+        self._client_of: dict[web.WebSocketResponse, str] = {}     # socket → «window» / «overlay» (?client= of /ws)
         from .overlay import Overlay
         self.overlay = Overlay(core.db, core.config.port)
         self._mic: dict = {}                            # socket → its microphone is open (the main window)
@@ -375,6 +376,8 @@ class Server:
         last = getattr(self, "_mic_last", None)
         if last and not mic.broken(last[1]) and now - last[0] < MIC_OK_TTL_S:
             return None
+        if last and mic.broken(last[1]) and now - last[0] < MIC_RECHECK_S:
+            return last[1]
         speed = await mic.capture_speed()
         self._mic_last = (now, speed)
         self.core.audit.write("voice.mic_check", speed=speed)
@@ -390,6 +393,24 @@ class Server:
         text = MIC_BROKEN_TEXT.format(x=_slower(speed))
         self.core.bus.publish("voice.mic", {"ok": False, "speed": speed, "text": text})
         d.add_message(d.conversation_id(), "assistant", text, meta={"route": "notice", "kind": "mic_broken"})
+
+    async def _mic_after_sleep(self) -> None:
+        """Right after the lid opens: is the microphone still right? The sound card can come back capturing ~6× too
+        slowly (2026-10-26) — then «Джарвис» is never heard, so JARVIS says so at once instead of waiting for a phrase.
+        Measured twice a few seconds apart: the first second after waking may still be settling."""
+        if getattr(self, "_sleep_check", False):
+            return
+        self._sleep_check = True
+        try:
+            for wait in SLEEP_CHECK_WAITS:
+                await asyncio.sleep(wait)
+                self._mic_last = None                       # a healthy reading from before the sleep says nothing now
+                if await self._mic_trouble(MIC_CHECK_BYTES) is None:
+                    return
+            if time.time() - getattr(self, "_mic_told", 0.0) >= MIC_TELL_EVERY_S:
+                self._tell_mic(self._mic_last[1])
+        finally:
+            self._sleep_check = False
 
     async def _wake_mic_check(self, nbytes: int) -> None:
         speed = await self._mic_trouble(nbytes)
@@ -433,6 +454,10 @@ class Server:
         self._probes[pid] = {"text": text, "stt_start": t0, "stt_end": now_, "at": now_, "bytes": len(audio), "turn": p}
         # The words look finished, and the voice does not clearly say «I'm not done» (Smart Turn).
         complete = phrase_complete(joined) and (p is None or p >= TURN_VETO)
+        # A bare «Джарвис» that sounds finished: «Слушаю.» after the short pause, not the full one (measured: 0.8 s
+        # sooner). «Джарвис, открой…» sounds unfinished (Smart Turn 0.05 vs 0.5–0.8 for the name alone) and waits.
+        if not complete and p is not None and p >= TURN_VETO and bare_name(joined):
+            complete = True
         if data.get("wake"):          # wake listening: only a phrase for JARVIS is answered early
             complete = complete and self._wake_text(text, data) is not None
         return {"probe_id": pid, "complete": complete, "chars": len(text)}
@@ -569,13 +594,22 @@ class Server:
                                             "provider": self.core.claude.describe()})
         self.core.director._touch()
 
+    def _speaker(self, task_id: str | None) -> str | None:
+        """Which window plays a task's voice: the one that heard the request (main window = None). When that one is
+        not open, the other plays it — a typed or scheduled answer must not go silent because only the desktop
+        companion runs (it starts at login; the main window only when opened)."""
+        owner = self.core.director.speech_owner.get(task_id or "") or "window"
+        open_ = set(self._client_of.values())
+        if owner not in open_ and open_:
+            owner = "overlay" if "overlay" in open_ else "window"
+        return None if owner == "window" else owner
+
     async def _forward(self):
         q = self.core.bus.subscribe()
         while True:
             ev = await q.get()
             dead = []
-            owner = self.core.director.speech_owner.get(ev.get("task_id") or "") \
-                if str(ev.get("kind", "")).startswith("speech.") else None
+            owner = self._speaker(ev.get("task_id")) if str(ev.get("kind", "")).startswith("speech.") else None
             if owner == "overlay" and ev.get("kind") == "speech.end":
                 # «…а ещё…» without «Джарвис» counts from when JARVIS stopped talking, not from the question.
                 self._wake_until = max(self._wake_until, time.time() + 12)
@@ -648,7 +682,7 @@ class Server:
     async def api_overlay(self, req):
         """For the launcher: is the desktop companion wanted, and where did the person leave it."""
         return web.json_response({"enabled": bool(self.core.db.get_kv("overlay_enabled", True)),
-                                  "pos": self.overlay.saved(), "wake": bool(self.core.db.get_kv("wake_listen", False))})
+                                  "pos": self.overlay.saved(), "wake": wake_on(self.core.db)})
 
     async def index(self, req):
         csp = CSP
@@ -726,6 +760,7 @@ class Server:
         ws = web.WebSocketResponse(heartbeat=20, max_msg_size=12 * 1024 * 1024)
         await ws.prepare(req)
         self.sockets.add(ws)
+        self._client_of[ws] = req.query.get("client") if req.query.get("client") in CLIENTS else "window"
         await ws.send_str(json.dumps({"type": "snapshot", "data": {**self.core.director.snapshot(), "ui_build": UI_BUILD}},
                                      ensure_ascii=False, default=str))
         try:
@@ -739,6 +774,7 @@ class Server:
                 spawn(self._handle(ws, data), "ws-request")
         finally:
             self.sockets.discard(ws)
+            self._client_of.pop(ws, None)
             if self._mic.pop(ws, False) and not any(self._mic.values()):
                 self.core.bus.publish("voice.presence", {"client": "window", "listening": False})
         return ws
@@ -816,8 +852,9 @@ class Server:
                                                             if k in ("type", "id", "task_id", "profile", "op")})
         try:
             if typ == "submit":
+                client = data.get("client") if data.get("client") in CLIENTS else None    # who speaks the answer
                 res = {"task_id": await d.submit(str(data.get("text", "")), data.get("source", "text"),
-                                                 speak=bool(data.get("speak")))}
+                                                 speak=bool(data.get("speak")), client=client)}
             elif typ == "approve":
                 edited = data.get("edited")
                 res = {"approval": d.decide(data["id"], True, edited if isinstance(edited, dict) else None,
@@ -946,6 +983,15 @@ class Server:
             elif typ == "fashion.decide":         # «Подтвердить» / «Отменить» on an orders card in JARVIS's chat (a click)
                 res = await d.decide_order(str(data.get("id") or ""), bool(data.get("approve")),
                                            str(data.get("message_id") or "") or None)
+            elif typ == "voice.woke":             # the laptop woke from sleep (the companion's clock jumped)
+                self.core.audit.write("voice.woke", client=str(data.get("client", ""))[:20],
+                                      slept_s=int(data.get("slept_s") or 0))
+                spawn(self._mic_after_sleep(), "mic-after-sleep")
+                res = {}
+            elif typ == "voice.reopened":         # the companion opened its microphone anew (dead stream after sleep…)
+                self.core.audit.write("voice.mic_reopened", client=str(data.get("client", ""))[:20],
+                                      why=str(data.get("why", ""))[:20])
+                res = {}
             elif typ == "voice.presence":         # the window's mic is on/off: the desktop companion yields to it
                 if str(data.get("client", "window")) == "window":
                     self._mic[ws] = bool(data.get("listening"))
@@ -961,12 +1007,12 @@ class Server:
             elif typ in ("overlay.state", "overlay.settings"):
                 db = self.core.db
                 if typ == "overlay.settings":
-                    for k, key in (("wake", "wake_listen"), ("enabled", "overlay_enabled")):
+                    for k, key in (("wake", "wake_listen"), ("enabled", "overlay_enabled"), ("speak", "speak_typed")):
                         if k in data:
                             db.set_kv(key, bool(data[k]))
                             self.core.audit.write("overlay." + key, on=bool(data[k]))
-                res = {"wake": bool(db.get_kv("wake_listen", False)), "enabled": bool(db.get_kv("overlay_enabled", True)),
-                       "window_listening": any(self._mic.values())}
+                res = {"wake": wake_on(db), "enabled": bool(db.get_kv("overlay_enabled", True)),
+                       "speak": d.speak_typed(), "window_listening": any(self._mic.values())}
                 if typ == "overlay.settings":
                     self.core.bus.publish("overlay.settings", res)
             elif typ in ("overlay.launch", "window.open"):
@@ -1087,14 +1133,28 @@ class Server:
                 pass
 
 
-QUIET_UI = {"voice.active", "ui.view", "fashion.state", "hub.snapshot", "coding.state", "coding.ack"}
+CLIENTS = ("window", "overlay")   # the main window and the desktop companion
+
+
+def wake_on(db) -> bool:
+    """Is the desktop companion listening for «Джарвис»? On unless the person turned it off (the user asked
+    2026-10-26: open the laptop, say «Джарвис» — it listens and does the task)."""
+    return bool(db.get_kv("wake_listen", True))
+
+
+QUIET_UI = {"voice.active", "voice.woke", "voice.reopened", "ui.view", "fashion.state", "hub.snapshot", "coding.state", "coding.ack"}
 TURN_HOLD = 0.15     # Smart Turn this sure the person is not done: wait for the rest (the int8 model is jumpy near 0.5)
 TURN_VETO = 0.30     # …and below this no early answer after a short pause  # sent at every sound the always-on companion takes for speech: not worth an audit line
 FRAGMENT_TTL_S = 15.0
 MIC_CHECK_BYTES = 32044     # an empty transcript of ≥ 1 s of 16 kHz sound: measure the microphone itself (voice/mic.py)
 MIC_OK_TTL_S = 300.0        # a healthy mic is not measured again for 5 min (each check records ~2 s)
-MIC_TELL_EVERY_S = 120.0    # while listening for «Джарвис», a broken mic is said at most this often
-MIC_SAY = "Микрофон работает с ошибкой, я не слышу слов. Поможет перезагрузка компьютера."
+# While listening for «Джарвис», a broken mic is said at most this often: it may stay broken for hours, and every 2 min
+# was too often to hear while working.
+MIC_TELL_EVERY_S = 1800.0
+MIC_RECHECK_S = 60.0        # a broken reading is reused this long instead of recording again on every noise
+SLEEP_CHECK_WAITS = (2.0, 3.0)  # after waking: measure the mic, and once more before saying it is broken
+MIC_SAY = ("Микрофон работает с ошибкой, я не слышу слов. Обычная перезагрузка не помогает — выключите компьютер "
+           "полностью и включите снова.")
 FRAGMENT_WAIT_S = 4.0       # a cut-off phrase with no continuation after this much quiet is done as it is
 _DANGLING = {"в", "во", "на", "и", "а", "но", "или", "что", "чтобы", "для", "к", "ко", "по", "с", "со", "у", "о", "об",
              "мне", "ему", "ей", "моей", "моему", "моим", "контакту", "сообщение", "письмо", "текст", "который", "которая",
@@ -1141,6 +1201,13 @@ def unfinished(text: str, p: float | None) -> bool:
 
 
 _SEND_VERB = re.compile(r"^(джарвис[\s,]*)?(отправь|напиши|пошли|скажи|сообщи|передай|черкни|ответь)\b", re.I)
+
+
+def bare_name(text: str) -> bool:
+    """Only «Джарвис» (or «Эй, Джарвис»), nothing after it."""
+    from .router import strip_wake, wake_len
+    t = (text or "").strip()
+    return bool(wake_len(t)) and not re.search(r"\w", strip_wake(t))
 
 
 def phrase_complete(text: str) -> bool:

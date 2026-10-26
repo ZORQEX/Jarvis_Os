@@ -462,7 +462,7 @@ async def test_trust_rule_skips_confirmation_until_revoked(core, hub):
 async def test_wake_word_alone_answers_yes(core, hub):
     t = await core.director.submit("Джарвис.", "voice")
     await wait_done(core, t)
-    assert last_text(core) == "Да?"
+    assert last_text(core) == "Слушаю."
 
 
 async def test_new_command_replaces_an_unanswered_question(core, hub):

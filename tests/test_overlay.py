@@ -41,9 +41,12 @@ async def test_overlay_page_and_token(ws_client):
 
 async def test_settings_persist_and_are_announced(ws_client, core):
     tc = ws_client
-    assert (await request(tc, "overlay.state", 1))["data"] == {"wake": False, "enabled": True, "window_listening": False}
-    m = await request(tc, "overlay.settings", 2, wake=True)
-    assert m["data"]["wake"] is True and core.db.get_kv("wake_listen") is True
+    # «Джарвис» is heard and typed answers are spoken unless the person turned it off (the user's request 2026-10-26)
+    assert (await request(tc, "overlay.state", 1))["data"] == {"wake": True, "enabled": True, "speak": True,
+                                                               "window_listening": False}
+    m = await request(tc, "overlay.settings", 2, wake=False, speak=False)
+    assert m["data"]["wake"] is False and core.db.get_kv("wake_listen") is False
+    assert m["data"]["speak"] is False and core.director.speak_typed() is False
 
 
 class FakeSTT:
@@ -90,19 +93,40 @@ async def test_wake_window_closes(ws_client, core):
     assert m["data"]["ignored"]
 
 
-async def test_speech_of_the_companion_is_marked(ws_client, core):
-    tc = ws_client
-    tc.srv._speech_owner["t_x"] = "overlay"
-    core.bus.publish("speech.audio", {"seq": 1, "audio_b64": ""}, "t_x")
-    core.bus.publish("speech.audio", {"seq": 1, "audio_b64": ""}, "t_y")
+async def speech_owners(core, ws, tasks):
+    for t in tasks:
+        core.bus.publish("speech.audio", {"seq": 1, "audio_b64": ""}, t)
     owners = {}
     for _ in range(40):
-        m = json.loads((await tc.ws.receive(timeout=5)).data)
+        m = json.loads((await ws.receive(timeout=5)).data)
         if m.get("kind") == "speech.audio":
             owners[m["task_id"]] = m.get("owner")
-        if len(owners) == 2:
-            break
-    assert owners == {"t_x": "overlay", "t_y": None}
+        if len(owners) == len(tasks):
+            return owners
+    raise AssertionError(owners)
+
+
+async def test_speech_of_the_companion_is_marked(ws_client, core):
+    tc = ws_client
+    ov = await tc.ws_connect("/ws?client=overlay", headers={**tc.hdr, "Origin": f"http://{tc.hdr['Host']}"})
+    await ov.receive()
+    tc.srv._speech_owner["t_x"] = "overlay"
+    assert await speech_owners(core, tc.ws, ["t_x", "t_y"]) == {"t_x": "overlay", "t_y": None}
+    await ov.close()
+
+
+async def test_the_open_window_speaks_when_the_other_is_closed(ws_client, core):
+    """Only the main window open: it plays the companion's answers too. Only the companion open: it plays the main
+    window's (typed, scheduled) answers — no answer goes silent."""
+    tc = ws_client
+    tc.srv._speech_owner["t_x"] = "overlay"
+    assert await speech_owners(core, tc.ws, ["t_x", "t_y"]) == {"t_x": None, "t_y": None}
+    await tc.ws.close()
+    ov = await tc.ws_connect("/ws?client=overlay", headers={**tc.hdr, "Origin": f"http://{tc.hdr['Host']}"})
+    await ov.receive()
+    await wait_for(lambda: set(tc.srv._client_of.values()) == {"overlay"})
+    assert await speech_owners(core, ov, ["t_x", "t_y"]) == {"t_x": "overlay", "t_y": "overlay"}
+    await ov.close()
 
 
 async def test_wake_word_in_the_middle_of_a_recording(ws_client, core):

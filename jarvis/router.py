@@ -67,6 +67,9 @@ _FIRST_WORD = re.compile(r"^\s*(?:(?:hey|эй|хэй|хей|ok|окей)[\s,]+)?
 _GLUED = re.compile(r"^(?:джарв|джерв|жарв|чарв)[а-я]{0,3}?(да|нет)$")
 
 
+WAKE_REPLY = "Слушаю."       # to a bare «Джарвис» (pre-synthesized: voice/tts.CANNED)
+
+
 def wake_len(text: str) -> int:
     """Length of the «Джарвис, » at the start of text, or 0. Besides the known spellings, a first word within two letters
     of «джарвис» counts: through the laptop's speakers and mic the local recogniser heard «Джарвес» (measured 2026-10-23)."""
@@ -446,10 +449,10 @@ def _route(text: str, ctx: dict | None = None) -> Route | None:
     raw = strip_wake(text)
     t = norm(text)
     if not t:
-        # "Джарвис." alone → "Да?"
+        # «Джарвис.» alone → «Слушаю.»: the task follows in the next phrase (no name needed for 20 s, server._wake_until)
         if not wake_len(text):
             return None
-        return Route("answer", reply="Yes?" if re.match(r"\s*(?:hey\s+|ok\s+)?[a-z]", text, re.I) else "Да?",
+        return Route("answer", reply="Yes?" if re.match(r"\s*(?:hey\s+|ok\s+)?[a-z]", text, re.I) else WAKE_REPLY,
                      why="Обращение по имени")
 
     # --- control -----------------------------------------------------------

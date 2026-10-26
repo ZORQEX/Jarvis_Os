@@ -48,7 +48,7 @@ function renderSettings() {
       <div class="field"><span style="font-size:13.5px">Скорость речи:</span>
         <input type="range" id="rateRange" min="0.8" max="1.3" step="0.05" style="flex:1;min-width:160px">
         <span class="faint" id="rateVal"></span></div>
-      <label class="toggle"><input type="checkbox" id="speakToggle" ${ctx.voice.speakReplies ? "checked" : ""}> Озвучивать ответы и на текстовые запросы</label>
+      <label class="toggle"><input type="checkbox" id="speakToggle" checked> Озвучивать ответы и на текстовые запросы</label>
       <label class="toggle"><input type="checkbox" id="muteToggle" ${ctx.voice.muted ? "checked" : ""}> Выключить микрофон</label>
       <div class="field"><span style="font-size:13.5px">Пауза, после которой фраза считается законченной:</span>
         <input type="range" id="silenceRange" min="600" max="3000" step="100" value="${ctx.voice.silenceMs}" style="flex:1;min-width:160px">
@@ -126,6 +126,11 @@ function renderSettings() {
     </div>
   </div>`;
   ctx.link.request("overlay.state").then((st) => {
+    const sp = $("#speakToggle", el);
+    if (sp) {                                  // a core setting: the companion and the main window speak alike
+      sp.checked = st.speak !== false;
+      sp.onchange = () => ctx.link.request("overlay.settings", { speak: sp.checked }).catch((er) => { ctx.toast(er.message, "err"); sp.checked = !sp.checked; });
+    }
     const w = $("#ovWakeT", el), au = $("#ovAuto", el);
     if (!w) return;
     w.checked = !!st.wake; au.checked = st.enabled !== false;
@@ -159,7 +164,6 @@ function renderSettings() {
     else { delete document.documentElement.dataset.theme; localStorage.removeItem("jarvis.theme"); }
     renderSettings();
   }));
-  $("#speakToggle", el).addEventListener("change", (e) => { ctx.voice.speakReplies = e.target.checked; localStorage.setItem("jarvis.speak", e.target.checked ? "1" : "0"); });
   $("#muteToggle", el).addEventListener("change", (e) => { ctx.voice.setMuted(e.target.checked); ctx.onChange(); });
   $("#silenceRange", el).addEventListener("input", (e) => {
     ctx.voice.silenceMs = +e.target.value; localStorage.setItem("jarvis.silenceMs2", String(ctx.voice.silenceMs));

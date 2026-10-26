@@ -316,9 +316,9 @@ class Agency:
                                                for s in d.steps) and not self._is_plain_chat(d))
 
         r = director.rt.get(tid)
-        if r and r.voice and director.speech and self._is_long(d):
+        if r and r.spoken and director.speech and self._is_long(d):
             director.speech.ack(tid)          # local, pre-synthesized: no extra AI call
-        elif r and r.voice and director.speech:
+        elif r and r.spoken and director.speech:
             # A slow answer (Claude thinking, a web search, a tool call): after THINK_SAY_S of silence JARVIS says it is
             # thinking («Секунду, думаю.»), so the person is never left wondering (asked for 2026-10-25). Most spoken
             # answers start within ~2 s and get no extra phrase; ack() does nothing once the answer has started.
@@ -381,7 +381,7 @@ class Agency:
         this turn. The module stores the proposal at the end; the owner confirms on the card."""
         from ..providers.base import Cap as C
         r = director.rt.get(tid)
-        voice = bool(r and r.voice)
+        voice = bool(r and r.spoken)
         pid, why, _ = choose(self.mgr, C.GENERAL, "CONFIDENTIAL", director.privacy_profile())
         if not pid:
             return await self._orders_by_rules(director, tid, cid, route, voice, why)
@@ -586,7 +586,7 @@ class Agency:
         director.tasks.update_step(sid, state="running", started_at=now(),
                                    title=f"{p.display_name} · ответ и действия через инструменты JARVIS")
         r = director.rt.get(tid)
-        voice = bool(r and r.voice)
+        voice = bool(r and r.spoken)
         hist, summary = compact_history([m for m in director.messages(cid, 40)
                                          if m["task_id"] != tid and m["role"] in ("user", "assistant")])
         system = (VOICE_SYSTEM if voice else CHAT_SYSTEM) + (f"\n\nРанее в этом разговоре: {summary}" if summary else "")

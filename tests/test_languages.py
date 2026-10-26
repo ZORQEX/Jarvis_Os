@@ -90,7 +90,7 @@ async def test_english_question_gets_english_thinking_phrase_and_voice(core, mon
 
 def test_bare_wake_word_is_answered_in_its_language():
     from jarvis.router import route
-    assert route("Jarvis.").reply == "Yes?" and route("Джарвис.").reply == "Да?"
+    assert route("Jarvis.").reply == "Yes?" and route("Джарвис.").reply == "Слушаю."
 
 
 def test_russian_words_shared_with_ukrainian_stay_russian():

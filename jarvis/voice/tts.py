@@ -49,7 +49,7 @@ NOT_HEARD_BY_LANG = {"ru": "Не расслышал. Повтори, пожал�
                      "pt": "Não entendi."}
 NOT_HEARD = NOT_HEARD_BY_LANG["ru"]
 FAILED = "Не удалось получить ответ. Попробуйте ещё раз чуть позже."
-CANNED = ACKS + THINKING + [NOT_HEARD, FAILED]
+CANNED = ACKS + THINKING + [NOT_HEARD, FAILED, "Слушаю."]      # «Слушаю.» = router.WAKE_REPLY
 CANNED_EN = ACKS_BY_LANG["en"] + THINKING_BY_LANG["en"] + [NOT_HEARD_BY_LANG["en"]]
 
 

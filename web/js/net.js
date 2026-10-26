@@ -1,6 +1,7 @@
 // WebSocket link to the local core with request/response and auto-reconnect.
 export class Link {
-  constructor({ onSnapshot, onEvent, onStatus }) {
+  constructor({ onSnapshot, onEvent, onStatus, client = null }) {
+    this.client = client;         // «overlay»: the core knows which window is open (it plays the voice of the other)
     this.onSnapshot = onSnapshot;
     this.onEvent = onEvent;
     this.onStatus = onStatus;
@@ -11,7 +12,7 @@ export class Link {
   }
 
   connect() {
-    const ws = new WebSocket(`ws://${location.host}/ws`);
+    const ws = new WebSocket(`ws://${location.host}/ws${this.client ? `?client=${this.client}` : ""}`);
     this.ws = ws;
     ws.onopen = () => { this.backoff = 500; this.onStatus(true); };
     ws.onmessage = (e) => {

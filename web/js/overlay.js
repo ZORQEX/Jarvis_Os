@@ -43,6 +43,7 @@ const link = new Link({
   },
   onEvent: (ev) => onEvent(ev),
   onStatus: (ok) => { S.connected = ok; render(); },
+  client: "overlay",
 });
 const voice = new Voice({
   link, wake: true, client: "overlay",
@@ -105,7 +106,7 @@ function onEvent(ev) {
     }
     case "core.state": S.core = ev; break;
     case "wake.heard": expand("wake"); break;
-    case "voice.mic":                          // the mic itself is broken (slow capture after sleep): a reboot helps
+    case "voice.mic":                          // the mic itself is broken (slow capture): a full power-off may help
       if (!ev.ok) { S.lastReply = { text: ev.text, at: Date.now(), fix: "mic" }; expand("reply"); }
       break;
     case "voice.presence":                     // the main window took the mic: pause, then listen again
@@ -215,7 +216,7 @@ $("#ovAsk").addEventListener("submit", async (e) => {
   const a = state();
   if (!text) { if (a.canStop) stop(a); return; }
   input.value = ""; renderGo();
-  try { const r = await link.request("submit", { text, source: "text" }, 15000); if (r?.task_id) S.own.add(r.task_id); }
+  try { const r = await link.request("submit", { text, source: "text", client: "overlay" }, 15000); if (r?.task_id) S.own.add(r.task_id); }
   catch (er) { S.error = er.message; render(); }
 });
 async function stop(a) {
@@ -242,8 +243,8 @@ $("#ovMainBody").addEventListener("click", async (e) => {
     if (b.dataset.o === "stop") await stop(a);
     if (b.dataset.o === "main") await link.request("window.open");
     if (b.dataset.o === "estop_clear") await link.request("estop_clear");
-    if (b.dataset.o === "mic") {                // a reboot: power_action always asks before it
-      const r = await link.request("submit", { text: "Перезагрузи компьютер", source: "text" }, 15000);
+    if (b.dataset.o === "mic") {                // a full power-off (a reboot did not help): power_action always asks
+      const r = await link.request("submit", { text: "Выключи компьютер", source: "text", client: "overlay" }, 15000);
       if (r?.task_id) S.own.add(r.task_id);
     }
   } catch (er) { S.error = er.message; }
@@ -275,7 +276,7 @@ function body(a) {
   const r = S.lastReply;
   if (r && Date.now() - r.at < 10 * 60000) {
     return `<div class="reply">${md(r.text.length > 1200 ? r.text.slice(0, 1200) + "…" : r.text)}</div>
-      <div class="row-btns">${r.fix === "mic" ? `<button class="btn warn" data-o="mic">${ICON.refresh} Перезагрузить компьютер</button>` : ""}
+      <div class="row-btns">${r.fix === "mic" ? `<button class="btn warn" data-o="mic">${ICON.refresh} Выключить компьютер</button>` : ""}
       <button class="btn ghost" data-o="main">Открыть в JARVIS</button></div>`;
   }
   return `<div class="hint">${S.wake ? "Слушаю: начните фразу со слова «Джарвис»." : "Спросите здесь или включите микрофон — тогда достаточно сказать «Джарвис, …»."}

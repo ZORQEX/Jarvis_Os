@@ -57,7 +57,7 @@ async def test_check_says_broken_or_fine(monkeypatch, cfg):
     ctx = ToolContext(config=cfg, task_id="t")
     monkeypatch.setattr(mic, "capture_speed", _speed(0.18))
     r = await machine.MicCheck().run({}, ctx)
-    assert r.data["broken"] and "в 6 раз медленнее" in r.summary and "перезагрузи компьютер" in r.summary
+    assert r.data["broken"] and "в 6 раз медленнее" in r.summary and "выключи компьютер" in r.summary
     monkeypatch.setattr(mic, "capture_speed", _speed(1.0))
     r = await machine.MicCheck().run({}, ctx)
     assert not r.data["broken"] and "в порядке" in r.summary
@@ -99,7 +99,7 @@ async def test_empty_phrase_with_a_broken_mic_says_what_helps(core, monkeypatch)
     r = await srv._voice_turn({"audio_b64": LONG_WAV, "mime": "audio/wav"})
     assert r["mic"] == "broken" and said == [MIC_SAY]
     msgs = core.director.messages(core.director.conversation_id())
-    assert "перезагрузка компьютера" in msgs[-1]["text"] and msgs[-1]["role"] == "assistant"
+    assert "выключите компьютер полностью" in msgs[-1]["text"] and msgs[-1]["role"] == "assistant"
     kinds = []
     while not q.empty():
         kinds.append(q.get_nowait().get("kind"))

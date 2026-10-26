@@ -19,6 +19,9 @@ from .tasks import S, TERMINAL, IllegalTransition, TaskStore
 from .tools.base import Risk, Tool, ToolResult, ToolSpec, Verification
 
 COMPLETED_FLASH_S = 2.5
+# Typed requests are answered aloud too (the user asked 2026-10-26: «любую задачу выполненную проговаривал, независимо
+# сказал я это в микрофон или написал»). Off in Settings → Голос. The phone and the bearer API stay silent.
+SPEAK_SOURCES = ("text", "cli")
 UI_READ_TOOLS = ("folder_list", "search_files", "read_file")   # read-only tools a workspace may call directly
 CONNECT_VIEW = {"telegram": "telegram", "whatsapp": "whatsapp", "email": "mail"}
 CONNECT_SAY = {"telegram": "телеграм", "whatsapp": "ватсап", "email": "почту"}
@@ -56,7 +59,8 @@ class Runtime:
     gate: asyncio.Event = field(default_factory=lambda: _set_event())
     thinking: bool = False
     message_id: str | None = None
-    voice: bool = False          # answer is spoken (voice turn or "speak replies")
+    voice: bool = False          # the answer is spoken (a voice turn, or a typed one — Settings, on by default)
+    spoken: bool = False         # the request itself was said: short spoken-style answers, «Секунду», asks aloud
     turn: str | None = None      # voice telemetry id
     children: set = field(default_factory=set)   # actions the conversation started through tools (stopped with the task)
     client: str | None = None    # the window that heard the request («overlay»: the desktop companion speaks the answer)
@@ -171,6 +175,8 @@ class Director:
         if not text:
             raise ValueError("empty")
         text = text[:8000]
+        if source in SPEAK_SOURCES and self.speak_typed():
+            speak = True
         cid = self.conversation_id()
         # "Да" / "Нет" to the message JARVIS just asked to confirm (voice or typed in the window; never via the API).
         if self.comms and source in ("voice", "text"):
@@ -193,7 +199,7 @@ class Director:
                     self.speech.annotate(turn, route="approval", transcript=text, task_id=pend[0]["task_id"])
                 r = self.rt.get(pend[0]["task_id"])
                 if r and source == "voice":
-                    r.voice, r.turn = True, turn or r.turn
+                    r.voice, r.spoken, r.turn = True, True, turn or r.turn
                 self.audit.write("approval.by_" + source, approval_id=pend[0]["id"], approve=yn)
                 self.decide(pend[0]["id"], yn)
                 return pend[0]["task_id"]
@@ -226,6 +232,10 @@ class Director:
             return self._submit_batch(parts, text, cid, source, turn, speak, client)
         return self._start_task(text, cid, route, source, turn, speak, client)
 
+    def speak_typed(self) -> bool:
+        """Are answers to typed requests spoken as well (Settings → Голос, on unless the person turned it off)?"""
+        return bool(self.db.get_kv("speak_typed", True))
+
     def _route_for(self, text: str, cid: str) -> tuple[rt.Route | None, bool]:
         """The route for a request, and whether it answers a question JARVIS asked («Кому отправить?»)."""
         ctx = self.ctx(cid)
@@ -250,7 +260,8 @@ class Director:
         if batch:
             meta["batch"] = [len(batch["tasks"]) + 1, len(batch["parts"])]
         self.add_message(cid, "user", text, tid, meta=meta)
-        runtime = Runtime(voice=source == "voice" or speak, turn=turn, client=client, batch=batch)
+        runtime = Runtime(voice=source == "voice" or speak, spoken=source == "voice", turn=turn, client=client,
+                          batch=batch)
         self.rt[tid] = runtime
         if batch:
             batch["tasks"].append(tid)
@@ -314,7 +325,7 @@ class Director:
         answer; a change waits for «Подтвердить» on the card in JARVIS's chat; for a spoken request the workspace
         is shown so the figures are seen."""
         r = self.rt.get(tid)
-        voice = bool(r and r.voice)
+        voice = bool(r and r.spoken)
         loop = asyncio.get_running_loop()
         ack = loop.call_later(1.5, self.speech.ack, tid) if voice and self.speech else None
         try:
@@ -914,7 +925,7 @@ class Director:
             return
         a = ev["approval"]
         r = self.rt.get(a["task_id"])
-        if not r or not r.voice or a["tool_id"] in ("message_send", "cloud_send"):
+        if not r or not r.spoken or a["tool_id"] in ("message_send", "cloud_send"):
             return
         how = "Разрешить?" if self.voice_approvable(a["tool_id"]) else "Подтвердите кнопкой на экране."
         self.speech.speak_now(a["task_id"], f"Нужно разрешение: {spoken_action(a)}. {how}", r.turn)
@@ -980,6 +991,8 @@ class Director:
         text = (f"⏰ Пропущенное напоминание (было на {fmt_time(r['due_at'])}): {r['text']}" if late
                 else f"⏰ Напоминание: {r['text']}")
         self.add_message(cid, "assistant", text, meta={"route": "reminder", "reminder_id": r["id"]})
+        if self.speech and not late and self.speak_typed():
+            self.speech.say(f"notice-reminder-{r['id']}", f"Напоминание: {r['text']}")
 
     # ------------------------------------------------------------------ state
     def privacy_profile(self) -> str:

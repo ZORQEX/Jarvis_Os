@@ -164,13 +164,21 @@ async def test_long_answers_are_capped_in_speech(core, speech):
     assert sum(len(c) for c in speech.engine.calls[:-1]) <= 1300
 
 
-async def test_typed_requests_are_not_spoken_unless_asked(core, speech):
-    g = ScriptedClaude(core.config, [["Ответ."], ["Ответ два."]])
+async def test_typed_requests_are_spoken_unless_turned_off(core, speech):
+    """The user asked 2026-10-26: every finished task is said aloud, spoken or typed. A typed request still gets the
+    chat's full answer (tables, lists) — only the spoken copy is short."""
+    g = ScriptedClaude(core.config, [["Ответ."], ["Ответ два."], ["Ответ три."]])
     install(core, claude=g)
     await wait_done(core, await core.director.submit("Что такое API?"))
-    assert not speech.engine.calls
-    await wait_done(core, await core.director.submit("Что такое REST?", speak=True))
     await wait_for(lambda: speech.engine.calls)
+    from jarvis.agency.agency import VOICE_SYSTEM
+    assert g.calls and not g.calls[0]["system"].startswith(VOICE_SYSTEM)       # typed: the chat's answer, not voice style
+    core.db.set_kv("speak_typed", False)
+    n = len(speech.engine.calls)
+    await wait_done(core, await core.director.submit("Что такое RPC?"))
+    assert len(speech.engine.calls) == n
+    await wait_done(core, await core.director.submit("Что такое REST?", speak=True))       # asked for this one
+    await wait_for(lambda: len(speech.engine.calls) > n)
 
 
 async def test_follow_up_keeps_recent_context(core, speech):

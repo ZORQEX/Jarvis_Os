@@ -22,7 +22,6 @@ export class Voice {
     this.onError = onError;
     this.onTurn = onTurn || (() => {});
     this.muted = localStorage.getItem("jarvis.micMuted") === "1";
-    this.speakReplies = localStorage.getItem("jarvis.speak") === "1";
     // Pause that ends a phrase. 0.65 s cut the user off mid-command («Отправь» / «в Телеграме» / …): now 1.3 s.
     this.silenceMs = +(localStorage.getItem("jarvis.silenceMs2") || 1300);
     // Early end of phrase: after this pause the phrase is recognised already; a clearly finished one is answered
@@ -84,12 +83,58 @@ export class Voice {
     await this.ctx.audioWorklet.addModule("/static/js/vad-worklet.js");
     const src = this.ctx.createMediaStreamSource(this.stream);
     this.node = new AudioWorkletNode(this.ctx, "vad-frames");
-    this.node.port.onmessage = (e) => { if (e.data.batch) for (const f of e.data.batch) { if (this.node) this.frame(f); } else this.frame(e.data); };
+    this.node.port.onmessage = (e) => {
+      this.lastFrameAt = now();
+      // A live microphone always hears a little noise; exact digital silence means the stream delivers nothing.
+      if (e.data.batch?.every((f) => f.rms === 0)) this.zeroSince ||= now(); else this.zeroSince = 0;
+      if (e.data.batch) for (const f of e.data.batch) { if (this.node) this.frame(f); } else this.frame(e.data);
+    };
     src.connect(this.node);
     this.resetVad();
-    this.idleSince = now();
+    this.idleSince = this.lastFrameAt = now();
+    this.zeroSince = 0;
+    const track = this.stream.getAudioTracks()[0];
+    if (track) track.onended = () => this.revive("ended");      // the device went away (unplugged, sound server restart)
+    this.watch();
     this.set("listening");
     return true;
+  }
+
+  // ---------------------------------------------------------------- an always-open mic stays alive
+  // The laptop lid closes and opens: the person says «Джарвис» right away and must be heard. After sleep the browser's
+  // stream can stay open but deliver nothing (or end); a stream that sends no sound for 3 s is opened anew. Sleep itself
+  // is seen as a jump of the wall clock between two ticks (timers do not run while the computer sleeps).
+  // Measured 2026-10-26: a stopped track keeps sending frames (all zeros), so the track's state is checked too.
+  watch() {
+    if (this.watchTimer) return;
+    this.lastTick = Date.now();
+    this.watchTimer = setInterval(() => {
+      const gap = Date.now() - this.lastTick;
+      this.lastTick = Date.now();
+      if (!this.conversation) return;
+      if (gap > 5000 && this.wake) this.link.request("voice.woke", { client: this.client, slept_s: Math.round(gap / 1000) }).catch(() => {});
+      if (!this.stream) { if (!this.muted && !this.reviving) this.revive("closed"); return; }
+      if (this.ctx?.state === "suspended") this.ctx.resume().catch(() => {});
+      const track = this.stream.getAudioTracks()[0];
+      if (!track || track.readyState === "ended") this.revive("ended");
+      else if (now() - this.lastFrameAt > 3000) this.revive("silent");
+      // all zeros (e.g. a hardware mute key) is reopened at most every 30 s: a muted mic must not be reopened in a loop
+      else if (this.zeroSince && now() - this.zeroSince > 3000 && now() - (this.revivedAt || 0) > 30000) this.revive("zeros");
+    }, 1000);
+  }
+
+  async revive(why) {
+    if (this.reviving || !this.conversation || this.muted) return;
+    this.reviving = true;
+    this.revivedAt = now();
+    try {
+      this.closeMic();
+      for (let i = 0; this.conversation && !this.stream; i++) {
+        if (await this.openMic()) break;
+        await new Promise((r) => setTimeout(r, Math.min(3000 * (i + 1), 15000)));   // the sound server may still be waking up
+      }
+      if (this.stream) this.link.request("voice.reopened", { client: this.client, why }).catch(() => {});
+    } finally { this.reviving = false; }
   }
 
   closeMic() {
@@ -101,6 +146,7 @@ export class Voice {
     this.ctx?.close(); this.ctx = null;
     this.resetVad();
     setLevel(0);
+    if (!this.conversation) { clearInterval(this.watchTimer); this.watchTimer = 0; }
     if (["listening", "recording"].includes(this.state)) this.set(this.audio ? "speaking" : null);
   }
 
@@ -112,8 +158,11 @@ export class Voice {
 
   async toggleConversation() {
     this.conversation = !this.conversation;
-    if (this.conversation) { this.once = false; await this.openMic() || (this.conversation = false); }
-    else this.closeMic();
+    if (this.conversation) {
+      this.once = false;
+      // Waiting for «Джарвис» never gives up: no microphone yet (right after login or sleep) → it keeps trying.
+      if (!await this.openMic()) { if (this.wake && !this.muted) this.watch(); else this.conversation = false; }
+    } else this.closeMic();
     this.onState(this.state);
   }
 
@@ -149,7 +198,8 @@ export class Voice {
     if (ev === "end" || ev === "max") { this.endSegment(); return; }
     const silent = this.vad.silent, dur = this.vad.dur;
     const early = Math.min(this.earlyMs, this.silenceMs - 400);
-    if (!this.probe && early >= 300 && silent >= early && dur - silent >= 400) this.startProbe();
+    // 0.3 s of speech is enough: a bare «Джарвис» is that short, and it is answered after the short pause.
+    if (!this.probe && early >= 300 && silent >= early && dur - silent >= 300) this.startProbe();
   }
 
   startSegment() {

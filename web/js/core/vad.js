@@ -55,7 +55,10 @@ export class Vad {
       // last 300 ms (8 of 15) instead of a run.
       const go = speaking ? this.recent.filter(Boolean).length >= 8 : this.run >= 4;
       if (go) {
-        this.inSeg = true; this.silent = 0; this.dur = 0; this.voiceMs = 0; this.last3 = [];
+        // The loud frames that started the phrase are part of it: a quick «Джарвис» is only ~0.3 s of voice, and
+        // without its first 80 ms it fell under the 200 ms «just a noise» bar (measured 2026-10-26: 220 ms counted).
+        const onset = speaking ? 0 : this.run * 20;
+        this.inSeg = true; this.silent = 0; this.dur = onset; this.voiceMs = onset; this.last3 = [];
         return "start";
       }
       return null;

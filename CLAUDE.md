@@ -34,8 +34,12 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   `jarvis/overlay.py` (Hyprland socket): the window gets `no_anim`, `border_size 0`, `no_shadow` (Hyprland 0.56 names;
   the user's «bounce» window animation made dragging trail and wobble) and size+move+rounding go in one `[[BATCH]]`.
   The page draws at most once a frame and writes the DOM only on change. Wake listening drops unaddressed speech
-  before any turn or log. Thinking: three dots on the face (THINKING/PLANNING) and, for voice requests whose answer
-  has not started after `agency.THINK_SAY_S` (2.5 s), «Секунду, думаю.» (`tts.THINKING_BY_LANG`, pre-synthesized).
+  before any turn or log. Wake listening is ON by default (`server.wake_on`, kv `wake_listen`; user's request
+  2026-10-26: open the lid, say «Джарвис»): a bare name → «Слушаю.» (`router.WAKE_REPLY`, answered after the 0.6 s
+  pause when Smart Turn hears it finished — `server.bare_name`), the task follows without the name (20 s window).
+  `Voice.watch()` keeps an always-open mic alive: a dead track / no frames / digital zeros → `revive()` (audit
+  `voice.mic_reopened`); a wall-clock jump = the laptop slept → `voice.woke` → `_mic_after_sleep` (two measurements).
+  Thinking: three dots on the face (THINKING/PLANNING) and, for voice requests whose answer has not started after `agency.THINK_SAY_S` (2.5 s), «Секунду, думаю.» (`tts.THINKING_BY_LANG`, pre-synthesized).
 - Skills: `jarvis/skills.py`, folder `~/.local/share/jarvis-skills` (config `skills_dir`); limits are 0 = none.
   A manifest's `say` phrases run the skill straight from the director (no AI); `open_result` opens the output file.
 - Voice: STT worker = GigaAM, then Parakeet only for phrases that are not Russian or came back empty (`voice/lexicon.py`;
@@ -52,10 +56,12 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
   Broken mic after sleep (`voice/mic.py`): the sound card can capture ~6× too slowly after s2idle (2026-10-26: 0.18 of
   real time, direct ALSA read = I/O error; every phrase came back empty). An empty transcript of ≥ 1 s → `capture_speed`
   (pw-record, ~1.5 s; trusted 5 min when healthy) → `server.MIC_SAY` + `voice.mic` event (toast; companion card with
-  «Перезагрузить компьютер» → power_action, always asks) + chat message. «проверь / почини микрофон» → `mic_check` (LOW).
+  «Выключить компьютер» → power_action, always asks) + chat message. «проверь / почини микрофон» → `mic_check` (LOW).
   Re-binding the driver as root (pkexec) was tried live and did NOT help (full codec re-probe, still 0.18); the
-  controller has no PCI reset — so there is no «repair» tool, only the reboot. Tests never record the real mic (conftest
-  fakes `capture_speed`). Parakeet does not re-hear silence (peak < −45 dBFS): it made up «Thank you.».
+  controller has no PCI reset — so there is no «repair» tool. A normal reboot did NOT help either (13:00, still 0.19;
+  direct ALSA 48 kHz: 2 s took 9.9 s; playback fine) → the advice is a full power-off (`MIC_BROKEN_TEXT`, `MIC_SAY`).
+  Wake listening says it at most every 30 min (`MIC_TELL_EVERY_S`), re-measures a broken mic at most every 60 s.
+  Tests never record the real mic (conftest fakes `capture_speed`). Parakeet does not re-hear silence (peak < −45 dBFS): it made up «Thank you.».
 - Self-improvement (`jarvis/improve.py`): `collect_issues` ranks problems from JARVIS's own records (repeats, failures,
   slow answers…); `self_improve` = Claude Code on a new branch `improve/…` in a worktree under ~/Projects/.jarvis-improve,
   then JARVIS runs the suite itself; `self_improve_apply` (second approval) merges into main and restarts. Window:
@@ -130,6 +136,11 @@ Capability status with evidence: `docs/acceptance/TEST_MATRIX.md`. Architecture 
 - A single «сравни / проанализируй» with nothing to refer back to goes to the conversation (tables, search), not a
   tool-less one-off step; a one-off answer with tool-call markup is a failure (`TOOL_MARKUP`). The final answer drops
   the short narration before tool calls (`claude_chat.answer_only`).
+- Every finished task is said aloud, spoken or typed (user's request 2026-10-26): `director.SPEAK_SOURCES` (text, cli)
+  get `speak` unless kv `speak_typed` is off (Settings → Голос, a core setting via `overlay.settings` `speak`); reminders
+  too. `Runtime.voice` = the answer is spoken; `Runtime.spoken` = the request was said (VOICE_SYSTEM style, «Секунду»,
+  approvals asked aloud, «Заказы» window pull) — never use `voice` for those. Who plays it: `Server._speaker` (the
+  window that heard it; when that one is not open — sockets carry `?client=overlay` — the other one).
 - Speech: one task speaks at a time (`take_floor`), never while the person talks (`voice.active` → `hold_until`).
   Echo: `_strip_echo` drops what JARVIS's voice said during the phrase (both windows; they are separate browsers, so
   neither's echo cancellation hears the other). A cut-off phrase is done as is after 4 s of quiet (`FRAGMENT_WAIT_S`).
